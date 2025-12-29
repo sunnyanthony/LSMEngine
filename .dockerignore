@@ -1,0 +1,7 @@
+.git
+.cache
+data
+*.log
+*.out
+bin
+README.md~

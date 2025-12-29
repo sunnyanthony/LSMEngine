@@ -11,10 +11,21 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 ## Quick start
 ```bash
 go test ./...
-go run ./cmd/demo
 ```
 
 Design doc: `docs/design.md`.
+
+## Package layout
+- `pkg/lsm`: façade and options; wires subpackages.
+- `pkg/lsm/memtable`: in-memory table implementation.
+- `pkg/lsm/wal`: write-ahead log append/replay.
+- `pkg/lsm/sstable`: placeholder SSTable writer/reader.
+- `pkg/lsm/dispatch`: flush dispatcher; `pkg/lsm/bus`: event bus.
+- `pkg/lsm/manifest`: manifest store; `pkg/lsm/logging`: logger helpers.
+
+## Docker
+- Build test image (runs verbose tests during build): `docker build -f Dockerfile.test -t lsmengine-test .`
+- Run tests via image (verbose): `docker run --rm lsmengine-test`
 
 ## Project layout
 - `internal/lsm`: Core types (memtable, WAL, LSM façade) and helpers.
