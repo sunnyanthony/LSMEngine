@@ -10,5 +10,3 @@ COPY . .
 
 # Run tests during build so the image only succeeds when tests pass.
 RUN go test -v ./...
-
-CMD ["go", "test", "-v", "./..."]

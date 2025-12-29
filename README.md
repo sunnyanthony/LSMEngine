@@ -24,8 +24,11 @@ Design doc: `docs/design.md`.
 - `pkg/lsm/manifest`: manifest store; `pkg/lsm/logging`: logger helpers.
 
 ## Docker
-- Build test image (runs verbose tests during build): `docker build -f Dockerfile.test -t lsmengine-test .`
+- Build test image (runs verbose tests during build): `docker build -f docker/Dockerfile.test -t lsmengine-test .`
 - Run tests via image (verbose): `docker run --rm lsmengine-test`
+
+## Scripts
+- `scripts/docker-test.sh`: builds the test image with plain progress and no cache to show full test logs.
 
 ## Project layout
 - `internal/lsm`: Core types (memtable, WAL, LSM façade) and helpers.
