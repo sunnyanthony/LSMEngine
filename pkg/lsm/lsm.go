@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/dispatch"
+	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/logging"
 	"lsmengine/pkg/lsm/manifest"
 	"lsmengine/pkg/lsm/memtable"
@@ -21,6 +23,9 @@ type Options struct {
 	DataDir        string
 	MemtableLimit  int
 	WALSync        bool
+	WALMaxRecord   uint64
+	WALBlockSize   uint32
+	WALAutoRepair  *bool
 	FlushQueueSize int
 	BusBuffer      int
 	LogDir         string
@@ -28,20 +33,22 @@ type Options struct {
 }
 
 type LSM struct {
-	mem       *memtable.MemTable
-	wal       *wal.WAL
-	flusher   sstable.Flusher
-	manifest  manifest.Store
-	dispatch  *dispatch.Dispatcher
-	bus       *bus.Bus
-	logger    logging.Logger
-	logCloser io.Closer
-	tables    []sstable.SSTable
-	mtLimit   int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	tablesMu  sync.RWMutex
-	startOnce sync.Once
+	mem        *memtable.MemTable
+	wal        *wal.WAL
+	flusher    sstable.Flusher
+	manifest   manifest.Store
+	dispatch   *dispatch.Dispatcher
+	bus        *bus.Bus
+	logger     logging.Logger
+	logCloser  io.Closer
+	tables     []sstable.SSTable
+	mtLimit    int
+	autoRepair bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	tablesMu   sync.RWMutex
+	startOnce  sync.Once
+	lastFlush  uint64
 }
 
 func New(opts Options) (*LSM, error) {
@@ -50,6 +57,16 @@ func New(opts Options) (*LSM, error) {
 	}
 	if opts.MemtableLimit == 0 {
 		opts.MemtableLimit = 1024
+	}
+	if opts.WALBlockSize == 0 {
+		opts.WALBlockSize = 64 * 1024
+	}
+	if opts.WALMaxRecord == 0 {
+		opts.WALMaxRecord = uint64(opts.WALBlockSize)
+	}
+	autoRepair := true
+	if opts.WALAutoRepair != nil {
+		autoRepair = *opts.WALAutoRepair
 	}
 	if opts.FlushQueueSize == 0 {
 		opts.FlushQueueSize = 4
@@ -69,7 +86,12 @@ func New(opts Options) (*LSM, error) {
 	}
 
 	walPath := filepath.Join(opts.DataDir, "wal.log")
-	w, err := wal.NewWAL(wal.Options{Path: walPath, Sync: opts.WALSync})
+	w, err := wal.NewWAL(wal.Options{
+		Path:           walPath,
+		Sync:           opts.WALSync,
+		MaxRecordBytes: opts.WALMaxRecord,
+		BlockSize:      opts.WALBlockSize,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -87,21 +109,28 @@ func New(opts Options) (*LSM, error) {
 	eventBus := bus.NewBus(opts.BusBuffer)
 	ctx, cancel := context.WithCancel(context.Background())
 	lsm := &LSM{
-		mem:       memtable.NewMemTable(),
-		wal:       w,
-		flusher:   flusher,
-		manifest:  manifestStore,
-		bus:       eventBus,
-		logger:    logger,
-		logCloser: logCloser,
-		mtLimit:   opts.MemtableLimit,
-		ctx:       ctx,
-		cancel:    cancel,
+		mem:        memtable.NewMemTable(),
+		wal:        w,
+		flusher:    flusher,
+		manifest:   manifestStore,
+		bus:        eventBus,
+		logger:     logger,
+		logCloser:  logCloser,
+		mtLimit:    opts.MemtableLimit,
+		autoRepair: autoRepair,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	lsm.dispatch = dispatch.NewDispatcher(opts.FlushQueueSize, eventBus, lsm.appendTable)
 
-	if err := lsm.loadManifest(); err != nil {
+	m, err := lsm.loadManifest()
+	if err != nil {
+		return nil, err
+	}
+	lsm.lastFlush = m.WALSeq
+
+	if err := lsm.replayWAL(m.WALSeq); err != nil {
 		return nil, err
 	}
 
@@ -110,26 +139,26 @@ func New(opts Options) (*LSM, error) {
 	return lsm, nil
 }
 
-func (l *LSM) loadManifest() error {
+func (l *LSM) loadManifest() (manifest.Manifest, error) {
 	m, err := l.manifest.Load()
 	if err != nil {
-		return err
+		return manifest.Manifest{}, err
 	}
 	if len(m.Tables) == 0 {
-		return nil
+		return m, nil
 	}
 	tables := make([]sstable.SSTable, 0, len(m.Tables))
 	for _, t := range m.Tables {
 		table, err := sstable.LoadSSTable(t.Path)
 		if err != nil {
-			return err
+			return manifest.Manifest{}, err
 		}
 		tables = append(tables, table)
 	}
 	l.tablesMu.Lock()
 	l.tables = tables
 	l.tablesMu.Unlock()
-	return nil
+	return m, nil
 }
 
 // appendTable is called when a flush completes to keep in-memory list fresh.
@@ -202,6 +231,24 @@ func (l *LSM) Get(key string) (types.Entry, bool) {
 		}
 	}
 	return types.Entry{}, false
+}
+
+// replayWAL loads entries above the checkpoint sequence into the memtable.
+func (l *LSM) replayWAL(checkpoint uint64) error {
+	err := l.wal.Replay(func(e types.Entry) error {
+		if e.Seq <= checkpoint {
+			return nil
+		}
+		l.mem.Apply(e)
+		return nil
+	})
+	if err != nil && l.autoRepair && (errors.Is(err, errs.ErrWALMissingSegment) || errors.Is(err, errs.ErrWALCorruptSegment)) {
+		if l.logger != nil {
+			l.logger.Printf("wal replay degraded: %v", err)
+		}
+		return nil
+	}
+	return err
 }
 
 func (l *LSM) Close() error {
