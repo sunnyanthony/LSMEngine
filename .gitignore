@@ -1,0 +1,14 @@
+# Build artifacts
+bin/
+*.exe
+*.out
+
+# Editor
+.DS_Store
+
+# Data
+data/
+*.log
+
+# Build cache
+.cache/
