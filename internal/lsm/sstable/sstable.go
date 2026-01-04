@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"lsmengine/pkg/lsm/types"
@@ -41,7 +42,7 @@ func (w *SSTableWriter) Flush(entries []types.Entry) (SSTable, error) {
 		return SSTable{}, fmt.Errorf("no entries to write")
 	}
 	// ensure sort by key for deterministic ordering
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
+	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].Key, entries[j].Key) < 0 })
 	highestSeq := entries[len(entries)-1].Seq
 	path := filepath.Join(w.dir, fmt.Sprintf("sstable-%d.sst", highestSeq))
 
@@ -51,7 +52,7 @@ func (w *SSTableWriter) Flush(entries []types.Entry) (SSTable, error) {
 	}
 	writer := bufio.NewWriter(f)
 	for _, e := range entries {
-		keyHex := hex.EncodeToString([]byte(e.Key))
+		keyHex := hex.EncodeToString(e.Key)
 		valHex := hex.EncodeToString(e.Value)
 		if _, err := fmt.Fprintf(writer, "%d|%t|%s|%s\n", e.Seq, e.Tombstone, keyHex, valHex); err != nil {
 			f.Close()
@@ -85,8 +86,9 @@ func LoadSSTable(path string) (SSTable, error) {
 			return SSTable{}, fmt.Errorf("decode sstable line: %w", err)
 		}
 		// last-write-wins if duplicates
-		if prev, ok := index[entry.Key]; !ok || entry.Seq > prev.Seq {
-			index[entry.Key] = entry
+		keyStr := string(entry.Key)
+		if prev, ok := index[keyStr]; !ok || entry.Seq > prev.Seq {
+			index[keyStr] = entry
 		}
 		if entry.Seq > highest {
 			highest = entry.Seq
@@ -98,8 +100,8 @@ func LoadSSTable(path string) (SSTable, error) {
 	return SSTable{Path: path, Seq: highest, index: index}, nil
 }
 
-func (s SSTable) Get(key string) (types.Entry, bool) {
-	e, ok := s.index[key]
+func (s SSTable) Get(key []byte) (types.Entry, bool) {
+	e, ok := s.index[string(key)]
 	return e, ok
 }
 
@@ -125,7 +127,7 @@ func decodeSSTableLine(line string) (types.Entry, error) {
 		return types.Entry{}, err
 	}
 	return types.Entry{
-		Key:       string(keyBytes),
+		Key:       keyBytes,
 		Value:     valBytes,
 		Tombstone: tombstone,
 		Seq:       seq,

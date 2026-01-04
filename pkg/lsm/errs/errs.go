@@ -17,4 +17,6 @@ var (
 	ErrWALEmptyValue = errors.New("wal append: empty value")
 	// ErrWALRecordTooLarge indicates a record exceeded configured limits.
 	ErrWALRecordTooLarge = errors.New("wal append: record too large")
+	// ErrRangeUnsupported indicates range scans cannot include SSTables yet.
+	ErrRangeUnsupported = errors.New("range scan: sstable iterator unavailable")
 )
