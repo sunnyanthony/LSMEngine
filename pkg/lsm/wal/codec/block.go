@@ -1,4 +1,4 @@
-package wal
+package codec
 
 import (
 	"bufio"
@@ -7,19 +7,20 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
-	"lsmengine/pkg/lsm/errs"
 	"net"
+
+	"lsmengine/pkg/lsm/errs"
 )
 
-func writeBlock(w io.Writer, records []recordBuffer) (int, error) {
+func WriteBlock(w io.Writer, records []RecordBuffer) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
 	payloadLen := 0
 	for _, r := range records {
-		payloadLen += r.total
+		payloadLen += r.Total
 	}
-	header := make([]byte, blockHeaderSize)
+	header := make([]byte, BlockHeaderSize)
 	copy(header[blockMagicOffset:blockMagicOffset+blockMagicSize], blockMagic)
 	binary.LittleEndian.PutUint32(header[blockLenOffset:blockLenOffset+blockLenSize], uint32(payloadLen))
 
@@ -40,7 +41,7 @@ func writeBlock(w io.Writer, records []recordBuffer) (int, error) {
 	return int(n), err
 }
 
-func decodeBlock(r io.Reader, maxPayload uint32) ([]byte, bool, error) {
+func DecodeBlock(r io.Reader, maxPayload uint32) ([]byte, bool, error) {
 	magic := make([]byte, blockMagicSize)
 	if _, err := io.ReadFull(r, magic); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -54,10 +55,10 @@ func decodeBlock(r io.Reader, maxPayload uint32) ([]byte, bool, error) {
 	if !bytes.Equal(magic, blockMagic) {
 		return nil, false, errs.ErrWALCorrupt
 	}
-	return decodeBlockAfterMagic(r, maxPayload)
+	return DecodeBlockAfterMagic(r, maxPayload)
 }
 
-func decodeBlockAfterMagic(r io.Reader, maxPayload uint32) ([]byte, bool, error) {
+func DecodeBlockAfterMagic(r io.Reader, maxPayload uint32) ([]byte, bool, error) {
 	lenBuf := make([]byte, blockLenSize)
 	if _, err := io.ReadFull(r, lenBuf); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -89,8 +90,8 @@ func decodeBlockAfterMagic(r io.Reader, maxPayload uint32) ([]byte, bool, error)
 	return payload, true, nil
 }
 
-// resyncBlock scans until the next block magic is found. ok=false means EOF.
-func resyncBlock(r *bufio.Reader) (bool, error) {
+// ResyncBlock scans until the next block magic is found. ok=false means EOF.
+func ResyncBlock(r *bufio.Reader) (bool, error) {
 	window := make([]byte, 0, len(blockMagic))
 	for {
 		b, err := r.ReadByte()

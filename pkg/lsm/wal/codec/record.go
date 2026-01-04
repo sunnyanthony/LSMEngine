@@ -1,23 +1,24 @@
-package wal
+package codec
 
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"net"
+
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
-	"net"
 )
 
-type recordBuffer struct {
-	header [recordHeaderSize]byte
+type RecordBuffer struct {
+	header [RecordHeaderSize]byte
 	key    []byte
 	val    []byte
-	crc    [recordCRCSize]byte
-	total  int
+	crc    [RecordCRCSize]byte
+	Total  int
 }
 
-func newRecordBuffer(e types.Entry) recordBuffer {
-	var rb recordBuffer
+func NewRecordBuffer(e types.Entry) RecordBuffer {
+	var rb RecordBuffer
 	flags := byte(0)
 	if e.Tombstone {
 		flags |= 0x1
@@ -26,7 +27,30 @@ func newRecordBuffer(e types.Entry) recordBuffer {
 	binary.LittleEndian.PutUint64(rb.header[recordSeqOffset:recordSeqOffset+recordSeqSize], e.Seq)
 	binary.LittleEndian.PutUint32(rb.header[recordKeyLenOffset:recordKeyLenOffset+recordKeyLenSize], uint32(len(e.Key)))
 	binary.LittleEndian.PutUint32(rb.header[recordValLenOffset:recordValLenOffset+recordValLenSize], uint32(len(e.Value)))
-	rb.key = []byte(e.Key)
+	rb.key = append([]byte(nil), e.Key...)
+	rb.val = append([]byte(nil), e.Value...)
+
+	crc := crc32.NewIEEE()
+	crc.Write(rb.header[:])
+	crc.Write(rb.key)
+	crc.Write(rb.val)
+	binary.LittleEndian.PutUint32(rb.crc[:], crc.Sum32())
+
+	rb.Total = len(rb.header) + len(rb.key) + len(rb.val) + len(rb.crc)
+	return rb
+}
+
+func NewRecordBufferOwned(e types.Entry) RecordBuffer {
+	var rb RecordBuffer
+	flags := byte(0)
+	if e.Tombstone {
+		flags |= 0x1
+	}
+	rb.header[recordFlagsOffset] = flags
+	binary.LittleEndian.PutUint64(rb.header[recordSeqOffset:recordSeqOffset+recordSeqSize], e.Seq)
+	binary.LittleEndian.PutUint32(rb.header[recordKeyLenOffset:recordKeyLenOffset+recordKeyLenSize], uint32(len(e.Key)))
+	binary.LittleEndian.PutUint32(rb.header[recordValLenOffset:recordValLenOffset+recordValLenSize], uint32(len(e.Value)))
+	rb.key = e.Key
 	rb.val = e.Value
 
 	crc := crc32.NewIEEE()
@@ -35,17 +59,17 @@ func newRecordBuffer(e types.Entry) recordBuffer {
 	crc.Write(rb.val)
 	binary.LittleEndian.PutUint32(rb.crc[:], crc.Sum32())
 
-	rb.total = len(rb.header) + len(rb.key) + len(rb.val) + len(rb.crc)
+	rb.Total = len(rb.header) + len(rb.key) + len(rb.val) + len(rb.crc)
 	return rb
 }
 
-func (rb *recordBuffer) buffers() net.Buffers {
+func (rb *RecordBuffer) buffers() net.Buffers {
 	return net.Buffers{rb.header[:], rb.key, rb.val, rb.crc[:]}
 }
 
-func encodeEntry(e types.Entry) []byte {
-	rb := newRecordBuffer(e)
-	out := make([]byte, rb.total)
+func EncodeEntry(e types.Entry) []byte {
+	rb := NewRecordBuffer(e)
+	out := make([]byte, rb.Total)
 	offset := copy(out, rb.header[:])
 	offset += copy(out[offset:], rb.key)
 	offset += copy(out[offset:], rb.val)
@@ -53,29 +77,29 @@ func encodeEntry(e types.Entry) []byte {
 	return out
 }
 
-func decodeRecords(payload []byte) ([]types.Entry, error) {
+func DecodeRecords(payload []byte) ([]types.Entry, error) {
 	var entries []types.Entry
 	offset := 0
 	for offset < len(payload) {
-		if len(payload)-offset < recordHeaderSize+recordCRCSize {
+		if len(payload)-offset < RecordHeaderSize+RecordCRCSize {
 			return entries, errs.ErrWALCorrupt
 		}
-		header := payload[offset : offset+recordHeaderSize]
+		header := payload[offset : offset+RecordHeaderSize]
 		flags := header[recordFlagsOffset]
 		seq := binary.LittleEndian.Uint64(header[recordSeqOffset : recordSeqOffset+recordSeqSize])
 		keyLen := binary.LittleEndian.Uint32(header[recordKeyLenOffset : recordKeyLenOffset+recordKeyLenSize])
 		valLen := binary.LittleEndian.Uint32(header[recordValLenOffset : recordValLenOffset+recordValLenSize])
-		offset += recordHeaderSize
+		offset += RecordHeaderSize
 
-		if len(payload)-offset < int(keyLen+valLen)+recordCRCSize {
+		if len(payload)-offset < int(keyLen+valLen)+RecordCRCSize {
 			return entries, errs.ErrWALCorrupt
 		}
 		key := payload[offset : offset+int(keyLen)]
 		offset += int(keyLen)
 		val := payload[offset : offset+int(valLen)]
 		offset += int(valLen)
-		crcBytes := payload[offset : offset+recordCRCSize]
-		offset += recordCRCSize
+		crcBytes := payload[offset : offset+RecordCRCSize]
+		offset += RecordCRCSize
 
 		crc := crc32.NewIEEE()
 		crc.Write(header)
@@ -85,7 +109,7 @@ func decodeRecords(payload []byte) ([]types.Entry, error) {
 			return entries, errs.ErrWALCorrupt
 		}
 		entries = append(entries, types.Entry{
-			Key:       string(key),
+			Key:       append([]byte(nil), key...),
 			Value:     append([]byte(nil), val...),
 			Tombstone: flags&0x1 == 0x1,
 			Seq:       seq,

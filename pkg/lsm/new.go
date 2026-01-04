@@ -1,0 +1,165 @@
+package lsm
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"path/filepath"
+
+	"lsmengine/pkg/lsm/bus"
+	"lsmengine/pkg/lsm/dispatch"
+	"lsmengine/pkg/lsm/logging"
+	"lsmengine/pkg/lsm/manifest"
+	"lsmengine/pkg/lsm/memtable"
+	"lsmengine/pkg/lsm/sstable"
+	"lsmengine/pkg/lsm/wal"
+)
+
+func New(opts Options) (*LSM, error) {
+	if opts.DataDir == "" {
+		return nil, fmt.Errorf("data dir required")
+	}
+	if opts.MemtableLimit == 0 {
+		opts.MemtableLimit = 1024
+	}
+	if opts.MemtableConcurrency == 0 {
+		opts.MemtableConcurrency = 2
+	}
+	if opts.MemtableArenaBlockSize == 0 {
+		opts.MemtableArenaBlockSize = memtable.DefaultArenaBlockSize
+	}
+	mtFactory := opts.MemtableFactory
+	if mtFactory == nil {
+		var err error
+		mtFactory, err = memtable.FactoryForKind(opts.MemtableKind, opts.MemtableConcurrency, opts.MemtableShards, opts.MemtableArenaBlockSize)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opts.WALBlockSize == 0 {
+		opts.WALBlockSize = 64 * 1024
+	}
+	if opts.WALMaxRecord == 0 {
+		opts.WALMaxRecord = uint64(opts.WALBlockSize)
+	}
+	autoRepair := true
+	if opts.WALAutoRepair != nil {
+		autoRepair = *opts.WALAutoRepair
+	}
+	missingPolicy := MissingSegmentError
+	if opts.WALMissingSegmentPolicy != nil {
+		missingPolicy = *opts.WALMissingSegmentPolicy
+	} else if autoRepair {
+		missingPolicy = MissingSegmentIgnore
+	}
+	if opts.FlushQueueSize == 0 {
+		opts.FlushQueueSize = 4
+	}
+	if opts.BusBuffer == 0 {
+		opts.BusBuffer = 16
+	}
+	if opts.ReplayBatchSize == 0 {
+		opts.ReplayBatchSize = 256
+	}
+
+	logger := opts.Logger
+	var logCloser io.Closer
+	if logger == nil {
+		l, closer, err := logging.NewDefaultLogger(opts.DataDir, opts.LogDir)
+		if err != nil {
+			return nil, fmt.Errorf("init logger: %w", err)
+		}
+		logger, logCloser = l, closer
+	}
+
+	walPath := filepath.Join(opts.DataDir, "wal.log")
+	w, err := wal.NewWAL(wal.Options{
+		Path:           walPath,
+		Sync:           opts.WALSync,
+		MaxRecordBytes: opts.WALMaxRecord,
+		BlockSize:      opts.WALBlockSize,
+		Async:          opts.WALAsync,
+		QueueDepth:     opts.WALQueueDepth,
+		BatchMax:       opts.WALBatchMax,
+		RepairOnReplay: autoRepair,
+	})
+	if err != nil {
+		return nil, err
+	}
+	sstableDir := filepath.Join(opts.DataDir, "sstables")
+	flusher, err := sstable.NewSSTableWriter(sstableDir)
+	if err != nil {
+		return nil, err
+	}
+	manifestPath := filepath.Join(opts.DataDir, "manifest.json")
+	manifestStore, err := manifest.NewFileStore(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	eventBus := bus.NewBus(opts.BusBuffer)
+	ctx, cancel := context.WithCancel(context.Background())
+	lsm := &LSM{
+		mem:                  mtFactory(),
+		mtFactory:            mtFactory,
+		wal:                  w,
+		flusher:              flusher,
+		manifest:             manifestStore,
+		bus:                  eventBus,
+		logger:               logger,
+		logCloser:            logCloser,
+		mtLimit:              opts.MemtableLimit,
+		autoRepair:           autoRepair,
+		missingSegmentPolicy: missingPolicy,
+		replayBatchSize:      opts.ReplayBatchSize,
+		ctx:                  ctx,
+		cancel:               cancel,
+	}
+
+	lsm.dispatch = dispatch.NewDispatcher(opts.FlushQueueSize, eventBus, lsm.appendTable)
+
+	m, err := lsm.loadManifest()
+	if err != nil {
+		return nil, err
+	}
+	lsm.lastFlush = m.WALSeq
+	lsm.seq = m.WALSeq
+
+	if err := lsm.replayWAL(m.WALSeq); err != nil {
+		return nil, err
+	}
+
+	go lsm.dispatch.Run(ctx, lsm.flusher, lsm.manifest)
+
+	return lsm, nil
+}
+
+func (l *LSM) loadManifest() (manifest.Manifest, error) {
+	m, err := l.manifest.Load()
+	if err != nil {
+		return manifest.Manifest{}, err
+	}
+	if len(m.Tables) == 0 {
+		return m, nil
+	}
+	tables := make([]sstable.SSTable, 0, len(m.Tables))
+	for _, t := range m.Tables {
+		table, err := sstable.LoadSSTable(t.Path)
+		if err != nil {
+			return manifest.Manifest{}, err
+		}
+		tables = append(tables, table)
+	}
+	l.tablesMu.Lock()
+	l.tables = tables
+	l.tablesMu.Unlock()
+	return m, nil
+}
+
+// appendTable is called when a flush completes to keep in-memory list fresh.
+func (l *LSM) appendTable(t sstable.SSTable) {
+	l.tablesMu.Lock()
+	defer l.tablesMu.Unlock()
+	l.tables = append([]sstable.SSTable{t}, l.tables...)
+	l.popFlushed()
+}

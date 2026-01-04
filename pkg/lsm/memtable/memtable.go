@@ -1,91 +1,68 @@
 package memtable
 
 import (
+	"lsmengine/pkg/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
-	"sort"
-	"sync"
 )
 
-// MemTable stores recent writes and tracks size. It keeps a map for fast lookups
-// and a keys slice for deterministic ordering when flushing.
-type MemTable struct {
-	mu      sync.RWMutex
-	entries map[string]types.Entry
-	keys    []string
-	seq     uint64
+// Table defines the operations required by the LSM for an in-memory index.
+type Table interface {
+	Put(key []byte, value []byte) types.Entry
+	Delete(key []byte) types.Entry
+	Get(key []byte) (types.Entry, bool)
+	Apply(entry types.Entry)
+	Size() int
+	Drain() []types.Entry
+	Iter() Iterator
+	Range(start, end []byte) Iterator
 }
 
-func NewMemTable() *MemTable {
-	return &MemTable{
-		entries: make(map[string]types.Entry),
-	}
+// Factory constructs a new memtable implementation.
+type Factory func() Table
+
+// Iterator walks entries in sorted key order.
+type Iterator interface {
+	Next() bool
+	Entry() types.Entry
 }
 
-func (m *MemTable) Put(key string, value []byte) types.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.seq++
-	if _, exists := m.entries[key]; !exists {
-		m.keys = append(m.keys, key)
-	}
-	entry := types.Entry{
-		Key:   key,
-		Value: append([]byte(nil), value...),
-		Seq:   m.seq,
-	}
-	m.entries[key] = entry
-	return entry
+// Freezer marks a table immutable to allow fast-path iteration.
+type Freezer interface {
+	Freeze()
 }
 
-func (m *MemTable) Delete(key string) types.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.seq++
-	if _, exists := m.entries[key]; !exists {
-		m.keys = append(m.keys, key)
-	}
-	entry := types.Entry{
-		Key:       key,
-		Tombstone: true,
-		Seq:       m.seq,
-	}
-	m.entries[key] = entry
-	return entry
+// BatchOwnedApplier applies entries without copying key/value.
+type BatchOwnedApplier interface {
+	ApplyBatchOwned(entries []types.Entry)
 }
 
-func (m *MemTable) Get(key string) (types.Entry, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	entry, ok := m.entries[key]
-	return entry, ok
+// EntryCopier returns an entry whose key/value slices are owned by the table.
+type EntryCopier interface {
+	CopyEntry(entry types.Entry) types.Entry
 }
 
-func (m *MemTable) Size() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.entries)
+// StatsProvider exposes table metrics for tuning.
+type StatsProvider interface {
+	Stats() TableStats
 }
 
-// Drain returns entries sorted by key and clears the memtable.
-func (m *MemTable) Drain() []types.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// Compare orders keys. It should return -1, 0, or 1.
+type Compare = skiplist.Compare
 
-	if len(m.entries) == 0 {
-		return nil
-	}
+// DefaultCompare is lexicographic byte comparison.
+var DefaultCompare = skiplist.DefaultCompare
 
-	sort.Strings(m.keys)
-	out := make([]types.Entry, 0, len(m.entries))
-	for _, k := range m.keys {
-		if e, ok := m.entries[k]; ok {
-			out = append(out, e)
-		}
-	}
+func entrySize(entry types.Entry) int {
+	return len(entry.Key) + len(entry.Value)
+}
 
-	m.entries = make(map[string]types.Entry)
-	m.keys = m.keys[:0]
-	return out
+type ShardStats struct {
+	Entries int
+	Bytes   int
+}
+
+type TableStats struct {
+	Entries int
+	Bytes   int
+	Shards  []ShardStats
 }
