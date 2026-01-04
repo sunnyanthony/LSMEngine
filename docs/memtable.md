@@ -59,7 +59,6 @@ merge:
 ```
 
 ## Interfaces
-- `Put/Delete/Get/Apply`
 - `ApplyOwned` for entries already owned by the caller (avoids extra copies)
 - `Iter()` for ordered full scan (used for flush)
 - `Range(start,end)` for ordered range scan
@@ -78,6 +77,14 @@ merge:
 
 LSM uses `CopyEntry` to create an owned entry once, then feeds that entry to
 WAL and memtable without further copies.
+
+## Snapshot range semantics
+
+Snapshots capture a point-in-time view by freezing the active memtable and
+pinning it until the snapshot is closed. Range scans merge immutable memtables
+from newest to oldest, de-duplicate keys, and hide tombstones. SSTable range
+scans are not yet supported, so snapshot range iterators will return an error
+once SSTables are involved.
 
 ## Data flow (write + flush)
 ```
