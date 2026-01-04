@@ -86,6 +86,26 @@ func (l *LSM) releasePinned(table memtable.Table) {
 	}
 }
 
+func (l *LSM) recycleMemtable(table memtable.Table) {
+	if table == nil || l.mtPool == nil {
+		return
+	}
+	l.memMu.Lock()
+	if l.pinned != nil {
+		if _, ok := l.pinned[table]; ok {
+			l.memMu.Unlock()
+			return
+		}
+	}
+	l.memMu.Unlock()
+	resetter, ok := table.(memtable.Resetter)
+	if !ok {
+		return
+	}
+	resetter.Reset()
+	l.mtPool.Put(table)
+}
+
 func (l *LSM) removeImmutable(table memtable.Table) {
 	l.memMu.Lock()
 	defer l.memMu.Unlock()
@@ -111,15 +131,16 @@ func (l *LSM) removeFlushQueueLocked(table memtable.Table) {
 	}
 }
 
-func (l *LSM) popFlushed() {
+func (l *LSM) popFlushedTable() memtable.Table {
 	l.memMu.Lock()
 	defer l.memMu.Unlock()
 	if len(l.flushQueue) == 0 {
-		return
+		return nil
 	}
 	flushed := l.flushQueue[0]
 	l.flushQueue = l.flushQueue[1:]
 	l.removeImmutableLocked(flushed)
+	return flushed
 }
 
 func (l *LSM) bumpSeq(seq uint64) {

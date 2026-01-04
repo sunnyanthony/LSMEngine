@@ -186,6 +186,23 @@ func (t *ShardedSkipListTable) Range(start, end []byte) Iterator {
 func (t *ShardedSkipListTable) Freeze() {
 }
 
+// Reset clears the table so it can be reused.
+func (t *ShardedSkipListTable) Reset() {
+	for i := range t.shards {
+		s := &t.shards[i]
+		s.mu.Lock()
+		s.list = skiplist.New()
+		s.entries = 0
+		s.bytes = 0
+		if s.arena != nil {
+			s.arena.Reset()
+		}
+		s.mu.Unlock()
+	}
+	atomic.StoreInt64(&t.sizeBytes, 0)
+	atomic.StoreUint64(&t.seq, 0)
+}
+
 func (t *ShardedSkipListTable) pick(key []byte) *shard {
 	idx := hashKey(key) & t.mask
 	return &t.shards[idx]

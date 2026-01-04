@@ -75,6 +75,7 @@ merge:
 - Keys/values are copied into a per-memtable arena to reduce GC pressure.
 - Sharded tables use one arena per shard to keep allocations local to the lock.
 - Arena block size is configurable via `MemtableArenaBlockSize` (default 256KB).
+- After a memtable flush completes, the table is reset and returned to a pool for reuse.
 
 LSM uses `CopyEntry` to create an owned entry once, then feeds that entry to
 WAL and memtable without further copies.

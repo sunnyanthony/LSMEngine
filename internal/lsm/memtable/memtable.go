@@ -36,6 +36,11 @@ type StatsProvider interface {
 	Stats() TableStats
 }
 
+// Resetter clears table state so it can be reused.
+type Resetter interface {
+	Reset()
+}
+
 // Compare orders keys. It should return -1, 0, or 1.
 type Compare = skiplist.Compare
 

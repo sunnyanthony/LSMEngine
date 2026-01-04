@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 
 	"lsmengine/internal/lsm/dispatch"
 	"lsmengine/internal/lsm/logging"
@@ -35,6 +36,19 @@ func New(opts Options) (*LSM, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	var mtPool *sync.Pool
+	if opts.MemtableFactory == nil {
+		baseFactory := mtFactory
+		pool := &sync.Pool{
+			New: func() any {
+				return baseFactory()
+			},
+		}
+		mtFactory = func() memtable.Table {
+			return pool.Get().(memtable.Table)
+		}
+		mtPool = pool
 	}
 	if opts.WALBlockSize == 0 {
 		opts.WALBlockSize = 64 * 1024
@@ -102,6 +116,7 @@ func New(opts Options) (*LSM, error) {
 	lsm := &LSM{
 		mem:                  mtFactory(),
 		mtFactory:            mtFactory,
+		mtPool:               mtPool,
 		wal:                  w,
 		flusher:              flusher,
 		manifest:             manifestStore,
@@ -159,7 +174,8 @@ func (l *LSM) loadManifest() (manifest.Manifest, error) {
 // appendTable is called when a flush completes to keep in-memory list fresh.
 func (l *LSM) appendTable(t sstable.SSTable) {
 	l.tablesMu.Lock()
-	defer l.tablesMu.Unlock()
 	l.tables = append([]sstable.SSTable{t}, l.tables...)
-	l.popFlushed()
+	l.tablesMu.Unlock()
+	flushed := l.popFlushedTable()
+	l.recycleMemtable(flushed)
 }

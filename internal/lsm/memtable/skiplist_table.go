@@ -138,6 +138,19 @@ func (t *SkipListTable) Range(start, end []byte) Iterator {
 func (t *SkipListTable) Freeze() {
 }
 
+// Reset clears the table so it can be reused.
+func (t *SkipListTable) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.list = skiplist.New()
+	t.seq = 0
+	t.sizeBytes = 0
+	if t.arena != nil {
+		t.arena.Reset()
+	}
+}
+
 func (t *SkipListTable) copyEntry(entry types.Entry) types.Entry {
 	entry.Key = t.copyBytes(entry.Key)
 	entry.Value = t.copyBytes(entry.Value)

@@ -153,6 +153,20 @@ func (m *MapTable) Freeze() {
 	// No-op; keep consistent behavior across memtable types.
 }
 
+// Reset clears the table so it can be reused.
+func (m *MapTable) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.entries = make(map[uint64][]types.Entry)
+	m.keys = m.keys[:0]
+	m.seq = 0
+	m.sizeBytes = 0
+	if m.arena != nil {
+		m.arena.Reset()
+	}
+}
+
 func (m *MapTable) updateEntry(entry types.Entry) {
 	prev, existed := m.setEntry(entry)
 	if existed {

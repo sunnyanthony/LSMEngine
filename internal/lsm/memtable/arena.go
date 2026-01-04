@@ -51,3 +51,26 @@ func (a *Arena) AllocCopy(src []byte) []byte {
 	copy(dst, src)
 	return dst
 }
+
+// Reset clears usage and keeps a single block for reuse.
+func (a *Arena) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var keep []byte
+	for _, block := range a.blocks {
+		if len(block) == a.blockSize {
+			keep = block
+			break
+		}
+	}
+	if keep != nil {
+		a.blocks = a.blocks[:1]
+		a.blocks[0] = keep
+		a.cur = keep
+	} else {
+		a.blocks = nil
+		a.cur = nil
+	}
+	a.off = 0
+}

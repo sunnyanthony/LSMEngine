@@ -73,6 +73,7 @@ func (l *LSM) enqueueFlush(table memtable.Table) {
 	entries := entriesFromTable(table)
 	if len(entries) == 0 {
 		l.removeImmutable(table)
+		l.recycleMemtable(table)
 		return
 	}
 	l.memMu.Lock()
@@ -86,7 +87,6 @@ func (l *LSM) enqueueFlush(table memtable.Table) {
 	flushed, err := l.flusher.Flush(entries)
 	if err == nil {
 		l.appendTable(flushed)
-		l.removeImmutable(table)
 		_ = l.manifest.Save(manifest.Manifest{
 			WALSeq: flushed.Seq,
 			Tables: append([]manifest.Entry(nil), manifest.Entry{Path: flushed.Path, Seq: flushed.Seq}),
