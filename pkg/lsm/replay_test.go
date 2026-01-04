@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,10 +20,10 @@ func TestLSMWALReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	if err := store.Put("alpha", []byte("one")); err != nil {
+	if err := store.Put([]byte("alpha"), []byte("one")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if err := store.Delete("beta"); err != nil {
+	if err := store.Delete([]byte("beta")); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	store.Close()
@@ -39,10 +40,12 @@ func TestLSMWALReplay(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if got, ok := store2.Get("alpha"); !ok || string(got.Value) != "one" {
+	if got, ok := store2.Get([]byte("alpha")); !ok || !bytes.Equal(got.Value, []byte("one")) {
 		t.Fatalf("replayed alpha missing: %+v ok=%v", got, ok)
 	}
-	if got, ok := store2.Get("beta"); ok && !got.Tombstone {
+	if got, ok := store2.Get([]byte("beta")); ok {
+		t.Fatalf("expected tombstone to return ok=false, got %+v", got)
+	} else if !got.Tombstone {
 		t.Fatalf("expected tombstone for beta, got %+v", got)
 	}
 }
