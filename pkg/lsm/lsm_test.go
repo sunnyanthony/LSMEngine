@@ -1,4 +1,4 @@
-package lsm
+package lsm_test
 
 import (
 	"bytes"
@@ -7,20 +7,18 @@ import (
 	"path/filepath"
 	"testing"
 
-	"lsmengine/internal/lsm/memtable"
-	"lsmengine/internal/lsm/wal"
+	"lsmengine/pkg/lsm"
 	"lsmengine/pkg/lsm/errs"
-	"lsmengine/pkg/lsm/types"
 )
 
 func TestLSMPutGetDelete(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{
+	opts := lsm.Options{
 		DataDir:       dir,
 		MemtableLimit: 10,
 		WALSync:       false,
 	}
-	store, err := New(opts)
+	store, err := lsm.New(opts)
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -47,7 +45,7 @@ func TestLSMPutGetDelete(t *testing.T) {
 
 func TestLSMGetTombstoneReturnsNotFound(t *testing.T) {
 	dir := t.TempDir()
-	store, err := New(Options{DataDir: dir})
+	store, err := lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -70,13 +68,13 @@ func TestLSMGetTombstoneReturnsNotFound(t *testing.T) {
 
 func TestLSMMemtableKindMap(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{
+	opts := lsm.Options{
 		DataDir:       dir,
 		MemtableLimit: 10,
-		MemtableKind:  memtable.KindMap,
+		MemtableKind:  lsm.MemtableKindMap,
 		WALSync:       false,
 	}
-	store, err := New(opts)
+	store, err := lsm.New(opts)
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -92,7 +90,7 @@ func TestLSMMemtableKindMap(t *testing.T) {
 
 func TestLSMMemtableKindInvalid(t *testing.T) {
 	dir := t.TempDir()
-	_, err := New(Options{
+	_, err := lsm.New(lsm.Options{
 		DataDir:      dir,
 		MemtableKind: "nope",
 	})
@@ -103,7 +101,7 @@ func TestLSMMemtableKindInvalid(t *testing.T) {
 
 func TestLSMPutEmptyKeyRejected(t *testing.T) {
 	dir := t.TempDir()
-	store, err := New(Options{DataDir: dir})
+	store, err := lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -118,7 +116,7 @@ func TestLSMPutEmptyKeyRejected(t *testing.T) {
 
 func TestLSMPutEmptyValueRejected(t *testing.T) {
 	dir := t.TempDir()
-	store, err := New(Options{DataDir: dir})
+	store, err := lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -133,7 +131,7 @@ func TestLSMPutEmptyValueRejected(t *testing.T) {
 
 func TestLSMDeleteEmptyKeyRejected(t *testing.T) {
 	dir := t.TempDir()
-	store, err := New(Options{DataDir: dir})
+	store, err := lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -148,7 +146,7 @@ func TestLSMDeleteEmptyKeyRejected(t *testing.T) {
 
 func TestLSMPutCopiesInput(t *testing.T) {
 	dir := t.TempDir()
-	store, err := New(Options{DataDir: dir, WALSync: true})
+	store, err := lsm.New(lsm.Options{DataDir: dir, WALSync: true})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
@@ -174,22 +172,16 @@ func TestLSMPutCopiesInput(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	w, err := wal.NewWAL(wal.Options{Path: filepath.Join(dir, "wal.log"), Sync: false})
+	reopened, err := lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
-		t.Fatalf("new wal: %v", err)
+		t.Fatalf("reopen lsm: %v", err)
 	}
-	defer w.Close()
-	var replayed []types.Entry
-	if err := w.Replay(func(e types.Entry) error {
-		replayed = append(replayed, e)
-		return nil
-	}); err != nil {
-		t.Fatalf("replay: %v", err)
+	defer reopened.Close()
+	replayed, ok := reopened.Get([]byte("alpha"))
+	if !ok {
+		t.Fatalf("expected replayed key to exist")
 	}
-	if len(replayed) != 1 {
-		t.Fatalf("expected 1 entry replayed, got %d", len(replayed))
-	}
-	if !bytes.Equal(replayed[0].Key, wantKey) || !bytes.Equal(replayed[0].Value, wantVal) {
-		t.Fatalf("expected copied replay, got key=%q value=%q", replayed[0].Key, replayed[0].Value)
+	if !bytes.Equal(replayed.Key, wantKey) || !bytes.Equal(replayed.Value, wantVal) {
+		t.Fatalf("expected copied replay, got key=%q value=%q", replayed.Key, replayed.Value)
 	}
 }
