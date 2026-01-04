@@ -5,6 +5,7 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 ## What is here
 - LSM facade with memtable, WAL replay, and async flush dispatcher.
 - Sharded skiplist memtable (plus map) with ordered iterators.
+- Snapshot range scans over memtables with merge + tombstone filtering.
 - WAL append/replay with corruption repair policy hooks.
 - SSTable writer placeholder and manifest store.
 - Event bus for async signals.
@@ -46,7 +47,7 @@ Internal engine components (subject to change):
 - Memtable: `go test ./internal/lsm/memtable -bench=Memtable -benchmem`
 
 ## Next steps
-- Implement SSTable flush and block format (index + data blocks).
-- Add compaction pipeline and TTL tombstone expiry.
+- Implement SSTable block format (index + data blocks).
+- Add SSTable range scan iterator for snapshot merges.
 - Add benchmarks and micro-bench tools for writes/reads.
 - Add metrics/health endpoints and replication transport.

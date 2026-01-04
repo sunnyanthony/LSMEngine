@@ -28,5 +28,5 @@ Skiplist:
 - Level distribution/iterator performance benchmarks.
 
 Read path:
-- Snapshot range scans across SSTables (iterator + merge, tombstone filtering).
+- SSTable range scans for snapshots (iterator + merge, tombstone filtering).
 - Snapshot observability (replay counts, pinned memtable metrics).

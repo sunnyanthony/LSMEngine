@@ -8,6 +8,7 @@ Goals:
 ## Components
 - **LSM facade**: orchestrates memtable, WAL, flush/compaction, and manifest.
 - **Memtable**: in-memory ordered index for recent writes; drained to SSTables. See `docs/memtable.md`.
+- **Snapshot**: point-in-time view that freezes the active memtable for range scans.
 - **WAL**: append-only, fsync-configurable; replay on startup. See `docs/wal.md`.
 - **Flush/compaction**: background flush worker turns drained memtables into SSTables; compaction is planned.
 - **SSTable**: immutable runs with index + data blocks; future: Bloom filters, compression, block cache.
@@ -21,6 +22,7 @@ Goals:
 - Background flush: channel of drained memtables; workers write SSTables and update manifest.
 - Compaction: scheduled by size/level thresholds; merges SSTables asynchronously.
 - Backpressure: when flush queue is full, LSM triggers synchronous flush; WAL lag tracking is planned.
+- Snapshots: freezing the active memtable pins it until closed; release enqueues flush.
 
 ### Ownership model (single copy)
 LSM performs a single copy of key/value into memtable-owned memory and passes the
@@ -65,6 +67,14 @@ Get(key):
       -> SSTables (newest -> oldest)
 ```
 
+```
+Snapshot range scan:
+  Freeze active memtable
+    -> Immutable memtables (newest -> oldest)
+      -> Merge iterator (dedupe + tombstone filtering)
+      -> SSTable range (planned)
+```
+
 ## Planned replication
 - Define `Transport` with `Publish` and `Subscribe` to abstract protocol (gRPC, NATS, Kafka, Raft-like RPCs).
 - WAL tailer batches entries to `Publish`; subscriber feeds apply queue that replays mutations in order.
@@ -81,7 +91,7 @@ Get(key):
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
 
 ## Next steps (implementation order)
-1) Background flush worker + ordered memtable; replace placeholder SSTable dump with indexed writer.
-2) Manifest persistence and lookup path (memtable -> newest SSTables).
+1) Replace placeholder SSTable writer with indexed block format.
+2) Snapshot range iterator over SSTables (merge + tombstone filtering).
 3) Transport interface + loopback implementation to validate replication plumbing.
 4) Metrics/health endpoints and basic benchmarks.

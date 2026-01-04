@@ -59,6 +59,7 @@ merge:
 ```
 
 ## Interfaces
+- `Get` for point lookups.
 - `ApplyOwned` for entries already owned by the caller (avoids extra copies)
 - `Iter()` for ordered full scan (used for flush)
 - `Range(start,end)` for ordered range scan
