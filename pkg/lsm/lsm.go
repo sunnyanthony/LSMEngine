@@ -49,6 +49,7 @@ type LSM struct {
 	mtFactory            memtable.Factory
 	immutables           []memtable.Table
 	flushQueue           []memtable.Table
+	pinned               map[memtable.Table]int
 	memMu                sync.RWMutex
 	wal                  *wal.WAL
 	flusher              sstable.Flusher

@@ -19,12 +19,20 @@ func (l *LSM) immutableMems() []memtable.Table {
 	if len(l.immutables) == 0 {
 		return nil
 	}
-	return append([]memtable.Table(nil), l.immutables...)
+	out := make([]memtable.Table, len(l.immutables))
+	for i := range l.immutables {
+		out[i] = l.immutables[len(l.immutables)-1-i]
+	}
+	return out
 }
 
 func (l *LSM) swapMemtable() memtable.Table {
 	l.memMu.Lock()
 	defer l.memMu.Unlock()
+	return l.freezeMemtableLocked(false)
+}
+
+func (l *LSM) freezeMemtableLocked(pinned bool) memtable.Table {
 	if l.mem == nil || l.mtFactory == nil {
 		return nil
 	}
@@ -34,8 +42,48 @@ func (l *LSM) swapMemtable() memtable.Table {
 		freezer.Freeze()
 	}
 	l.immutables = append(l.immutables, frozen)
-	l.flushQueue = append(l.flushQueue, frozen)
+	if pinned {
+		l.pinMemtableLocked(frozen)
+	} else {
+		l.flushQueue = append(l.flushQueue, frozen)
+	}
 	return frozen
+}
+
+func (l *LSM) pinMemtableLocked(table memtable.Table) {
+	if l.pinned == nil {
+		l.pinned = make(map[memtable.Table]int)
+	}
+	l.pinned[table]++
+}
+
+func (l *LSM) unpinMemtableLocked(table memtable.Table) bool {
+	if l.pinned == nil {
+		return false
+	}
+	count := l.pinned[table]
+	if count <= 1 {
+		delete(l.pinned, table)
+		return true
+	}
+	l.pinned[table] = count - 1
+	return false
+}
+
+func (l *LSM) releasePinned(table memtable.Table) {
+	l.memMu.Lock()
+	shouldFlush := l.unpinMemtableLocked(table)
+	l.memMu.Unlock()
+	if shouldFlush {
+		if l.ctx != nil {
+			select {
+			case <-l.ctx.Done():
+				return
+			default:
+			}
+		}
+		l.enqueueFlush(table)
+	}
 }
 
 func (l *LSM) removeImmutable(table memtable.Table) {

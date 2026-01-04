@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"lsmengine/internal/lsm/manifest"
+	"lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
@@ -65,26 +66,35 @@ func (l *LSM) triggerFlush() {
 	if frozen == nil {
 		return
 	}
-	entries := entriesFromTable(frozen)
+	l.enqueueFlush(frozen)
+}
+
+func (l *LSM) enqueueFlush(table memtable.Table) {
+	entries := entriesFromTable(table)
 	if len(entries) == 0 {
-		l.removeImmutable(frozen)
+		l.removeImmutable(table)
 		return
 	}
-	if ok := l.dispatch.Enqueue(entries); !ok {
-		// backpressure: flush synchronously
-		table, err := l.flusher.Flush(entries)
-		if err == nil {
-			l.appendTable(table)
-			l.removeImmutable(frozen)
-			_ = l.manifest.Save(manifest.Manifest{
-				WALSeq: table.Seq,
-				Tables: append([]manifest.Entry(nil), manifest.Entry{Path: table.Path, Seq: table.Seq}),
-			})
-			if l.logger != nil {
-				l.logger.Printf("flush (sync) completed seq=%d", table.Seq)
-			}
-		} else if l.logger != nil {
-			l.logger.Printf("flush (sync) failed: %v", err)
+	l.memMu.Lock()
+	l.flushQueue = append(l.flushQueue, table)
+	enqueued := l.dispatch.Enqueue(entries)
+	l.memMu.Unlock()
+	if enqueued {
+		return
+	}
+	// backpressure: flush synchronously
+	flushed, err := l.flusher.Flush(entries)
+	if err == nil {
+		l.appendTable(flushed)
+		l.removeImmutable(table)
+		_ = l.manifest.Save(manifest.Manifest{
+			WALSeq: flushed.Seq,
+			Tables: append([]manifest.Entry(nil), manifest.Entry{Path: flushed.Path, Seq: flushed.Seq}),
+		})
+		if l.logger != nil {
+			l.logger.Printf("flush (sync) completed seq=%d", flushed.Seq)
 		}
+	} else if l.logger != nil {
+		l.logger.Printf("flush (sync) failed: %v", err)
 	}
 }

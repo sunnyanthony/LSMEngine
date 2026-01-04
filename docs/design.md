@@ -26,3 +26,7 @@ Skiplist:
 - Node allocation via arena to reduce GC.
 - Comparator coverage tests for varied key distributions.
 - Level distribution/iterator performance benchmarks.
+
+Read path:
+- Snapshot range scans across SSTables (iterator + merge, tombstone filtering).
+- Snapshot observability (replay counts, pinned memtable metrics).
