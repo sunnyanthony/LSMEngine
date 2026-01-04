@@ -30,7 +30,7 @@ Other implementations (select via `MemtableKind`):
 - `map`: hash-based table with sorted snapshots for iteration.
 
 ## Skiplist structure (per shard)
-Implementation lives in `pkg/lsm/memtable/skiplist`.
+Implementation lives in `internal/lsm/memtable/skiplist`.
 ```
 level N:  head -> node -> node -> ...
 level 1:  head -> node -> node -> ...

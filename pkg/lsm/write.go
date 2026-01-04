@@ -3,9 +3,9 @@ package lsm
 import (
 	"sync/atomic"
 
+	"lsmengine/internal/lsm/manifest"
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/errs"
-	"lsmengine/pkg/lsm/manifest"
 	"lsmengine/pkg/lsm/types"
 )
 

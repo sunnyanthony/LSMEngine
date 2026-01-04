@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
+	"lsmengine/internal/lsm/wal/codec"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
-	"lsmengine/pkg/lsm/wal/codec"
 )
 
 // Replay reads entries from the WAL in order and calls fn for each.

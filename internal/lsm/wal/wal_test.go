@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"lsmengine/internal/lsm/wal/codec"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
-	"lsmengine/pkg/lsm/wal/codec"
 )
 
 func TestWALAppendAndReplay(t *testing.T) {
@@ -31,9 +31,7 @@ func TestWALAppendAndReplay(t *testing.T) {
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
 	}
 	for _, e := range entries {
-		if err := w.Append(e); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		appendOwned(t, w, e)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close wal: %v", err)
@@ -68,9 +66,7 @@ func TestWALAsyncAppendAndReplay(t *testing.T) {
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
 	}
 	for _, e := range entries {
-		if err := w.Append(e); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		appendOwned(t, w, e)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close wal: %v", err)
@@ -104,9 +100,7 @@ func TestWALAppendLargeValue(t *testing.T) {
 	for i := range large {
 		large[i] = byte(i % 251)
 	}
-	if err := w.Append(types.Entry{Key: []byte("big"), Value: large, Seq: 1}); err != nil {
-		t.Fatalf("append large: %v", err)
-	}
+	appendOwned(t, w, types.Entry{Key: []byte("big"), Value: large, Seq: 1})
 	_ = w.Close()
 
 	wal := &WAL{path: path}
@@ -120,67 +114,6 @@ func TestWALAppendLargeValue(t *testing.T) {
 	}
 	if len(replayed) != 1 || len(replayed[0].Value) != len(large) {
 		t.Fatalf("expected 1 large entry, got %d len=%d", len(replayed), len(replayed[0].Value))
-	}
-}
-
-func TestWALAppendCopiesInput(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wal.log")
-	w, err := NewWAL(Options{Path: path, Sync: false, BlockSize: 512 * 1024})
-	if err != nil {
-		t.Fatalf("new wal: %v", err)
-	}
-	key := []byte("alpha")
-	val := []byte("one")
-	wantKey := append([]byte(nil), key...)
-	wantVal := append([]byte(nil), val...)
-
-	if err := w.Append(types.Entry{Key: key, Value: val, Seq: 1}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	key[0] = 'z'
-	val[0] = 'x'
-	_ = w.Close()
-
-	wal := &WAL{path: path}
-	var replayed []types.Entry
-	if err := wal.Replay(func(e types.Entry) error {
-		replayed = append(replayed, e)
-		return nil
-	}); err != nil {
-		t.Fatalf("replay: %v", err)
-	}
-	if len(replayed) != 1 {
-		t.Fatalf("expected 1 entry replayed, got %d", len(replayed))
-	}
-	if !bytes.Equal(replayed[0].Key, wantKey) || !bytes.Equal(replayed[0].Value, wantVal) {
-		t.Fatalf("expected copied entry, got key=%q value=%q", replayed[0].Key, replayed[0].Value)
-	}
-}
-
-func TestWALEmptyKeyRejected(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wal.log")
-	w, err := NewWAL(Options{Path: path, Sync: false})
-	if err != nil {
-		t.Fatalf("new wal: %v", err)
-	}
-	err = w.Append(types.Entry{Key: nil, Value: []byte("v"), Seq: 1})
-	if err == nil {
-		t.Fatalf("expected error for empty key")
-	}
-}
-
-func TestWALEmptyValueRejected(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wal.log")
-	w, err := NewWAL(Options{Path: path, Sync: false})
-	if err != nil {
-		t.Fatalf("new wal: %v", err)
-	}
-	err = w.Append(types.Entry{Key: []byte("k"), Value: nil, Seq: 1})
-	if err == nil {
-		t.Fatalf("expected error for empty value")
 	}
 }
 
@@ -217,12 +150,8 @@ func TestWALTombstoneReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new wal: %v", err)
 	}
-	if err := w.Append(types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	if err := w.Append(types.Entry{Key: []byte("k"), Tombstone: true, Seq: 2}); err != nil {
-		t.Fatalf("append tombstone: %v", err)
-	}
+	appendOwned(t, w, types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1})
+	appendOwned(t, w, types.Entry{Key: []byte("k"), Tombstone: true, Seq: 2})
 	_ = w.Close()
 
 	wal := &WAL{path: path}
@@ -242,8 +171,8 @@ func TestWALReplayHandlerError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal.log")
 	w, _ := NewWAL(Options{Path: path, Sync: false})
-	_ = w.Append(types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1})
-	_ = w.Append(types.Entry{Key: []byte("k"), Value: []byte("v2"), Seq: 2})
+	_ = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1}))
+	_ = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: []byte("v2"), Seq: 2}))
 	_ = w.Close()
 
 	wal := &WAL{path: path}
@@ -267,9 +196,7 @@ func TestWALSyncTrueFlushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new wal: %v", err)
 	}
-	if err := w.Append(types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendOwned(t, w, types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1})
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -330,12 +257,8 @@ func TestWALReplayAutoRepairTruncatesTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new wal: %v", err)
 	}
-	if err := w.Append(types.Entry{Key: []byte("a"), Value: []byte("1"), Seq: 1}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	if err := w.Append(types.Entry{Key: []byte("b"), Value: []byte("2"), Seq: 2}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendOwned(t, w, types.Entry{Key: []byte("a"), Value: []byte("1"), Seq: 1})
+	appendOwned(t, w, types.Entry{Key: []byte("b"), Value: []byte("2"), Seq: 2})
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -390,7 +313,7 @@ func TestWALOversizedRecordRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new wal: %v", err)
 	}
-	err = w.Append(types.Entry{Key: []byte("k"), Value: make([]byte, 128), Seq: 1})
+	err = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: make([]byte, 128), Seq: 1}))
 	if err == nil {
 		t.Fatalf("expected oversized record error")
 	}
@@ -491,7 +414,7 @@ func runConcurrentAppend(t *testing.T, async bool) {
 			for j := 0; j < iters; j++ {
 				idx := atomic.AddUint64(&seq, 1)
 				binary.LittleEndian.PutUint64(keyBuf[:], idx)
-				if err := w.Append(types.Entry{Key: keyBuf[:], Value: []byte{byte(idx % 251)}, Seq: idx}); err != nil {
+				if err := w.AppendOwned(copyEntry(types.Entry{Key: keyBuf[:], Value: []byte{byte(idx % 251)}, Seq: idx})); err != nil {
 					errCh <- err
 					return
 				}
@@ -523,4 +446,18 @@ func runConcurrentAppend(t *testing.T, async bool) {
 	if count != expected {
 		t.Fatalf("expected %d entries replayed, got %d", expected, count)
 	}
+}
+
+func appendOwned(t *testing.T, w *WAL, entry types.Entry) {
+	t.Helper()
+	entry = copyEntry(entry)
+	if err := w.AppendOwned(entry); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+}
+
+func copyEntry(entry types.Entry) types.Entry {
+	entry.Key = append([]byte(nil), entry.Key...)
+	entry.Value = append([]byte(nil), entry.Value...)
+	return entry
 }

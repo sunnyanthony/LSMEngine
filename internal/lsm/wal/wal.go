@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"sync"
 
-	"lsmengine/pkg/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/codec"
 )
 
 // WAL appends mutations for durability and supports replay.

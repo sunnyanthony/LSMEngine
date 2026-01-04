@@ -3,7 +3,7 @@ package lsm
 import (
 	"sync/atomic"
 
-	"lsmengine/pkg/lsm/memtable"
+	"lsmengine/internal/lsm/memtable"
 )
 
 func (l *LSM) activeMem() memtable.Table {

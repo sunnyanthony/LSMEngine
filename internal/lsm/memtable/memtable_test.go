@@ -14,7 +14,7 @@ import (
 
 func TestMemTablePutGet(t *testing.T) {
 	mt := NewMapTable()
-	entry := mt.Put([]byte("alpha"), []byte("one"))
+	entry := applyOwnedEntry(mt, []byte("alpha"), []byte("one"), false, 1)
 	got, ok := mt.Get([]byte("alpha"))
 	if !ok {
 		t.Fatalf("expected key to exist")
@@ -29,8 +29,8 @@ func TestMemTablePutGet(t *testing.T) {
 
 func TestMemTableDelete(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("alpha"), []byte("one"))
-	del := mt.Delete([]byte("alpha"))
+	applyOwnedEntry(mt, []byte("alpha"), []byte("one"), false, 1)
+	del := applyOwnedEntry(mt, []byte("alpha"), nil, true, 2)
 	if !del.Tombstone {
 		t.Fatalf("expected tombstone")
 	}
@@ -42,8 +42,8 @@ func TestMemTableDelete(t *testing.T) {
 
 func TestMemTableDrainSorted(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("b"), []byte("2"))
-	mt.Put([]byte("a"), []byte("1"))
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
 	entries := mt.Drain()
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries")
@@ -56,21 +56,11 @@ func TestMemTableDrainSorted(t *testing.T) {
 	}
 }
 
-func TestMemTableApplySetsSeq(t *testing.T) {
-	mt := NewMapTable()
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Apply(types.Entry{Key: []byte("b"), Value: []byte("2"), Seq: 10})
-	entry := mt.Put([]byte("c"), []byte("3"))
-	if entry.Seq != 11 {
-		t.Fatalf("expected seq to continue after apply, got %d", entry.Seq)
-	}
-}
-
 func TestMemTableIterSorted(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("b"), []byte("2"))
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("c"), []byte("3"))
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
+	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
 
 	it := mt.Iter()
 	var keys [][]byte
@@ -87,10 +77,10 @@ func TestMemTableIterSorted(t *testing.T) {
 
 func TestMemTableRange(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("b"), []byte("2"))
-	mt.Put([]byte("c"), []byte("3"))
-	mt.Put([]byte("d"), []byte("4"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
+	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
+	applyOwnedEntry(mt, []byte("d"), []byte("4"), false, 4)
 
 	it := mt.Range([]byte("b"), []byte("d"))
 	var keys [][]byte
@@ -104,9 +94,9 @@ func TestMemTableRange(t *testing.T) {
 
 func TestMemTableRangeEmptyBounds(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("b"), []byte("2"))
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("c"), []byte("3"))
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
+	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
 
 	it := mt.Range(nil, nil)
 	var keys [][]byte
@@ -123,8 +113,8 @@ func TestMemTableRangeEmptyBounds(t *testing.T) {
 
 func TestMemTableRangeNoMatch(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("b"), []byte("2"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
 
 	it := mt.Range([]byte("d"), []byte("f"))
 	if it.Next() {
@@ -134,11 +124,11 @@ func TestMemTableRangeNoMatch(t *testing.T) {
 
 func TestMapTableSizeBytesOverwrite(t *testing.T) {
 	mt := NewMapTable().(*MapTable)
-	mt.Put([]byte("a"), []byte("1"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	if mt.Size() != 2 {
 		t.Fatalf("expected size 2, got %d", mt.Size())
 	}
-	mt.Put([]byte("a"), []byte("123"))
+	applyOwnedEntry(mt, []byte("a"), []byte("123"), false, 2)
 	if mt.Size() != 4 {
 		t.Fatalf("expected size 4 after overwrite, got %d", mt.Size())
 	}
@@ -146,8 +136,8 @@ func TestMapTableSizeBytesOverwrite(t *testing.T) {
 
 func TestMapTableSizeBytesTombstone(t *testing.T) {
 	mt := NewMapTable().(*MapTable)
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Delete([]byte("a"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
+	applyOwnedEntry(mt, []byte("a"), nil, true, 2)
 	if mt.Size() != 1 {
 		t.Fatalf("expected size 1 for tombstone, got %d", mt.Size())
 	}
@@ -155,10 +145,14 @@ func TestMapTableSizeBytesTombstone(t *testing.T) {
 
 func TestMapTableApplyBatchOwned(t *testing.T) {
 	mt := NewMapTable().(*MapTable)
-	mt.ApplyBatchOwned([]types.Entry{
+	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
-	})
+	}
+	for i := range entries {
+		entries[i] = mt.CopyEntry(entries[i])
+	}
+	mt.ApplyBatchOwned(entries)
 	if got, ok := mt.Get([]byte("a")); !ok || !bytes.Equal(got.Value, []byte("1")) {
 		t.Fatalf("expected batch applied entry a")
 	}
@@ -169,8 +163,8 @@ func TestMapTableApplyBatchOwned(t *testing.T) {
 
 func TestMapTableRangeInvalidBounds(t *testing.T) {
 	mt := NewMapTable()
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("b"), []byte("2"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
+	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
 
 	it := mt.Range([]byte("d"), []byte("b"))
 	if it.Next() {
@@ -183,7 +177,8 @@ func TestMapTableApplyCopiesEntry(t *testing.T) {
 	key := []byte("alpha")
 	val := []byte("one")
 
-	mt.Apply(types.Entry{Key: key, Value: val, Seq: 1})
+	entry := mt.CopyEntry(types.Entry{Key: key, Value: val, Seq: 1})
+	mt.ApplyOwned(entry)
 	key[0] = 'z'
 	val[0] = 'x'
 
@@ -198,8 +193,8 @@ func TestMapTableApplyCopiesEntry(t *testing.T) {
 
 func TestMapTableStats(t *testing.T) {
 	mt := NewMapTable().(*MapTable)
-	mt.Put([]byte("a"), []byte("1"))
-	mt.Put([]byte("b"), []byte("22"))
+	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
+	applyOwnedEntry(mt, []byte("b"), []byte("22"), false, 2)
 
 	stats := mt.Stats()
 	if stats.Entries != 2 {
@@ -221,12 +216,8 @@ func TestMemtableCopyEntryEmptyValue(t *testing.T) {
 		NewShardedSkipListTable(2),
 	}
 	for _, table := range tables {
-		copier, ok := table.(EntryCopier)
-		if !ok {
-			t.Fatalf("expected EntryCopier for %T", table)
-		}
 		entry := types.Entry{Key: []byte("k"), Value: nil, Seq: 1}
-		copied := copier.CopyEntry(entry)
+		copied := table.CopyEntry(entry)
 		entry.Key[0] = 'z'
 		if !bytes.Equal(copied.Key, []byte("k")) {
 			t.Fatalf("expected copied key for %T", table)
@@ -244,13 +235,9 @@ func TestMemtableCopyEntryEmptyKey(t *testing.T) {
 		NewShardedSkipListTable(2),
 	}
 	for _, table := range tables {
-		copier, ok := table.(EntryCopier)
-		if !ok {
-			t.Fatalf("expected EntryCopier for %T", table)
-		}
 		val := []byte("v")
 		entry := types.Entry{Key: nil, Value: val, Seq: 1}
-		copied := copier.CopyEntry(entry)
+		copied := table.CopyEntry(entry)
 		val[0] = 'x'
 		if len(copied.Key) != 0 {
 			t.Fatalf("expected empty key for %T", table)
@@ -294,7 +281,8 @@ func runConcurrentApply(t *testing.T, table Table, valueSize int) {
 			for j := 0; j < iters; j++ {
 				idx := atomic.AddUint64(&seq, 1)
 				binary.LittleEndian.PutUint64(keyBuf[:8], idx)
-				table.Apply(types.Entry{Key: keyBuf[:], Value: val, Seq: idx})
+				entry := table.CopyEntry(types.Entry{Key: keyBuf[:], Value: val, Seq: idx})
+				table.ApplyOwned(entry)
 			}
 		}()
 	}
@@ -327,7 +315,8 @@ func runConcurrentPutGet(t *testing.T, table Table) {
 			for j := 0; j < iters; j++ {
 				idx := atomic.AddUint64(&seq, 1)
 				binary.LittleEndian.PutUint64(keyBuf[:], idx)
-				table.Put(keyBuf[:], val)
+				entry := table.CopyEntry(types.Entry{Key: keyBuf[:], Value: val, Seq: idx})
+				table.ApplyOwned(entry)
 				if _, ok := table.Get(keyBuf[:]); !ok {
 					errCh <- errors.New("missing key after put")
 					return
@@ -346,4 +335,16 @@ func runConcurrentPutGet(t *testing.T, table Table) {
 	if table.Size() == 0 {
 		t.Fatalf("expected entries after concurrent put/get")
 	}
+}
+
+func applyOwnedEntry(table Table, key, value []byte, tombstone bool, seq uint64) types.Entry {
+	entry := types.Entry{
+		Key:       key,
+		Value:     value,
+		Tombstone: tombstone,
+		Seq:       seq,
+	}
+	entry = table.CopyEntry(entry)
+	table.ApplyOwned(entry)
+	return entry
 }

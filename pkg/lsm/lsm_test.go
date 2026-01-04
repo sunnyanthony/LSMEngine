@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"lsmengine/internal/lsm/memtable"
+	"lsmengine/internal/lsm/wal"
 	"lsmengine/pkg/lsm/errs"
-	"lsmengine/pkg/lsm/memtable"
 	"lsmengine/pkg/lsm/types"
-	"lsmengine/pkg/lsm/wal"
 )
 
 func TestLSMPutGetDelete(t *testing.T) {

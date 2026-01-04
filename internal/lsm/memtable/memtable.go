@@ -1,20 +1,20 @@
 package memtable
 
 import (
-	"lsmengine/pkg/lsm/memtable/skiplist"
+	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
 
 // Table defines the operations required by the LSM for an in-memory index.
 type Table interface {
-	Put(key []byte, value []byte) types.Entry
-	Delete(key []byte) types.Entry
 	Get(key []byte) (types.Entry, bool)
-	Apply(entry types.Entry)
+	ApplyOwned(entry types.Entry)
+	ApplyBatchOwned(entries []types.Entry)
 	Size() int
 	Drain() []types.Entry
 	Iter() Iterator
 	Range(start, end []byte) Iterator
+	CopyEntry(entry types.Entry) types.Entry
 }
 
 // Factory constructs a new memtable implementation.
@@ -29,16 +29,6 @@ type Iterator interface {
 // Freezer marks a table immutable to allow fast-path iteration.
 type Freezer interface {
 	Freeze()
-}
-
-// BatchOwnedApplier applies entries without copying key/value.
-type BatchOwnedApplier interface {
-	ApplyBatchOwned(entries []types.Entry)
-}
-
-// EntryCopier returns an entry whose key/value slices are owned by the table.
-type EntryCopier interface {
-	CopyEntry(entry types.Entry) types.Entry
 }
 
 // StatsProvider exposes table metrics for tuning.

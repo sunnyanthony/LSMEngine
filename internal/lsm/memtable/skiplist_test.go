@@ -9,9 +9,9 @@ import (
 
 func TestSkipListTableIter(t *testing.T) {
 	table := NewSkipListTable()
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("c"), []byte("3"))
+	applyOwned(table, []byte("b"), []byte("2"), false, 1)
+	applyOwned(table, []byte("a"), []byte("1"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
 
 	it := table.Iter()
 	var keys [][]byte
@@ -28,10 +28,10 @@ func TestSkipListTableIter(t *testing.T) {
 
 func TestSkipListTableRangeBounds(t *testing.T) {
 	table := NewSkipListTable()
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("c"), []byte("3"))
-	table.Put([]byte("d"), []byte("4"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
+	applyOwned(table, []byte("d"), []byte("4"), false, 4)
 
 	it := table.Range([]byte("b"), []byte("d"))
 	var keys [][]byte
@@ -45,8 +45,8 @@ func TestSkipListTableRangeBounds(t *testing.T) {
 
 func TestSkipListTableRangeEmpty(t *testing.T) {
 	table := NewSkipListTable()
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
 	it := table.Range([]byte("d"), []byte("f"))
 	if it.Next() {
@@ -56,9 +56,9 @@ func TestSkipListTableRangeEmpty(t *testing.T) {
 
 func TestShardedSkipListIter(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("c"), []byte("3"))
+	applyOwned(table, []byte("b"), []byte("2"), false, 1)
+	applyOwned(table, []byte("a"), []byte("1"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
 
 	it := table.Iter()
 	var keys [][]byte
@@ -75,10 +75,10 @@ func TestShardedSkipListIter(t *testing.T) {
 
 func TestShardedSkipListRange(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("c"), []byte("3"))
-	table.Put([]byte("d"), []byte("4"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
+	applyOwned(table, []byte("d"), []byte("4"), false, 4)
 
 	it := table.Range([]byte("b"), []byte("d"))
 	var keys [][]byte
@@ -92,8 +92,8 @@ func TestShardedSkipListRange(t *testing.T) {
 
 func TestShardedSkipListRangeEmpty(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
 	it := table.Range([]byte("d"), []byte("f"))
 	if it.Next() {
@@ -103,9 +103,9 @@ func TestShardedSkipListRangeEmpty(t *testing.T) {
 
 func TestShardedSkipListRangeNilStart(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("c"), []byte("3"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
 
 	it := table.Range(nil, []byte("c"))
 	var keys [][]byte
@@ -119,9 +119,9 @@ func TestShardedSkipListRangeNilStart(t *testing.T) {
 
 func TestShardedSkipListRangeNilEnd(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
-	table.Put([]byte("c"), []byte("3"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
+	applyOwned(table, []byte("c"), []byte("3"), false, 3)
 
 	it := table.Range([]byte("b"), nil)
 	var keys [][]byte
@@ -135,11 +135,11 @@ func TestShardedSkipListRangeNilEnd(t *testing.T) {
 
 func TestSkipListTableSizeBytesOverwrite(t *testing.T) {
 	table := NewSkipListTable().(*SkipListTable)
-	table.Put([]byte("a"), []byte("1"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	if table.Size() != 2 {
 		t.Fatalf("expected size 2, got %d", table.Size())
 	}
-	table.Put([]byte("a"), []byte("123"))
+	applyOwned(table, []byte("a"), []byte("123"), false, 2)
 	if table.Size() != 4 {
 		t.Fatalf("expected size 4 after overwrite, got %d", table.Size())
 	}
@@ -147,10 +147,14 @@ func TestSkipListTableSizeBytesOverwrite(t *testing.T) {
 
 func TestSkipListTableApplyBatchOwned(t *testing.T) {
 	table := NewSkipListTable().(*SkipListTable)
-	table.ApplyBatchOwned([]types.Entry{
+	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
-	})
+	}
+	for i := range entries {
+		entries[i] = table.CopyEntry(entries[i])
+	}
+	table.ApplyBatchOwned(entries)
 	if got, ok := table.Get([]byte("a")); !ok || !bytes.Equal(got.Value, []byte("1")) {
 		t.Fatalf("expected batch applied entry a")
 	}
@@ -161,8 +165,8 @@ func TestSkipListTableApplyBatchOwned(t *testing.T) {
 
 func TestShardedSkipListStats(t *testing.T) {
 	table := NewShardedSkipListTableWithShards(4).(*ShardedSkipListTable)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("22"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("22"), false, 2)
 	stats := table.Stats()
 	if stats.Entries != 2 {
 		t.Fatalf("expected 2 entries, got %d", stats.Entries)
@@ -177,8 +181,8 @@ func TestShardedSkipListStats(t *testing.T) {
 
 func TestShardedSkipListRangeInvalidBounds(t *testing.T) {
 	table := NewShardedSkipListTable(2)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
 	it := table.Range([]byte("d"), []byte("b"))
 	if it.Next() {
@@ -188,8 +192,8 @@ func TestShardedSkipListRangeInvalidBounds(t *testing.T) {
 
 func TestSkipListTableRangeInvalidBounds(t *testing.T) {
 	table := NewSkipListTable()
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("2"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
 	it := table.Range([]byte("d"), []byte("b"))
 	if it.Next() {
@@ -202,7 +206,8 @@ func TestSkipListTableApplyCopiesEntry(t *testing.T) {
 	key := []byte("alpha")
 	val := []byte("one")
 
-	table.Apply(types.Entry{Key: key, Value: val, Seq: 1})
+	entry := table.CopyEntry(types.Entry{Key: key, Value: val, Seq: 1})
+	table.ApplyOwned(entry)
 	key[0] = 'z'
 	val[0] = 'x'
 
@@ -220,7 +225,8 @@ func TestShardedSkipListApplyCopiesEntry(t *testing.T) {
 	key := []byte("alpha")
 	val := []byte("one")
 
-	table.Apply(types.Entry{Key: key, Value: val, Seq: 1})
+	entry := table.CopyEntry(types.Entry{Key: key, Value: val, Seq: 1})
+	table.ApplyOwned(entry)
 	key[0] = 'z'
 	val[0] = 'x'
 
@@ -235,8 +241,8 @@ func TestShardedSkipListApplyCopiesEntry(t *testing.T) {
 
 func TestSkipListTableStats(t *testing.T) {
 	table := NewSkipListTable().(*SkipListTable)
-	table.Put([]byte("a"), []byte("1"))
-	table.Put([]byte("b"), []byte("22"))
+	applyOwned(table, []byte("a"), []byte("1"), false, 1)
+	applyOwned(table, []byte("b"), []byte("22"), false, 2)
 
 	stats := table.Stats()
 	if stats.Entries != 2 {
@@ -253,4 +259,15 @@ func TestSkipListTableApplyConcurrentDoesNotPanic(t *testing.T) {
 
 func TestShardedSkipListApplyConcurrentDoesNotPanic(t *testing.T) {
 	runConcurrentApply(t, NewShardedSkipListTable(2), 4*1024)
+}
+
+func applyOwned(table Table, key, value []byte, tombstone bool, seq uint64) {
+	entry := types.Entry{
+		Key:       key,
+		Value:     value,
+		Tombstone: tombstone,
+		Seq:       seq,
+	}
+	entry = table.CopyEntry(entry)
+	table.ApplyOwned(entry)
 }

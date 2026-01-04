@@ -36,46 +36,6 @@ func newMapTable(blockSize int) *MapTable {
 	}
 }
 
-func (m *MapTable) Put(key []byte, value []byte) types.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.seq++
-	entry := types.Entry{
-		Key:   m.copyBytes(key),
-		Value: m.copyBytes(value),
-		Seq:   m.seq,
-	}
-	m.updateEntry(entry)
-	return entry
-}
-
-func (m *MapTable) Delete(key []byte) types.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.seq++
-	entry := types.Entry{
-		Key:       m.copyBytes(key),
-		Tombstone: true,
-		Seq:       m.seq,
-	}
-	m.updateEntry(entry)
-	return entry
-}
-
-// Apply inserts an entry with its existing sequence, used for WAL replay.
-func (m *MapTable) Apply(entry types.Entry) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if entry.Seq > m.seq {
-		m.seq = entry.Seq
-	}
-	entry = m.copyEntry(entry)
-	m.updateEntry(entry)
-}
-
 // ApplyOwned inserts an entry without copying key/value.
 func (m *MapTable) ApplyOwned(entry types.Entry) {
 	m.mu.Lock()

@@ -3,7 +3,7 @@ package memtable
 import (
 	"sync"
 
-	"lsmengine/pkg/lsm/memtable/skiplist"
+	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -30,61 +30,6 @@ func newSkipListTable(blockSize int) *SkipListTable {
 		list:  skiplist.New(),
 		cmp:   DefaultCompare,
 		arena: NewArena(blockSize),
-	}
-}
-
-func (t *SkipListTable) Put(key []byte, value []byte) types.Entry {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.seq++
-	entry := types.Entry{
-		Key:   t.copyBytes(key),
-		Value: t.copyBytes(value),
-		Seq:   t.seq,
-	}
-	inserted, prev, replaced := t.list.Upsert(entry)
-	if inserted {
-		t.sizeBytes += entrySize(entry)
-	} else if replaced {
-		t.sizeBytes += entrySize(entry) - entrySize(prev)
-	}
-	return entry
-}
-
-func (t *SkipListTable) Delete(key []byte) types.Entry {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.seq++
-	entry := types.Entry{
-		Key:       t.copyBytes(key),
-		Tombstone: true,
-		Seq:       t.seq,
-	}
-	inserted, prev, replaced := t.list.Upsert(entry)
-	if inserted {
-		t.sizeBytes += entrySize(entry)
-	} else if replaced {
-		t.sizeBytes += entrySize(entry) - entrySize(prev)
-	}
-	return entry
-}
-
-// Apply inserts an entry with its existing sequence, used for WAL replay.
-func (t *SkipListTable) Apply(entry types.Entry) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if entry.Seq > t.seq {
-		t.seq = entry.Seq
-	}
-	entry = t.copyEntry(entry)
-	inserted, prev, replaced := t.list.Upsert(entry)
-	if inserted {
-		t.sizeBytes += entrySize(entry)
-	} else if replaced {
-		t.sizeBytes += entrySize(entry) - entrySize(prev)
 	}
 }
 

@@ -7,35 +7,29 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	"lsmengine/internal/lsm/wal/codec"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
-	"lsmengine/pkg/lsm/wal/codec"
 )
 
 type appendRequest struct {
 	entry types.Entry
-	owned bool
 	done  chan error
-}
-
-// Append writes a record and copies key/value so callers can reuse buffers.
-func (w *WAL) Append(entry types.Entry) error {
-	return w.append(entry, false)
 }
 
 // AppendOwned writes a record without copying key/value. Callers must not
 // mutate or reuse the slices after calling this method.
 func (w *WAL) AppendOwned(entry types.Entry) error {
-	return w.append(entry, true)
+	return w.append(entry)
 }
 
-func (w *WAL) append(entry types.Entry, owned bool) error {
+func (w *WAL) append(entry types.Entry) error {
 	if w.async {
-		return w.appendAsync(entry, owned)
+		return w.appendAsync(entry)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.appendLocked(entry, owned); err != nil {
+	if err := w.appendLocked(entry); err != nil {
 		return err
 	}
 	if w.sync {
@@ -49,17 +43,12 @@ func (w *WAL) append(entry types.Entry, owned bool) error {
 	return nil
 }
 
-func (w *WAL) appendAsync(entry types.Entry, owned bool) error {
+func (w *WAL) appendAsync(entry types.Entry) error {
 	if atomic.LoadUint32(&w.closed) == 1 {
 		return errs.ErrWALClosed
 	}
-	if !owned {
-		entry = copyEntry(entry)
-		owned = true
-	}
 	req := appendRequest{
 		entry: entry,
-		owned: owned,
 		done:  make(chan error, 1),
 	}
 	select {
@@ -70,7 +59,7 @@ func (w *WAL) appendAsync(entry types.Entry, owned bool) error {
 	}
 }
 
-func (w *WAL) appendLocked(entry types.Entry, owned bool) error {
+func (w *WAL) appendLocked(entry types.Entry) error {
 	if w.f == nil {
 		return errs.ErrWALClosed
 	}
@@ -81,12 +70,7 @@ func (w *WAL) appendLocked(entry types.Entry, owned bool) error {
 		return errs.ErrWALEmptyValue
 	}
 
-	var rb codec.RecordBuffer
-	if owned {
-		rb = codec.NewRecordBufferOwned(entry)
-	} else {
-		rb = codec.NewRecordBuffer(entry)
-	}
+	rb := codec.NewRecordBufferOwned(entry)
 	if uint32(rb.Total) > w.blockSize {
 		return fmt.Errorf("%w (record %d > block %d)", errs.ErrWALRecordTooLarge, rb.Total, w.blockSize)
 	}
@@ -102,16 +86,6 @@ func (w *WAL) appendLocked(entry types.Entry, owned bool) error {
 	w.records = append(w.records, rb)
 	w.blockLen += rb.Total
 	return nil
-}
-
-func copyEntry(entry types.Entry) types.Entry {
-	if len(entry.Key) > 0 {
-		entry.Key = append([]byte(nil), entry.Key...)
-	}
-	if len(entry.Value) > 0 {
-		entry.Value = append([]byte(nil), entry.Value...)
-	}
-	return entry
 }
 
 func (w *WAL) Close() error {
@@ -195,7 +169,7 @@ func (w *WAL) processBatch(batch []appendRequest, syncNow bool) error {
 			errs[i] = fatal
 			continue
 		}
-		if err := w.appendLocked(req.entry, req.owned); err != nil {
+		if err := w.appendLocked(req.entry); err != nil {
 			if isFatalAppendError(err) {
 				fatal = err
 			}

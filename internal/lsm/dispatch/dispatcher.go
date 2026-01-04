@@ -3,9 +3,9 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"lsmengine/internal/lsm/manifest"
+	"lsmengine/internal/lsm/sstable"
 	"lsmengine/pkg/lsm/bus"
-	"lsmengine/pkg/lsm/manifest"
-	"lsmengine/pkg/lsm/sstable"
 	"lsmengine/pkg/lsm/types"
 )
 

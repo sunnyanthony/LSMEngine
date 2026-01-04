@@ -19,8 +19,8 @@ Record (inside block payload):
 +---------+-----+--------+--------+--------------+-----+--------+
 
 ## Code layout
-- Format framing and encode/decode helpers live in `pkg/lsm/wal/codec`.
-- `pkg/lsm/wal` owns append/replay behavior and policy decisions.
+- Format framing and encode/decode helpers live in `internal/lsm/wal/codec`.
+- `internal/lsm/wal` owns append/replay behavior and policy decisions.
 ```
 
 ## Segment header
@@ -58,11 +58,10 @@ Record payload (inside block):
 - Record CRC: `u32` (CRC32 over record payload)
 
 ## Ownership and copying
-- `Append` copies key/value, so callers can reuse or mutate buffers after the call.
 - `AppendOwned` transfers ownership of key/value to the WAL; callers must not
   mutate or reuse those slices after the call. Violating this contract can
   corrupt the WAL because CRCs are computed at append time.
-- LSM uses a single internal copy into memtable-owned memory and then calls
+- LSM performs a single internal copy into memtable-owned memory and then calls
   `AppendOwned`, so external callers do not need to manage ownership.
 
 ## Resync strategy

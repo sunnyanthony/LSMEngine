@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"lsmengine/pkg/lsm/memtable/skiplist"
+	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -57,68 +57,6 @@ func newShardedSkipListTable(shards int, blockSize int) *ShardedSkipListTable {
 		mask:   uint64(shards - 1),
 		cmp:    DefaultCompare,
 	}
-}
-
-func (t *ShardedSkipListTable) Put(key []byte, value []byte) types.Entry {
-	idx := hashKey(key) & t.mask
-	s := &t.shards[idx]
-	s.mu.Lock()
-	entry := types.Entry{
-		Key:   s.copyBytes(key),
-		Value: s.copyBytes(value),
-		Seq:   atomic.AddUint64(&t.seq, 1),
-	}
-	inserted, prev, replaced := s.list.Upsert(entry)
-	if inserted {
-		s.entries++
-		s.bytes += entrySize(entry)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)))
-	} else if replaced {
-		s.bytes += entrySize(entry) - entrySize(prev)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)-entrySize(prev)))
-	}
-	s.mu.Unlock()
-	return entry
-}
-
-func (t *ShardedSkipListTable) Delete(key []byte) types.Entry {
-	idx := hashKey(key) & t.mask
-	s := &t.shards[idx]
-	s.mu.Lock()
-	entry := types.Entry{
-		Key:       s.copyBytes(key),
-		Tombstone: true,
-		Seq:       atomic.AddUint64(&t.seq, 1),
-	}
-	inserted, prev, replaced := s.list.Upsert(entry)
-	if inserted {
-		s.entries++
-		s.bytes += entrySize(entry)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)))
-	} else if replaced {
-		s.bytes += entrySize(entry) - entrySize(prev)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)-entrySize(prev)))
-	}
-	s.mu.Unlock()
-	return entry
-}
-
-// Apply inserts an entry with its existing sequence, used for WAL replay.
-func (t *ShardedSkipListTable) Apply(entry types.Entry) {
-	t.bumpSeq(entry.Seq)
-	s := t.pick(entry.Key)
-	s.mu.Lock()
-	entry = s.copyEntry(entry)
-	inserted, prev, replaced := s.list.Upsert(entry)
-	if inserted {
-		s.entries++
-		s.bytes += entrySize(entry)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)))
-	} else if replaced {
-		s.bytes += entrySize(entry) - entrySize(prev)
-		atomic.AddInt64(&t.sizeBytes, int64(entrySize(entry)-entrySize(prev)))
-	}
-	s.mu.Unlock()
 }
 
 // ApplyOwned inserts an entry without copying key/value.

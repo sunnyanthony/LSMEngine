@@ -6,13 +6,13 @@ import (
 	"io"
 	"path/filepath"
 
+	"lsmengine/internal/lsm/dispatch"
+	"lsmengine/internal/lsm/logging"
+	"lsmengine/internal/lsm/manifest"
+	"lsmengine/internal/lsm/memtable"
+	"lsmengine/internal/lsm/sstable"
+	"lsmengine/internal/lsm/wal"
 	"lsmengine/pkg/lsm/bus"
-	"lsmengine/pkg/lsm/dispatch"
-	"lsmengine/pkg/lsm/logging"
-	"lsmengine/pkg/lsm/manifest"
-	"lsmengine/pkg/lsm/memtable"
-	"lsmengine/pkg/lsm/sstable"
-	"lsmengine/pkg/lsm/wal"
 )
 
 func New(opts Options) (*LSM, error) {

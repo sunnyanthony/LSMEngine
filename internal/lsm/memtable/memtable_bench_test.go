@@ -91,7 +91,8 @@ func benchmarkApply(b *testing.B, valueSize int) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				binary.LittleEndian.PutUint64(keyBuf[:8], uint64(i))
-				table.Apply(types.Entry{Key: keyBuf[:], Value: val, Seq: uint64(i + 1)})
+				entry := table.CopyEntry(types.Entry{Key: keyBuf[:], Value: val, Seq: uint64(i + 1)})
+				table.ApplyOwned(entry)
 			}
 		})
 	}
@@ -110,7 +111,8 @@ func benchmarkApplyParallel(b *testing.B, valueSize int) {
 				for pb.Next() {
 					idx := atomic.AddUint64(&seq, 1)
 					binary.LittleEndian.PutUint64(keyBuf[:8], idx)
-					table.Apply(types.Entry{Key: keyBuf[:], Value: val, Seq: idx})
+					entry := table.CopyEntry(types.Entry{Key: keyBuf[:], Value: val, Seq: idx})
+					table.ApplyOwned(entry)
 				}
 			})
 		})
@@ -121,10 +123,6 @@ func benchmarkApplyOwned(b *testing.B, valueSize int) {
 	for _, tc := range benchTables {
 		b.Run(tc.name, func(b *testing.B) {
 			table := tc.new()
-			applier, ok := table.(interface{ ApplyOwned(types.Entry) })
-			if !ok {
-				b.Skip("apply owned not supported")
-			}
 			val := make([]byte, valueSize)
 			entries := make([]types.Entry, b.N)
 			for i := 0; i < b.N; i++ {
@@ -135,7 +133,7 @@ func benchmarkApplyOwned(b *testing.B, valueSize int) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				applier.ApplyOwned(entries[i])
+				table.ApplyOwned(entries[i])
 			}
 		})
 	}

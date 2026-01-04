@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"lsmengine/internal/lsm/wal/codec"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
-	"lsmengine/pkg/lsm/wal/codec"
 )
 
 // Benchmark-style smoke to exercise append+replay for many small records.
@@ -28,9 +28,7 @@ func TestWALLoadManySmallRecords(t *testing.T) {
 			Value: []byte{byte(i % 251)},
 			Seq:   uint64(i + 1),
 		}
-		if err := w.Append(e); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, e)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -62,9 +60,7 @@ func TestWALLoadLargeValues(t *testing.T) {
 		large[i] = byte(i % 253)
 	}
 	for i := 0; i < 8; i++ {
-		if err := w.Append(types.Entry{Key: []byte("big"), Value: large, Seq: uint64(i + 1)}); err != nil {
-			t.Fatalf("append large %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("big"), Value: large, Seq: uint64(i + 1)})
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -91,9 +87,7 @@ func TestWALRotationReplay(t *testing.T) {
 		t.Fatalf("new wal: %v", err)
 	}
 	for i := 0; i < 100; i++ {
-		if err := w.Append(types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)})
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -126,9 +120,7 @@ func TestWALReplayStopsOnCorruptTail(t *testing.T) {
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
 	}
 	for _, e := range entries {
-		if err := w.Append(e); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		appendOwnedLoad(t, w, e)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close wal: %v", err)
@@ -171,9 +163,7 @@ func TestWALReplayChecksumMismatch(t *testing.T) {
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
 	}
 	for _, e := range entries {
-		if err := w.Append(e); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		appendOwnedLoad(t, w, e)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close wal: %v", err)
@@ -231,9 +221,7 @@ func TestWALLoadManySmallWithTombstones(t *testing.T) {
 		} else {
 			entry.Value = []byte{byte(i % 251)}
 		}
-		if err := w.Append(entry); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, entry)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -267,9 +255,7 @@ func TestWALLoadHandlerErrorMidReplay(t *testing.T) {
 	}
 	const total = 50
 	for i := 0; i < total; i++ {
-		if err := w.Append(types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)})
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -302,9 +288,7 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 	}
 	const total = 60
 	for i := 0; i < total; i++ {
-		if err := w.Append(types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)})
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -333,4 +317,18 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 	if count == 0 || count >= total {
 		t.Fatalf("expected partial replay with missing segment, got %d entries", count)
 	}
+}
+
+func appendOwnedLoad(t *testing.T, w *WAL, entry types.Entry) {
+	t.Helper()
+	entry = copyEntryLoad(entry)
+	if err := w.AppendOwned(entry); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+}
+
+func copyEntryLoad(entry types.Entry) types.Entry {
+	entry.Key = append([]byte(nil), entry.Key...)
+	entry.Value = append([]byte(nil), entry.Value...)
+	return entry
 }
