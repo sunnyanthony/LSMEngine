@@ -22,6 +22,7 @@ type Options struct {
 	MemtableKind            string
 	MemtableFactory         memtable.Factory
 	MemtableArenaBlockSize  int
+	SSTable                 *SSTableOptions
 	WALSync                 bool
 	WALMaxRecord            uint64
 	WALBlockSize            uint32
@@ -36,6 +37,22 @@ type Options struct {
 	LogDir                  string
 	Logger                  logging.Logger
 }
+
+type SSTableOptions struct {
+	BlockTargetBytes *int
+	BlockMaxBytes    *int
+	Compression      *string
+	BloomBitsPerKey  *int
+	BlockCacheBytes  *int64
+	PrefetchBlocks   *int
+	Checksum         *string
+}
+
+const (
+	SSTableCompressionNone   = "none"
+	SSTableCompressionSnappy = "snappy"
+	SSTableChecksumCRC32C    = "crc32c"
+)
 
 type MissingSegmentPolicy int
 
@@ -60,6 +77,7 @@ type LSM struct {
 	logger               logging.Logger
 	logCloser            io.Closer
 	tables               []sstable.SSTable
+	sstableOpts          sstable.Options
 	mtLimit              int
 	autoRepair           bool
 	ctx                  context.Context

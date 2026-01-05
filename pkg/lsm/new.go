@@ -101,7 +101,31 @@ func New(opts Options) (*LSM, error) {
 		return nil, err
 	}
 	sstableDir := filepath.Join(opts.DataDir, "sstables")
-	flusher, err := sstable.NewSSTableWriter(sstableDir)
+	sstOpts := sstable.DefaultOptions(sstableDir)
+	if opts.SSTable != nil {
+		if opts.SSTable.BlockTargetBytes != nil {
+			sstOpts.BlockTargetBytes = *opts.SSTable.BlockTargetBytes
+		}
+		if opts.SSTable.BlockMaxBytes != nil {
+			sstOpts.BlockMaxBytes = *opts.SSTable.BlockMaxBytes
+		}
+		if opts.SSTable.Compression != nil {
+			sstOpts.Compression = sstable.Compression(*opts.SSTable.Compression)
+		}
+		if opts.SSTable.BloomBitsPerKey != nil {
+			sstOpts.BloomBitsPerKey = *opts.SSTable.BloomBitsPerKey
+		}
+		if opts.SSTable.BlockCacheBytes != nil {
+			sstOpts.BlockCacheBytes = *opts.SSTable.BlockCacheBytes
+		}
+		if opts.SSTable.PrefetchBlocks != nil {
+			sstOpts.PrefetchBlocks = *opts.SSTable.PrefetchBlocks
+		}
+		if opts.SSTable.Checksum != nil {
+			sstOpts.Checksum = sstable.Checksum(*opts.SSTable.Checksum)
+		}
+	}
+	flusher, err := sstable.NewSSTableWriter(sstOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +147,7 @@ func New(opts Options) (*LSM, error) {
 		bus:                  eventBus,
 		logger:               logger,
 		logCloser:            logCloser,
+		sstableOpts:          sstOpts,
 		mtLimit:              opts.MemtableLimit,
 		autoRepair:           autoRepair,
 		missingSegmentPolicy: missingPolicy,
@@ -159,7 +184,7 @@ func (l *LSM) loadManifest() (manifest.Manifest, error) {
 	}
 	tables := make([]sstable.SSTable, 0, len(m.Tables))
 	for _, t := range m.Tables {
-		table, err := sstable.LoadSSTable(t.Path)
+		table, err := sstable.LoadSSTable(t.Path, l.sstableOpts)
 		if err != nil {
 			return manifest.Manifest{}, err
 		}

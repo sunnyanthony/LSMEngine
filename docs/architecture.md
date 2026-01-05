@@ -11,7 +11,8 @@ Goals:
 - **Snapshot**: point-in-time view that freezes the active memtable for range scans.
 - **WAL**: append-only, fsync-configurable; replay on startup. See `docs/wal.md`.
 - **Flush/compaction**: background flush worker turns drained memtables into SSTables; compaction is planned.
-- **SSTable**: immutable runs with index + data blocks; future: Bloom filters, compression, block cache.
+- **Compaction engine**: strict levelled policy by default, pluggable for future variants. See `docs/compaction.md`.
+- **SSTable**: immutable runs with block index + meta; compression, bloom filter, cache/prefetch are configurable.
 - **Manifest**: durable metadata describing current table set and WAL checkpoints.
 - **Transport (replication)**: planned publish/subscribe interface fed by WAL tail; current event bus offers local hooks.
 - **Observability**: event bus hooks; metrics for size/latency/backlog are planned.
@@ -89,9 +90,9 @@ Snapshot range scan:
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.
 - WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
+- SSTable: `SSTable` options (block sizing, compression, bloom bits per key, block cache bytes, prefetch blocks, checksum).
 
 ## Next steps (implementation order)
-1) Replace placeholder SSTable writer with indexed block format.
-2) Snapshot range iterator over SSTables (merge + tombstone filtering).
-3) Transport interface + loopback implementation to validate replication plumbing.
-4) Metrics/health endpoints and basic benchmarks.
+1) Snapshot range iterator over SSTables (merge + tombstone filtering).
+2) Transport interface + loopback implementation to validate replication plumbing.
+3) Metrics/health endpoints and basic benchmarks.

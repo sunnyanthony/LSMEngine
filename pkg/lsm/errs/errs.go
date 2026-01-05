@@ -19,4 +19,16 @@ var (
 	ErrWALRecordTooLarge = errors.New("wal append: record too large")
 	// ErrRangeUnsupported indicates range scans cannot include SSTables yet.
 	ErrRangeUnsupported = errors.New("range scan: sstable iterator unavailable")
+	// ErrSSTableBadMagic indicates a mismatched SSTable footer magic.
+	ErrSSTableBadMagic = errors.New("sstable: bad footer magic")
+	// ErrSSTableBadFooter indicates a footer checksum mismatch.
+	ErrSSTableBadFooter = errors.New("sstable: footer checksum mismatch")
+	// ErrSSTableBadBlock indicates a data block checksum mismatch.
+	ErrSSTableBadBlock = errors.New("sstable: block checksum mismatch")
+	// ErrSSTableBadMeta indicates a meta block checksum mismatch.
+	ErrSSTableBadMeta = errors.New("sstable: meta checksum mismatch")
+	// ErrSSTableBadIndex indicates an index block checksum mismatch.
+	ErrSSTableBadIndex = errors.New("sstable: index checksum mismatch")
+	// ErrSSTableUnknownCompression indicates an unknown compression ID.
+	ErrSSTableUnknownCompression = errors.New("sstable: unknown compression id")
 )

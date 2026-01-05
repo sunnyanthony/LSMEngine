@@ -5,7 +5,9 @@ Start here for the overall architecture and component relationships:
 
 Focused specs:
 - `docs/memtable.md`
+- `docs/sstable.md`
 - `docs/wal.md`
+- `docs/compaction.md`
 
 ## Backlog (non-blocking)
 
