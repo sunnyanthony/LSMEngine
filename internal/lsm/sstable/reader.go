@@ -268,6 +268,7 @@ type RangeIterator struct {
 	hasPending   bool
 	startApplied bool
 	curr         types.Entry
+	err          error
 }
 
 func newRangeIterator(r *Reader, start, end []byte) *RangeIterator {
@@ -297,6 +298,7 @@ func (it *RangeIterator) Next() bool {
 			}
 			blk, err := it.reader.readBlock(it.blockI)
 			if err != nil {
+				it.err = err
 				return false
 			}
 			it.reader.prefetch(it.blockI)
@@ -309,6 +311,7 @@ func (it *RangeIterator) Next() bool {
 				cursor, entry, ok, err := it.block.seek(it.start)
 				it.startApplied = true
 				if err != nil {
+					it.err = err
 					return false
 				}
 				if !ok {
@@ -334,6 +337,7 @@ func (it *RangeIterator) Next() bool {
 		}
 		entry, ok, err := it.cursor.next()
 		if err != nil {
+			it.err = err
 			return false
 		}
 		if !ok {
@@ -352,4 +356,8 @@ func (it *RangeIterator) Next() bool {
 
 func (it *RangeIterator) Entry() types.Entry {
 	return it.curr
+}
+
+func (it *RangeIterator) Err() error {
+	return it.err
 }

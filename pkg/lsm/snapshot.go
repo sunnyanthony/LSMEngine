@@ -5,7 +5,6 @@ import (
 
 	"lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
-	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -69,17 +68,39 @@ func (s *Snapshot) Get(key []byte) (types.Entry, bool) {
 	return types.Entry{}, false
 }
 
-// Range scans keys in [start, end) order. SSTables are not yet supported.
+// Range scans keys in [start, end) order across memtables and SSTables.
 func (s *Snapshot) Range(start, end []byte) Iterator {
-	if len(s.tables) > 0 {
-		return newErrorIterator(errs.ErrRangeUnsupported)
-	}
-	if len(s.mems) == 0 {
+	if len(s.mems) == 0 && len(s.tables) == 0 {
 		return newEmptyIterator()
 	}
-	iters := make([]memtable.Iterator, 0, len(s.mems))
+	iters := make([]Iterator, 0, len(s.mems)+len(s.tables))
 	for _, table := range s.mems {
+		iters = append(iters, memtableIterAdapter{iter: table.Range(start, end)})
+	}
+	for _, table := range s.tables {
 		iters = append(iters, table.Range(start, end))
 	}
 	return newMergeIterator(iters)
+}
+
+type memtableIterAdapter struct {
+	iter memtable.Iterator
+}
+
+func (it memtableIterAdapter) Next() bool {
+	if it.iter == nil {
+		return false
+	}
+	return it.iter.Next()
+}
+
+func (it memtableIterAdapter) Entry() types.Entry {
+	if it.iter == nil {
+		return types.Entry{}
+	}
+	return it.iter.Entry()
+}
+
+func (it memtableIterAdapter) Err() error {
+	return nil
 }

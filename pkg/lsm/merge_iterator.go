@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"container/heap"
 
-	"lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/types"
 )
 
 type mergeIterator struct {
 	h   mergeHeap
 	cur types.Entry
+	err error
 }
 
-func newMergeIterator(iters []memtable.Iterator) Iterator {
+func newMergeIterator(iters []Iterator) Iterator {
 	if len(iters) == 0 {
 		return newEmptyIterator()
 	}
@@ -25,6 +25,8 @@ func newMergeIterator(iters []memtable.Iterator) Iterator {
 				iter:  it,
 				entry: it.Entry(),
 			})
+		} else if err := it.Err(); err != nil {
+			return newErrorIterator(err)
 		}
 	}
 	if len(h) == 0 {
@@ -35,6 +37,9 @@ func newMergeIterator(iters []memtable.Iterator) Iterator {
 }
 
 func (it *mergeIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
 	for it.h.Len() > 0 {
 		item := heap.Pop(&it.h).(mergeItem)
 		key := item.entry.Key
@@ -53,6 +58,9 @@ func (it *mergeIterator) Next() bool {
 			if cur.iter.Next() {
 				cur.entry = cur.iter.Entry()
 				heap.Push(&it.h, cur)
+			} else if err := cur.iter.Err(); err != nil {
+				it.err = err
+				return false
 			}
 		}
 
@@ -70,12 +78,13 @@ func (it *mergeIterator) Entry() types.Entry {
 }
 
 func (it *mergeIterator) Err() error {
-	return nil
+	return it.err
 }
 
+// Simple heap sort to help the merge sort
 type mergeItem struct {
 	idx   int
-	iter  memtable.Iterator
+	iter  Iterator
 	entry types.Entry
 }
 

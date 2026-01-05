@@ -73,7 +73,7 @@ Snapshot range scan:
   Freeze active memtable
     -> Immutable memtables (newest -> oldest)
       -> Merge iterator (dedupe + tombstone filtering)
-      -> SSTable range (planned)
+      -> SSTable range (newest -> oldest)
 ```
 
 ## Planned replication

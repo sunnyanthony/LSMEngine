@@ -30,11 +30,9 @@ Skiplist:
 - Level distribution/iterator performance benchmarks.
 
 Read path:
-- SSTable range scans for snapshots (iterator + merge, tombstone filtering).
 - Snapshot observability (replay counts, pinned memtable metrics).
 
 SSTable:
-- Snapshot range scan integration (merge iterator across memtable + SSTable).
 - Crash-safety: fsync parent directory after rename.
 - Corruption coverage: CRC/compression/bloom error handling tests.
 - Block trailer checksum for data/index/meta (uniform block type + CRC).
@@ -46,4 +44,5 @@ SSTable:
 
 Compaction:
 - Compaction runner (k-way merge + manifest apply + obsolete cleanup).
+- Optional flush coalescing (merge multiple immutables into a single L0 SSTable to reduce file count).
 - Pluggable storage interface (local FS vs object store for SSTables).
