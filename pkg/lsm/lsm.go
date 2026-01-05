@@ -41,6 +41,7 @@ type Options struct {
 type SSTableOptions struct {
 	BlockTargetBytes *int
 	BlockMaxBytes    *int
+	RestartInterval  *int
 	Compression      *string
 	BloomBitsPerKey  *int
 	BlockCacheBytes  *int64

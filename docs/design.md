@@ -37,7 +37,6 @@ SSTable:
 - Snapshot range scan integration (merge iterator across memtable + SSTable).
 - Crash-safety: fsync parent directory after rename.
 - Corruption coverage: CRC/compression/bloom error handling tests.
-- Data block prefix compression + restart array.
 - Block trailer checksum for data/index/meta (uniform block type + CRC).
 - Partitioned index + tiny top index (two-level index).
 - Partitioned filter (Bloom now, optional Ribbon later).

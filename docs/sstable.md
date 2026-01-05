@@ -18,12 +18,19 @@ checksummed for fault tolerance. Block sizing is dynamic:
 - `BlockTargetBytes` guides when to seal a block.
 - `BlockMaxBytes` is a hard cap; a single large entry may form its own block.
 
-Entry encoding (v1):
+Entry encoding (v1, prefix-compressed):
 ```
-| keyLen u32 | valLen u32 | seq u64 | flags u8 | key | value |
+| shared u32 | unshared u32 | valLen u32 | seq u64 | flags u8 | unsharedKey | value |
 ```
 - flags: bit0 tombstone
-- data blocks can be compressed (default: snappy)
+- keys are prefix-compressed against the previous key in the block
+- restart points store `shared=0` (full key)
+
+Restart array (block tail):
+```
+| restartOffset u32 ... | restartCount u32 |
+```
+- restart interval is configurable (default: 16)
 
 ## Index block
 Index block maps `minKey` of each data block to its file offset + length.
@@ -59,9 +66,9 @@ Crash safety: incomplete temp files can be deleted on startup.
 ## Reader flow
 1) Read footer, validate checksum.
 2) Load index block (and meta).
-3) For Get(key): binary-search index -> read block -> binary-search inside block.
+3) For Get(key): binary-search index -> read block -> binary-search via restart points.
 4) For Range: iterate index blocks in order and scan data blocks.
-5) Internal scans use zero-copy entry views; external APIs return safe copies.
+5) Internal scans use entry views with scratch key materialization; external APIs return safe copies.
 
 ## Fault tolerance
 - CRC on data blocks and footer (CRC32C by default; uses hardware acceleration when available).
@@ -89,6 +96,7 @@ Combine WAL-style safety with SSTable performance so both layers share benefits:
 Recommended defaults:
 - `BlockTargetBytes`: 64KB
 - `BlockMaxBytes`: 256KB
+- `RestartInterval`: 16
 - `Compression`: snappy
 - `BloomBitsPerKey`: 10 (enabled)
 - `BlockCacheBytes`: 64MB
@@ -96,7 +104,6 @@ Recommended defaults:
 - `Checksum`: CRC32C
 
 ## TODO (production hardening)
-- Data block prefix compression + restart array (LevelDB-style).
 - Block trailer checksum for data/index/meta (uniform block type + CRC).
 - Partitioned index + tiny top index (two-level index).
 - Partitioned filter (Bloom now, optional Ribbon later).

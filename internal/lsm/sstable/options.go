@@ -19,6 +19,7 @@ type Options struct {
 	Dir              string
 	BlockTargetBytes int
 	BlockMaxBytes    int
+	RestartInterval  int
 	Compression      Compression
 	BloomBitsPerKey  int
 	BlockCacheBytes  int64
@@ -31,6 +32,7 @@ func DefaultOptions(dir string) Options {
 		Dir:              dir,
 		BlockTargetBytes: 64 * 1024,
 		BlockMaxBytes:    256 * 1024,
+		RestartInterval:  16,
 		Compression:      CompressionSnappy,
 		BloomBitsPerKey:  10,
 		BlockCacheBytes:  64 * 1024 * 1024,
@@ -48,6 +50,9 @@ func (o *Options) normalize() {
 	}
 	if o.BlockMaxBytes < o.BlockTargetBytes {
 		o.BlockMaxBytes = o.BlockTargetBytes
+	}
+	if o.RestartInterval <= 0 {
+		o.RestartInterval = 16
 	}
 	if o.Compression == "" {
 		o.Compression = CompressionSnappy

@@ -258,13 +258,16 @@ func (r *Reader) prefetch(start int) {
 }
 
 type RangeIterator struct {
-	reader *Reader
-	start  []byte
-	end    []byte
-	block  *block
-	blockI int
-	entryI int
-	curr   types.Entry
+	reader       *Reader
+	start        []byte
+	end          []byte
+	block        *block
+	blockI       int
+	cursor       *blockCursor
+	pending      entryView
+	hasPending   bool
+	startApplied bool
+	curr         types.Entry
 }
 
 func newRangeIterator(r *Reader, start, end []byte) *RangeIterator {
@@ -298,19 +301,45 @@ func (it *RangeIterator) Next() bool {
 			}
 			it.reader.prefetch(it.blockI)
 			it.block = blk
-			it.entryI = 0
+			it.cursor = nil
+			it.hasPending = false
 		}
-		if it.entryI >= len(it.block.offsets) {
-			it.block = nil
-			it.blockI++
-			continue
+		if it.cursor == nil {
+			if !it.startApplied && len(it.start) > 0 {
+				cursor, entry, ok, err := it.block.seek(it.start)
+				it.startApplied = true
+				if err != nil {
+					return false
+				}
+				if !ok {
+					it.block = nil
+					it.blockI++
+					continue
+				}
+				if len(it.end) > 0 && bytes.Compare(entry.Key, it.end) >= 0 {
+					return false
+				}
+				it.cursor = cursor
+				it.pending = entry
+				it.hasPending = true
+			} else {
+				it.startApplied = true
+				it.cursor = newBlockCursor(it.block, 0, len(it.block.data))
+			}
 		}
-		entry, err := it.block.entryAtView(it.entryI)
-		it.entryI++
+		if it.hasPending {
+			it.hasPending = false
+			it.curr = it.pending.toEntry()
+			return true
+		}
+		entry, ok, err := it.cursor.next()
 		if err != nil {
 			return false
 		}
-		if len(it.start) > 0 && bytes.Compare(entry.Key, it.start) < 0 {
+		if !ok {
+			it.block = nil
+			it.blockI++
+			it.cursor = nil
 			continue
 		}
 		if len(it.end) > 0 && bytes.Compare(entry.Key, it.end) >= 0 {

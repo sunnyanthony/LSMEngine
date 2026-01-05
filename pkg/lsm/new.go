@@ -109,6 +109,9 @@ func New(opts Options) (*LSM, error) {
 		if opts.SSTable.BlockMaxBytes != nil {
 			sstOpts.BlockMaxBytes = *opts.SSTable.BlockMaxBytes
 		}
+		if opts.SSTable.RestartInterval != nil {
+			sstOpts.RestartInterval = *opts.SSTable.RestartInterval
+		}
 		if opts.SSTable.Compression != nil {
 			sstOpts.Compression = sstable.Compression(*opts.SSTable.Compression)
 		}

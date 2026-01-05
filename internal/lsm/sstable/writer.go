@@ -69,7 +69,7 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	defer f.Close()
 
 	var offset uint64
-	builder := &blockBuilder{}
+	builder := newBlockBuilder(w.opts.RestartInterval)
 	var index []indexEntry
 
 	filter := newBloomFilter(len(entries), w.opts.BloomBitsPerKey)
