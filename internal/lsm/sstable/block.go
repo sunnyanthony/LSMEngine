@@ -70,6 +70,13 @@ type block struct {
 	offsets []uint32
 }
 
+type entryView struct {
+	Key       []byte
+	Value     []byte
+	Tombstone bool
+	Seq       uint64
+}
+
 func decodeBlock(payload []byte) (*block, error) {
 	if len(payload) < blockCountSize {
 		return nil, errors.New("sstable: block too small")
@@ -93,27 +100,35 @@ func decodeBlock(payload []byte) (*block, error) {
 }
 
 func (b *block) entryAt(idx int) (types.Entry, error) {
+	view, err := b.entryAtView(idx)
+	if err != nil {
+		return types.Entry{}, err
+	}
+	return view.toEntry(), nil
+}
+
+func (b *block) entryAtView(idx int) (entryView, error) {
 	if idx < 0 || idx >= len(b.offsets) {
-		return types.Entry{}, errors.New("sstable: entry index out of range")
+		return entryView{}, errors.New("sstable: entry index out of range")
 	}
 	off := int(b.offsets[idx])
 	if off >= len(b.data) {
-		return types.Entry{}, errors.New("sstable: entry offset out of range")
+		return entryView{}, errors.New("sstable: entry offset out of range")
 	}
-	return decodeEntry(b.data[off:])
+	return decodeEntryView(b.data[off:])
 }
 
 func (b *block) find(key []byte) (types.Entry, bool, error) {
 	lo, hi := 0, len(b.offsets)-1
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		entry, err := b.entryAt(mid)
+		entry, err := b.entryAtView(mid)
 		if err != nil {
 			return types.Entry{}, false, err
 		}
 		cmp := bytes.Compare(entry.Key, key)
 		if cmp == 0 {
-			return entry, true, nil
+			return entry.toEntry(), true, nil
 		}
 		if cmp < 0 {
 			lo = mid + 1
@@ -141,8 +156,16 @@ func appendEntry(dst []byte, entry types.Entry) []byte {
 }
 
 func decodeEntry(data []byte) (types.Entry, error) {
+	view, err := decodeEntryView(data)
+	if err != nil {
+		return types.Entry{}, err
+	}
+	return view.toEntry(), nil
+}
+
+func decodeEntryView(data []byte) (entryView, error) {
 	if len(data) < entryHeaderSize {
-		return types.Entry{}, errors.New("sstable: entry truncated")
+		return entryView{}, errors.New("sstable: entry truncated")
 	}
 	keyLen := binary.LittleEndian.Uint32(data[:4])
 	valLen := binary.LittleEndian.Uint32(data[4:8])
@@ -150,16 +173,26 @@ func decodeEntry(data []byte) (types.Entry, error) {
 	flags := data[16]
 	need := int(entryHeaderSize + keyLen + valLen)
 	if len(data) < need {
-		return types.Entry{}, errors.New("sstable: entry truncated")
+		return entryView{}, errors.New("sstable: entry truncated")
 	}
-	key := append([]byte(nil), data[entryHeaderSize:entryHeaderSize+int(keyLen)]...)
-	val := append([]byte(nil), data[entryHeaderSize+int(keyLen):need]...)
-	return types.Entry{
-		Key:       key,
-		Value:     val,
+	keyStart := entryHeaderSize
+	keyEnd := entryHeaderSize + int(keyLen)
+	valEnd := keyEnd + int(valLen)
+	return entryView{
+		Key:       data[keyStart:keyEnd],
+		Value:     data[keyEnd:valEnd],
 		Tombstone: flags&0x1 == 0x1,
 		Seq:       seq,
 	}, nil
+}
+
+func (e entryView) toEntry() types.Entry {
+	return types.Entry{
+		Key:       append([]byte(nil), e.Key...),
+		Value:     append([]byte(nil), e.Value...),
+		Tombstone: e.Tombstone,
+		Seq:       e.Seq,
+	}
 }
 
 func entryEncodedSize(entry types.Entry) int {

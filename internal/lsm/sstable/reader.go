@@ -305,7 +305,7 @@ func (it *RangeIterator) Next() bool {
 			it.blockI++
 			continue
 		}
-		entry, err := it.block.entryAt(it.entryI)
+		entry, err := it.block.entryAtView(it.entryI)
 		it.entryI++
 		if err != nil {
 			return false
@@ -316,7 +316,7 @@ func (it *RangeIterator) Next() bool {
 		if len(it.end) > 0 && bytes.Compare(entry.Key, it.end) >= 0 {
 			return false
 		}
-		it.curr = entry
+		it.curr = entry.toEntry()
 		return true
 	}
 }

@@ -61,11 +61,20 @@ Crash safety: incomplete temp files can be deleted on startup.
 2) Load index block (and meta).
 3) For Get(key): binary-search index -> read block -> binary-search inside block.
 4) For Range: iterate index blocks in order and scan data blocks.
+5) Internal scans use zero-copy entry views; external APIs return safe copies.
 
 ## Fault tolerance
 - CRC on data blocks and footer (CRC32C by default; uses hardware acceleration when available).
 - Footer allows detection of truncation and corrupted tail writes.
 - Index and meta parsing must fail fast on malformed lengths.
+
+## WAL/SSTable convergence (design notes)
+Combine WAL-style safety with SSTable performance so both layers share benefits:
+- **Block magic + resync**: add a small block magic or block-type trailer so readers can resync after corruption instead of hard-failing the entire table.
+- **Payload caps**: enforce max block size during read to avoid OOM or poisoned index offsets.
+- **Unified block trailer**: use `payload | blockType | crc32c(payload+blockType)` for data/index/meta to standardize validation and simplify future codecs.
+- **Explicit versioning**: include block/entry version so format evolution (prefix/restart, varint) is backward-compatible.
+- **Corruption policy**: expose `OnCorruption` strategy (fail-fast / skip-block / drop-table) similar to WAL auto-repair choices.
 
 ## Cloud-native / distributed considerations
 - SSTable is immutable and portable; safe to copy between nodes.
@@ -85,6 +94,16 @@ Recommended defaults:
 - `BlockCacheBytes`: 64MB
 - `PrefetchBlocks`: 2
 - `Checksum`: CRC32C
+
+## TODO (production hardening)
+- Data block prefix compression + restart array (LevelDB-style).
+- Block trailer checksum for data/index/meta (uniform block type + CRC).
+- Partitioned index + tiny top index (two-level index).
+- Partitioned filter (Bloom now, optional Ribbon later).
+- InternalKey ordering spec (userKey asc, seq desc, type) and early-stop rules.
+- Object store read amplification controls (footer/meta/top index co-located, fewer larger index partitions, byte-based prefetch).
+- Format evolution plan (varint lengths, explicit endianness, TLV meta).
+- Zero-copy entry views for compaction/merge iterators.
 
 ## Future extensions (non-blocking)
 - Prefix-compressed keys within blocks.
