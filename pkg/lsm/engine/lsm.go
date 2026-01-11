@@ -36,6 +36,7 @@ type Options struct {
 	ReplicationQueueDepth    int
 	ReplicationBatchMax      int
 	ReplicationFlushInterval time.Duration
+	ManifestCheckpointEvery  int
 	WALSync                  bool
 	WALMaxRecord             uint64
 	WALBlockSize             uint32
@@ -130,10 +131,7 @@ type LSM struct {
 	seq                  uint64
 	missingSegmentPolicy MissingSegmentPolicy
 	replayBatchSize      int
-	compactionPlanner    compaction.Planner
-	compactionRunner     compaction.Runner
-	compactionApplier    compaction.Applier
-	compactionCh         chan struct{}
+	compactionService    *compaction.Service
 	flushBlocked         atomic.Bool
 	transport            transport.Transport
 	nodeID               string

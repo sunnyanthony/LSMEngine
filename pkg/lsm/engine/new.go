@@ -74,6 +74,9 @@ func New(opts Options) (*LSM, error) {
 	if opts.BusBuffer == 0 {
 		opts.BusBuffer = 16
 	}
+	if opts.ManifestCheckpointEvery == 0 {
+		opts.ManifestCheckpointEvery = 128
+	}
 	if opts.ReplayBatchSize == 0 {
 		opts.ReplayBatchSize = 256
 	}
@@ -201,8 +204,13 @@ func New(opts Options) (*LSM, error) {
 	if err != nil {
 		return nil, err
 	}
+	manifestLogPath := filepath.Join(opts.DataDir, "manifest.log")
 	manifestPath := filepath.Join(opts.DataDir, "manifest.json")
-	rawManifest, err := manifest.NewFileStore(manifestPath)
+	rawManifest, err := manifest.NewLogStore(manifest.LogOptions{
+		LogPath:          manifestLogPath,
+		CheckpointPath:   manifestPath,
+		CheckpointEveryN: opts.ManifestCheckpointEvery,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +317,9 @@ func (l *LSM) onFlush(t sstable.SSTable) {
 	if err := l.applyTableEdit([]tableset.Table{{Meta: meta, Handle: t}}, nil, t.Seq); err != nil && l.logger != nil {
 		l.logger.Printf("flush apply: %v", err)
 	}
-	l.triggerCompaction()
+	if l.compactionService != nil {
+		l.compactionService.Trigger()
+	}
 	flushed := l.popFlushedTable()
 	l.recycleMemtable(flushed)
 }
