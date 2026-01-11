@@ -124,8 +124,8 @@ and focuses on design decisions, tradeoffs, and a phased plan.
 - [x] Add periodic checkpoints and bounded replay time.
 
 ### Phase 3: Multi-Level Compaction
-- [ ] Expand metadata to include level and key ranges.
-- [ ] Add strict levelled compaction policy and validation.
+- [x] Expand metadata to include level and key ranges.
+- [x] Add strict levelled compaction policy and validation.
 
 ### Phase 4: IO Abstraction
 - [ ] Extract shared IO layer for WAL and SSTable.

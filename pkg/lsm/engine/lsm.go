@@ -47,8 +47,10 @@ type Options struct {
 	WALMissingSegmentPolicy  *MissingSegmentPolicy
 	ReplayBatchSize          int
 	FlushQueueSize           int
-	CompactionL0Threshold    int
-	CompactionDropTombstones bool
+	CompactionL0Threshold      int
+	CompactionDropTombstones   bool
+	CompactionLevelBaseBytes   uint64
+	CompactionLevelMultiplier  int
 	BusBuffer                int
 	LogDir                   string
 	Logger                   logging.Logger

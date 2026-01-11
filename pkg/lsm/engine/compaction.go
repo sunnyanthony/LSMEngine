@@ -18,6 +18,8 @@ func (l *LSM) startCompaction(ctx context.Context, opts Options) {
 	}
 	planner := &compaction.StrictLevelledPlanner{
 		L0FileThreshold: opts.CompactionL0Threshold,
+		LevelBaseBytes:  opts.CompactionLevelBaseBytes,
+		LevelMultiplier: opts.CompactionLevelMultiplier,
 	}
 	runner := &compaction.SimpleRunner{
 		Flusher:        l.flusher,
