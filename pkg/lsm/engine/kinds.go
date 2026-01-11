@@ -1,4 +1,4 @@
-package lsm
+package engine
 
 const (
 	MemtableKindMap             = "map"

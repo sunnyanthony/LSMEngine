@@ -1,4 +1,4 @@
-package lsm
+package engine
 
 import (
 	"bytes"
@@ -8,9 +8,10 @@ import (
 )
 
 type mergeIterator struct {
-	h   mergeHeap
-	cur types.Entry
-	err error
+	h       mergeHeap
+	cur     types.Entry
+	err     error
+	lastKey []byte
 }
 
 func newMergeIterator(iters []Iterator) Iterator {
@@ -64,9 +65,15 @@ func (it *mergeIterator) Next() bool {
 			}
 		}
 
-		if best.entry.Tombstone {
+		if it.isDuplicate(key) {
 			continue
 		}
+
+		if best.entry.Tombstone {
+			it.setLastKey(key)
+			continue
+		}
+		it.setLastKey(key)
 		it.cur = best.entry
 		return true
 	}
@@ -79,6 +86,14 @@ func (it *mergeIterator) Entry() types.Entry {
 
 func (it *mergeIterator) Err() error {
 	return it.err
+}
+
+func (it *mergeIterator) isDuplicate(key []byte) bool {
+	return len(it.lastKey) > 0 && bytes.Equal(it.lastKey, key)
+}
+
+func (it *mergeIterator) setLastKey(key []byte) {
+	it.lastKey = append(it.lastKey[:0], key...)
 }
 
 // Simple heap sort to help the merge sort

@@ -2,7 +2,10 @@ package lsm_test
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 )
@@ -169,4 +172,115 @@ func TestSnapshotRangeSkipsTombstone(t *testing.T) {
 	}
 	_ = snap2.Close()
 	_ = snap1.Close()
+}
+
+func TestSnapshotRangeIncludesSSTable(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	opts := lsm.Options{
+		DataDir:       dir,
+		MemtableLimit: 4,
+		WALSync:       false,
+	}
+	store, err := lsm.New(opts)
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Put([]byte("b"), []byte("22")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	waitForSSTables(t, dir, 1)
+
+	if err := store.Put([]byte("c"), []byte("3")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	snap := store.Snapshot()
+	defer snap.Close()
+
+	it := snap.Range(nil, nil)
+	var keys [][]byte
+	for it.Next() {
+		keys = append(keys, it.Entry().Key)
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("range err: %v", err)
+	}
+	if len(keys) != 3 {
+		t.Fatalf("expected 3 keys, got %d", len(keys))
+	}
+	if !bytes.Equal(keys[0], []byte("a")) || !bytes.Equal(keys[1], []byte("b")) || !bytes.Equal(keys[2], []byte("c")) {
+		t.Fatalf("unexpected order: %q %q %q", keys[0], keys[1], keys[2])
+	}
+}
+
+func TestSnapshotRangeMemtableOverridesSSTable(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	opts := lsm.Options{
+		DataDir:       dir,
+		MemtableLimit: 4,
+		WALSync:       false,
+	}
+	store, err := lsm.New(opts)
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Put([]byte("b"), []byte("22")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	waitForSSTables(t, dir, 1)
+
+	if err := store.Put([]byte("a"), []byte("9")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Delete([]byte("b")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	snap := store.Snapshot()
+	defer snap.Close()
+
+	it := snap.Range(nil, nil)
+	var keys [][]byte
+	var vals [][]byte
+	for it.Next() {
+		entry := it.Entry()
+		keys = append(keys, entry.Key)
+		vals = append(vals, entry.Value)
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("range err: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if !bytes.Equal(keys[0], []byte("a")) || !bytes.Equal(vals[0], []byte("9")) {
+		t.Fatalf("expected updated value, got %q=%q", keys[0], vals[0])
+	}
+}
+
+func waitForSSTables(t *testing.T, dir string, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		matches, err := filepath.Glob(filepath.Join(dir, "sstables", "sstable-*.sst"))
+		if err != nil {
+			t.Fatalf("glob sstables: %v", err)
+		}
+		if len(matches) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected %d sstable files within timeout", want)
 }

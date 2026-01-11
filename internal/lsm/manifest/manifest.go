@@ -8,13 +8,52 @@ import (
 )
 
 type Entry struct {
-	Path string `json:"path"`
+	Path      string `json:"path"`
+	Level     int    `json:"level"`
+	MinKey    []byte `json:"min_key,omitempty"`
+	MaxKey    []byte `json:"max_key,omitempty"`
+	SeqMin    uint64 `json:"seq_min"`
+	SeqMax    uint64 `json:"seq_max"`
+	SizeBytes uint64 `json:"size_bytes"`
+}
+
+type ReplicationState struct {
+	Term uint64 `json:"term"`
 	Seq  uint64 `json:"seq"`
 }
 
+func (r *ReplicationState) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] != '{' {
+		var seq uint64
+		if err := json.Unmarshal(data, &seq); err != nil {
+			return err
+		}
+		r.Term = 1
+		r.Seq = seq
+		return nil
+	}
+	var aux struct {
+		Term uint64 `json:"term"`
+		Seq  uint64 `json:"seq"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Term == 0 {
+		aux.Term = 1
+	}
+	r.Term = aux.Term
+	r.Seq = aux.Seq
+	return nil
+}
+
 type Manifest struct {
-	WALSeq uint64  `json:"wal_seq"`
-	Tables []Entry `json:"tables"`
+	WALSeq      uint64                      `json:"wal_seq"`
+	Tables      []Entry                     `json:"tables"`
+	Replication map[string]ReplicationState `json:"replication,omitempty"`
 }
 
 type Store interface {

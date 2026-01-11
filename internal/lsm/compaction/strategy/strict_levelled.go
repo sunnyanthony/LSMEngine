@@ -1,6 +1,9 @@
-package compaction
+package strategy
 
-import "lsmengine/internal/lsm/sstable"
+import (
+	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/metadata"
+)
 
 // StrictLevelledPlanner selects compactions using levelled invariants.
 type StrictLevelledPlanner struct {
@@ -9,11 +12,11 @@ type StrictLevelledPlanner struct {
 }
 
 // Next returns a plan when L0 exceeds the configured threshold.
-func (p *StrictLevelledPlanner) Next(state State) (Plan, bool, error) {
+func (p *StrictLevelledPlanner) Next(state model.State) (model.Plan, bool, error) {
 	if p == nil {
-		return Plan{}, false, nil
+		return model.Plan{}, false, nil
 	}
-	var l0 Level
+	var l0 model.Level
 	found := false
 	for _, level := range state.Levels {
 		if level.Level == 0 {
@@ -23,14 +26,14 @@ func (p *StrictLevelledPlanner) Next(state State) (Plan, bool, error) {
 		}
 	}
 	if !found {
-		return Plan{}, false, nil
+		return model.Plan{}, false, nil
 	}
 	if p.L0FileThreshold > 0 && len(l0.Tables) >= p.L0FileThreshold {
-		return Plan{
-			Inputs:      append([]sstable.SSTable(nil), l0.Tables...),
+		return model.Plan{
+			Inputs:      append([]metadata.TableMeta(nil), l0.Tables...),
 			OutputLevel: 1,
 			Reason:      "l0 file threshold exceeded",
 		}, true, nil
 	}
-	return Plan{}, false, nil
+	return model.Plan{}, false, nil
 }

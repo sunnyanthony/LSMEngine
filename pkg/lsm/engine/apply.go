@@ -1,4 +1,4 @@
-package lsm
+package engine
 
 import (
 	"lsmengine/internal/lsm/memtable"

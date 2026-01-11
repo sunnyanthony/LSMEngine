@@ -1,10 +1,6 @@
-package lsm
+package engine
 
-import (
-	"sync/atomic"
-
-	"lsmengine/internal/lsm/memtable"
-)
+import "lsmengine/internal/lsm/memtable"
 
 func (l *LSM) activeMem() memtable.Table {
 	l.memMu.RLock()
@@ -44,8 +40,6 @@ func (l *LSM) freezeMemtableLocked(pinned bool) memtable.Table {
 	l.immutables = append(l.immutables, frozen)
 	if pinned {
 		l.pinMemtableLocked(frozen)
-	} else {
-		l.flushQueue = append(l.flushQueue, frozen)
 	}
 	return frozen
 }
@@ -141,16 +135,4 @@ func (l *LSM) popFlushedTable() memtable.Table {
 	l.flushQueue = l.flushQueue[1:]
 	l.removeImmutableLocked(flushed)
 	return flushed
-}
-
-func (l *LSM) bumpSeq(seq uint64) {
-	for {
-		cur := atomic.LoadUint64(&l.seq)
-		if seq <= cur {
-			return
-		}
-		if atomic.CompareAndSwapUint64(&l.seq, cur, seq) {
-			return
-		}
-	}
 }

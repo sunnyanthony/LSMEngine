@@ -1,15 +1,14 @@
-package lsm
-
-import "lsmengine/internal/lsm/sstable"
+package engine
 
 func (l *LSM) Close() error {
 	l.cancel()
 	if l.wal != nil {
 		_ = l.wal.Close()
 	}
-	l.tablesMu.RLock()
-	tables := append([]sstable.SSTable(nil), l.tables...)
-	l.tablesMu.RUnlock()
+	if l.transport != nil {
+		_ = l.transport.Close()
+	}
+	tables := l.tables.Tables()
 	for _, table := range tables {
 		_ = table.Close()
 	}

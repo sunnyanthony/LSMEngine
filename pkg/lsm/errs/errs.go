@@ -3,6 +3,8 @@ package errs
 import "errors"
 
 var (
+	// ErrNotLeader indicates the node is not allowed to accept writes.
+	ErrNotLeader = errors.New("lsm: not leader")
 	// ErrWALCorrupt signals a corrupted WAL record or block.
 	ErrWALCorrupt = errors.New("wal corrupt")
 	// ErrWALCorruptSegment indicates a segment with an invalid header.
@@ -15,6 +17,8 @@ var (
 	ErrWALEmptyKey = errors.New("wal append: empty key")
 	// ErrWALEmptyValue indicates an empty value was provided.
 	ErrWALEmptyValue = errors.New("wal append: empty value")
+	// ErrBackpressure indicates the system is under write pressure.
+	ErrBackpressure = errors.New("lsm: backpressure")
 	// ErrWALRecordTooLarge indicates a record exceeded configured limits.
 	ErrWALRecordTooLarge = errors.New("wal append: record too large")
 	// ErrRangeUnsupported indicates range scans cannot include SSTables yet.

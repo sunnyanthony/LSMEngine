@@ -1,4 +1,4 @@
-package lsm
+package engine
 
 import (
 	"sync/atomic"
@@ -29,9 +29,7 @@ func (l *LSM) Snapshot() *Snapshot {
 		mems[i] = immutables[len(immutables)-1-i]
 	}
 
-	l.tablesMu.RLock()
-	tables := append([]sstable.SSTable(nil), l.tables...)
-	l.tablesMu.RUnlock()
+	tables := l.tables.Tables()
 
 	return &Snapshot{
 		lsm:    l,
@@ -57,12 +55,12 @@ func (s *Snapshot) Close() error {
 func (s *Snapshot) Get(key []byte) (types.Entry, bool) {
 	for _, table := range s.mems {
 		if e, ok := table.Get(key); ok {
-			return e, !e.Tombstone
+			return copyEntry(e), !e.Tombstone
 		}
 	}
 	for _, table := range s.tables {
 		if e, ok := table.Get(key); ok {
-			return e, !e.Tombstone
+			return copyEntry(e), !e.Tombstone
 		}
 	}
 	return types.Entry{}, false
@@ -80,7 +78,7 @@ func (s *Snapshot) Range(start, end []byte) Iterator {
 	for _, table := range s.tables {
 		iters = append(iters, table.Range(start, end))
 	}
-	return newMergeIterator(iters)
+	return newCopyIterator(newMergeIterator(iters))
 }
 
 type memtableIterAdapter struct {

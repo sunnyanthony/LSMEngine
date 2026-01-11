@@ -3,7 +3,7 @@ package dispatch
 import (
 	"context"
 	"fmt"
-	"lsmengine/internal/lsm/manifest"
+
 	"lsmengine/internal/lsm/sstable"
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/types"
@@ -39,8 +39,31 @@ func (d *Dispatcher) Enqueue(entries []types.Entry) bool {
 	}
 }
 
+func (d *Dispatcher) CanEnqueue() bool {
+	if d == nil || d.queue == nil {
+		return false
+	}
+	return len(d.queue) < cap(d.queue)
+}
+
+// EnqueueBlocking waits until the queue has capacity or ctx is canceled.
+func (d *Dispatcher) EnqueueBlocking(ctx context.Context, entries []types.Entry) bool {
+	if d == nil || d.queue == nil {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case d.queue <- entries:
+		if d.bus != nil {
+			d.bus.Publish(bus.Event{Type: bus.EventFlushScheduled, Sequence: entries[len(entries)-1].Seq})
+		}
+		return true
+	}
+}
+
 // Run starts a worker that consumes the queue and flushes. It blocks until ctx is done.
-func (d *Dispatcher) Run(ctx context.Context, flusher sstable.Flusher, mstore manifest.Store) error {
+func (d *Dispatcher) Run(ctx context.Context, flusher sstable.Flusher) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -52,17 +75,6 @@ func (d *Dispatcher) Run(ctx context.Context, flusher sstable.Flusher, mstore ma
 			}
 			if d.onFlush != nil {
 				d.onFlush(table)
-			}
-			if mstore != nil {
-				m, err := mstore.Load()
-				if err != nil {
-					return fmt.Errorf("manifest load: %w", err)
-				}
-				m.Tables = append([]manifest.Entry{{Path: table.Path, Seq: table.Seq}}, m.Tables...)
-				m.WALSeq = table.Seq
-				if err := mstore.Save(m); err != nil {
-					return fmt.Errorf("manifest save: %w", err)
-				}
 			}
 			if d.bus != nil {
 				d.bus.Publish(bus.Event{Type: bus.EventFlushCompleted, Sequence: table.Seq, Payload: table})
