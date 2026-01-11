@@ -1,4 +1,4 @@
-package memtable
+package table
 
 import "hash/fnv"
 

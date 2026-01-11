@@ -1,10 +1,12 @@
-package memtable
+package table
 
 import (
 	"bytes"
 	"sort"
 	"sync"
 
+	"lsmengine/internal/lsm/memtable/arena"
+	"lsmengine/internal/lsm/memtable/core"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -15,24 +17,24 @@ type MapTable struct {
 	entries   map[uint64][]types.Entry
 	keys      [][]byte
 	seq       uint64
-	cmp       Compare
+	cmp       core.Compare
 	sizeBytes int
-	arena     *Arena
+	arena     *arena.Arena
 }
 
-func NewMapTable() Table {
-	return NewMapTableWithArena(DefaultArenaBlockSize)
+func NewMapTable() core.Table {
+	return NewMapTableWithArena(arena.DefaultArenaBlockSize)
 }
 
-func NewMapTableWithArena(blockSize int) Table {
+func NewMapTableWithArena(blockSize int) core.Table {
 	return newMapTable(blockSize)
 }
 
 func newMapTable(blockSize int) *MapTable {
 	return &MapTable{
 		entries: make(map[uint64][]types.Entry),
-		cmp:     DefaultCompare,
-		arena:   NewArena(blockSize),
+		cmp:     core.DefaultCompare,
+		arena:   arena.NewArena(blockSize),
 	}
 }
 
@@ -77,13 +79,19 @@ func (m *MapTable) Size() int {
 	return m.sizeBytes
 }
 
-func (m *MapTable) Stats() TableStats {
+func (m *MapTable) Stats() core.TableStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return TableStats{
+	stats := core.TableStats{
 		Entries: len(m.keys),
 		Bytes:   m.sizeBytes,
 	}
+	if m.arena != nil {
+		a := m.arena.Stats()
+		stats.ArenaBytes = a.UsedBytes
+		stats.ArenaBlocks = a.Blocks
+	}
+	return stats
 }
 
 // Drain returns entries sorted by key and clears the memtable.
@@ -111,11 +119,11 @@ func (m *MapTable) Drain() []types.Entry {
 	return out
 }
 
-func (m *MapTable) Iter() Iterator {
+func (m *MapTable) Iter() core.Iterator {
 	return m.Range(nil, nil)
 }
 
-func (m *MapTable) Range(start, end []byte) Iterator {
+func (m *MapTable) Range(start, end []byte) core.Iterator {
 	m.mu.RLock()
 	if len(start) > 0 && len(end) > 0 && m.cmp(start, end) >= 0 {
 		m.mu.RUnlock()
@@ -216,5 +224,8 @@ func (m *MapTable) copyBytes(src []byte) []byte {
 	if m.arena == nil {
 		return append([]byte(nil), src...)
 	}
-	return m.arena.AllocCopy(src)
+	if dst := m.arena.AllocCopy(src); dst != nil {
+		return dst
+	}
+	return append([]byte(nil), src...)
 }

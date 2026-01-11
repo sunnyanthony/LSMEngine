@@ -1,4 +1,4 @@
-package memtable
+package core
 
 import (
 	"lsmengine/internal/lsm/memtable/skiplist"
@@ -47,17 +47,15 @@ type Compare = skiplist.Compare
 // DefaultCompare is lexicographic byte comparison.
 var DefaultCompare = skiplist.DefaultCompare
 
-func entrySize(entry types.Entry) int {
-	return len(entry.Key) + len(entry.Value)
-}
-
 type ShardStats struct {
 	Entries int
 	Bytes   int
 }
 
 type TableStats struct {
-	Entries int
-	Bytes   int
-	Shards  []ShardStats
+	Entries     int
+	Bytes       int
+	ArenaBytes  int64
+	ArenaBlocks int
+	Shards      []ShardStats
 }

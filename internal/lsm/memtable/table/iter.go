@@ -1,6 +1,9 @@
-package memtable
+package table
 
-import "lsmengine/pkg/lsm/types"
+import (
+	"lsmengine/internal/lsm/memtable/core"
+	"lsmengine/pkg/lsm/types"
+)
 
 type sliceIterator struct {
 	entries []types.Entry
@@ -8,7 +11,7 @@ type sliceIterator struct {
 	curr    types.Entry
 }
 
-func newSliceIterator(entries []types.Entry) Iterator {
+func newSliceIterator(entries []types.Entry) core.Iterator {
 	return &sliceIterator{entries: entries}
 }
 

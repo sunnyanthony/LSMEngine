@@ -1,8 +1,10 @@
-package memtable
+package table
 
 import (
 	"sync"
 
+	"lsmengine/internal/lsm/memtable/arena"
+	"lsmengine/internal/lsm/memtable/core"
 	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
@@ -12,24 +14,24 @@ type SkipListTable struct {
 	mu        sync.RWMutex
 	list      *skiplist.SkipList
 	seq       uint64
-	cmp       Compare
+	cmp       core.Compare
 	sizeBytes int
-	arena     *Arena
+	arena     *arena.Arena
 }
 
-func NewSkipListTable() Table {
-	return NewSkipListTableWithArena(DefaultArenaBlockSize)
+func NewSkipListTable() core.Table {
+	return NewSkipListTableWithArena(arena.DefaultArenaBlockSize)
 }
 
-func NewSkipListTableWithArena(blockSize int) Table {
+func NewSkipListTableWithArena(blockSize int) core.Table {
 	return newSkipListTable(blockSize)
 }
 
 func newSkipListTable(blockSize int) *SkipListTable {
 	return &SkipListTable{
 		list:  skiplist.New(),
-		cmp:   DefaultCompare,
-		arena: NewArena(blockSize),
+		cmp:   core.DefaultCompare,
+		arena: arena.NewArena(blockSize),
 	}
 }
 
@@ -84,13 +86,19 @@ func (t *SkipListTable) Size() int {
 	return t.sizeBytes
 }
 
-func (t *SkipListTable) Stats() TableStats {
+func (t *SkipListTable) Stats() core.TableStats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return TableStats{
+	stats := core.TableStats{
 		Entries: t.list.Len(),
 		Bytes:   t.sizeBytes,
 	}
+	if t.arena != nil {
+		a := t.arena.Stats()
+		stats.ArenaBytes = a.UsedBytes
+		stats.ArenaBlocks = a.Blocks
+	}
+	return stats
 }
 
 // Drain returns entries in sorted key order and clears the table.
@@ -111,11 +119,11 @@ func (t *SkipListTable) Drain() []types.Entry {
 	return out
 }
 
-func (t *SkipListTable) Iter() Iterator {
+func (t *SkipListTable) Iter() core.Iterator {
 	return t.Range(nil, nil)
 }
 
-func (t *SkipListTable) Range(start, end []byte) Iterator {
+func (t *SkipListTable) Range(start, end []byte) core.Iterator {
 	t.mu.RLock()
 	if len(start) > 0 && len(end) > 0 && t.cmp(start, end) >= 0 {
 		t.mu.RUnlock()
@@ -164,5 +172,8 @@ func (t *SkipListTable) copyBytes(src []byte) []byte {
 	if t.arena == nil {
 		return append([]byte(nil), src...)
 	}
-	return t.arena.AllocCopy(src)
+	if dst := t.arena.AllocCopy(src); dst != nil {
+		return dst
+	}
+	return append([]byte(nil), src...)
 }

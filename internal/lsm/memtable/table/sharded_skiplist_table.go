@@ -1,4 +1,4 @@
-package memtable
+package table
 
 import (
 	"container/heap"
@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"lsmengine/internal/lsm/memtable/arena"
+	"lsmengine/internal/lsm/memtable/core"
 	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
@@ -15,7 +17,7 @@ type shard struct {
 	list    *skiplist.SkipList
 	entries int
 	bytes   int
-	arena   *Arena
+	arena   *arena.Arena
 }
 
 // ShardedSkipListTable shards keys across multiple skiplists for lower contention.
@@ -24,22 +26,22 @@ type ShardedSkipListTable struct {
 	mask      uint64
 	seq       uint64
 	sizeBytes int64
-	cmp       Compare
+	cmp       core.Compare
 }
 
-func NewShardedSkipListTable(concurrency int) Table {
-	return NewShardedSkipListTableWithArena(concurrency, DefaultArenaBlockSize)
+func NewShardedSkipListTable(concurrency int) core.Table {
+	return NewShardedSkipListTableWithArena(concurrency, arena.DefaultArenaBlockSize)
 }
 
-func NewShardedSkipListTableWithShards(shards int) Table {
-	return NewShardedSkipListTableWithShardsAndArena(shards, DefaultArenaBlockSize)
+func NewShardedSkipListTableWithShards(shards int) core.Table {
+	return NewShardedSkipListTableWithShardsAndArena(shards, arena.DefaultArenaBlockSize)
 }
 
-func NewShardedSkipListTableWithArena(concurrency int, blockSize int) Table {
+func NewShardedSkipListTableWithArena(concurrency int, blockSize int) core.Table {
 	return newShardedSkipListTable(shardCount(concurrency), blockSize)
 }
 
-func NewShardedSkipListTableWithShardsAndArena(shards int, blockSize int) Table {
+func NewShardedSkipListTableWithShardsAndArena(shards int, blockSize int) core.Table {
 	if shards < 1 {
 		shards = 1
 	}
@@ -50,12 +52,12 @@ func newShardedSkipListTable(shards int, blockSize int) *ShardedSkipListTable {
 	s := make([]shard, shards)
 	for i := range s {
 		s[i].list = skiplist.New()
-		s[i].arena = NewArena(blockSize)
+		s[i].arena = arena.NewArena(blockSize)
 	}
 	return &ShardedSkipListTable{
 		shards: s,
 		mask:   uint64(shards - 1),
-		cmp:    DefaultCompare,
+		cmp:    core.DefaultCompare,
 	}
 }
 
@@ -130,25 +132,34 @@ func (t *ShardedSkipListTable) Size() int {
 	return int(atomic.LoadInt64(&t.sizeBytes))
 }
 
-func (t *ShardedSkipListTable) Stats() TableStats {
-	stats := TableStats{
+func (t *ShardedSkipListTable) Stats() core.TableStats {
+	stats := core.TableStats{
 		Bytes: int(atomic.LoadInt64(&t.sizeBytes)),
 	}
 	if len(t.shards) == 0 {
 		return stats
 	}
-	stats.Shards = make([]ShardStats, 0, len(t.shards))
+	stats.Shards = make([]core.ShardStats, 0, len(t.shards))
+	var arenaBytes int64
+	var arenaBlocks int
 	for i := range t.shards {
 		s := &t.shards[i]
 		s.mu.RLock()
-		shardStats := ShardStats{
+		shardStats := core.ShardStats{
 			Entries: s.entries,
 			Bytes:   s.bytes,
 		}
 		s.mu.RUnlock()
+		if s.arena != nil {
+			a := s.arena.Stats()
+			arenaBytes += a.UsedBytes
+			arenaBlocks += a.Blocks
+		}
 		stats.Shards = append(stats.Shards, shardStats)
 		stats.Entries += shardStats.Entries
 	}
+	stats.ArenaBytes = arenaBytes
+	stats.ArenaBlocks = arenaBlocks
 	return stats
 }
 
@@ -170,11 +181,11 @@ func (t *ShardedSkipListTable) Drain() []types.Entry {
 	return out
 }
 
-func (t *ShardedSkipListTable) Iter() Iterator {
+func (t *ShardedSkipListTable) Iter() core.Iterator {
 	return t.Range(nil, nil)
 }
 
-func (t *ShardedSkipListTable) Range(start, end []byte) Iterator {
+func (t *ShardedSkipListTable) Range(start, end []byte) core.Iterator {
 	if len(start) > 0 && len(end) > 0 && t.cmp(start, end) >= 0 {
 		return newSliceIterator(nil)
 	}
@@ -288,7 +299,10 @@ func (s *shard) copyBytes(src []byte) []byte {
 	if s.arena == nil {
 		return append([]byte(nil), src...)
 	}
-	return s.arena.AllocCopy(src)
+	if dst := s.arena.AllocCopy(src); dst != nil {
+		return dst
+	}
+	return append([]byte(nil), src...)
 }
 
 type sliceCursor struct {
@@ -303,7 +317,7 @@ type sliceItem struct {
 
 type sliceHeap struct {
 	items []sliceItem
-	cmp   Compare
+	cmp   core.Compare
 }
 
 func (h sliceHeap) Len() int { return len(h.items) }
@@ -321,7 +335,7 @@ func (h *sliceHeap) Pop() any {
 	return item
 }
 
-func mergeEntries(segments [][]types.Entry, total int, cmp Compare) []types.Entry {
+func mergeEntries(segments [][]types.Entry, total int, cmp core.Compare) []types.Entry {
 	h := &sliceHeap{cmp: cmp}
 	h.items = make([]sliceItem, 0, len(segments))
 	for _, entries := range segments {
