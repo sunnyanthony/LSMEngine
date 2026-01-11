@@ -1,4 +1,4 @@
-package wal
+package core
 
 import (
 	"errors"

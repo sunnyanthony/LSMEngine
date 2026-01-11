@@ -1,4 +1,4 @@
-package wal
+package core
 
 import (
 	"bufio"
@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"lsmengine/internal/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/segment"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
@@ -15,7 +16,7 @@ import (
 // Replay reads entries from the WAL in order and calls fn for each.
 func (w *WAL) Replay(fn func(types.Entry) error) error {
 	// Replay rotated segments first (oldest), then active file.
-	segs, missing, err := listSegments(w.path)
+	segs, missing, err := segment.ListSegments(w.path)
 	if err != nil {
 		return err
 	}

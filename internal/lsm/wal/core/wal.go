@@ -1,4 +1,4 @@
-package wal
+package core
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"lsmengine/internal/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/segment"
 )
 
 // WAL appends mutations for durability and supports replay.
@@ -70,7 +71,7 @@ func NewWAL(opts Options) (*WAL, error) {
 		f.Close()
 		return nil, fmt.Errorf("stat wal: %w", err)
 	}
-	segmentID := nextSegmentID(opts.Path)
+	segmentID := segment.NextSegmentID(opts.Path)
 	if info.Size() == 0 {
 		if _, err := codec.WriteSegmentHeader(f, blockSize, segmentID); err != nil {
 			f.Close()
@@ -122,4 +123,12 @@ func NewWAL(opts Options) (*WAL, error) {
 		go w.runWriter()
 	}
 	return w, nil
+}
+
+// OpenReplay returns a WAL handle suitable for replay-only usage.
+func OpenReplay(path string, repairOnReplay bool) *WAL {
+	return &WAL{
+		path:           path,
+		repairOnReplay: repairOnReplay,
+	}
 }

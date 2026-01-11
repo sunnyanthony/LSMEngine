@@ -1,4 +1,4 @@
-package wal
+package segment
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func listSegments(path string) ([]string, bool, error) {
+func ListSegments(path string) ([]string, bool, error) {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	entries, err := os.ReadDir(dir)
@@ -47,7 +47,7 @@ func listSegments(path string) ([]string, bool, error) {
 	return segs, missing, nil
 }
 
-func nextSegmentID(path string) uint64 {
+func NextSegmentID(path string) uint64 {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	entries, err := os.ReadDir(dir)
