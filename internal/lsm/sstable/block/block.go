@@ -1,4 +1,4 @@
-package sstable
+package block
 
 import (
 	"bytes"
@@ -6,18 +6,22 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/golang/snappy"
-
 	"lsmengine/pkg/lsm/types"
 )
 
-type blockBuilder struct {
+type Builder struct {
 	buf             []byte
 	restartOffsets  []uint32
 	restartInterval int
+	baseRestart     int
+	minRestart      int
+	maxRestart      int
+	adaptive        bool
 	entryCount      int
 	first           []byte
 	lastKey         []byte
+	sharedSum       int
+	keySum          int
 }
 
 const (
@@ -27,14 +31,35 @@ const (
 	defaultRestartInterval = 16
 )
 
-func newBlockBuilder(restartInterval int) *blockBuilder {
+func NewBuilder(restartInterval int, adaptive bool, minRestart, maxRestart int) *Builder {
 	if restartInterval <= 0 {
 		restartInterval = defaultRestartInterval
 	}
-	return &blockBuilder{restartInterval: restartInterval}
+	if minRestart <= 0 {
+		minRestart = restartInterval
+	}
+	if maxRestart <= 0 {
+		maxRestart = restartInterval
+	}
+	if minRestart > maxRestart {
+		minRestart = maxRestart
+	}
+	if restartInterval < minRestart {
+		restartInterval = minRestart
+	}
+	if restartInterval > maxRestart {
+		restartInterval = maxRestart
+	}
+	return &Builder{
+		restartInterval: restartInterval,
+		baseRestart:     restartInterval,
+		minRestart:      minRestart,
+		maxRestart:      maxRestart,
+		adaptive:        adaptive,
+	}
 }
 
-func (b *blockBuilder) add(entry types.Entry) {
+func (b *Builder) Add(entry types.Entry) {
 	shared, unshared, restart := b.nextEntrySizing(entry)
 	if b.first == nil {
 		b.first = append([]byte(nil), entry.Key...)
@@ -45,24 +70,32 @@ func (b *blockBuilder) add(entry types.Entry) {
 	b.buf = appendEntry(b.buf, shared, unshared, entry)
 	b.lastKey = append(b.lastKey[:0], entry.Key...)
 	b.entryCount++
+	b.sharedSum += shared
+	b.keySum += shared + unshared
+	if b.adaptive && b.entryCount%b.restartInterval == 0 {
+		b.adaptRestartInterval()
+	}
 }
 
-func (b *blockBuilder) reset() {
+func (b *Builder) Reset() {
 	b.buf = b.buf[:0]
 	b.restartOffsets = b.restartOffsets[:0]
 	b.entryCount = 0
 	b.first = nil
 	b.lastKey = b.lastKey[:0]
+	b.sharedSum = 0
+	b.keySum = 0
+	b.restartInterval = b.baseRestart
 }
 
-func (b *blockBuilder) sizeBytes() int {
+func (b *Builder) SizeBytes() int {
 	if b.entryCount == 0 {
 		return 0
 	}
 	return len(b.buf) + len(b.restartOffsets)*blockOffsetSize + blockCountSize
 }
 
-func (b *blockBuilder) estimatedSizeAfter(entry types.Entry) int {
+func (b *Builder) EstimatedSizeAfter(entry types.Entry) int {
 	_, unshared, restart := b.nextEntrySizing(entry)
 	entrySize := entryEncodedSize(unshared, len(entry.Value))
 	restarts := len(b.restartOffsets)
@@ -72,8 +105,8 @@ func (b *blockBuilder) estimatedSizeAfter(entry types.Entry) int {
 	return len(b.buf) + entrySize + restarts*blockOffsetSize + blockCountSize
 }
 
-func (b *blockBuilder) finish() []byte {
-	out := make([]byte, 0, b.sizeBytes())
+func (b *Builder) Finish() []byte {
+	out := make([]byte, 0, b.SizeBytes())
 	out = append(out, b.buf...)
 	for _, off := range b.restartOffsets {
 		var tmp [blockOffsetSize]byte
@@ -86,7 +119,7 @@ func (b *blockBuilder) finish() []byte {
 	return out
 }
 
-func (b *blockBuilder) nextEntrySizing(entry types.Entry) (int, int, bool) {
+func (b *Builder) nextEntrySizing(entry types.Entry) (int, int, bool) {
 	if b.restartInterval <= 0 {
 		b.restartInterval = defaultRestartInterval
 	}
@@ -102,28 +135,62 @@ func (b *blockBuilder) nextEntrySizing(entry types.Entry) (int, int, bool) {
 	return shared, unshared, restart
 }
 
-type block struct {
+func (b *Builder) adaptRestartInterval() {
+	if b.keySum <= 0 || b.maxRestart == b.minRestart {
+		b.sharedSum = 0
+		b.keySum = 0
+		return
+	}
+	ratio := float64(b.sharedSum) / float64(b.keySum)
+	target := b.minRestart + int(ratio*float64(b.maxRestart-b.minRestart))
+	if target < b.minRestart {
+		target = b.minRestart
+	}
+	if target > b.maxRestart {
+		target = b.maxRestart
+	}
+	b.restartInterval = target
+	b.sharedSum = 0
+	b.keySum = 0
+}
+
+func (b *Builder) EntryCount() int {
+	if b == nil {
+		return 0
+	}
+	return b.entryCount
+}
+
+func (b *Builder) FirstKey() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.first
+}
+
+type Block struct {
 	data        []byte
 	restarts    []uint32
 	restartKeys [][]byte
 }
 
-type entryView struct {
+// EntryView is a zero-copy view; slices are valid until the iterator advances.
+type EntryView struct {
 	Key       []byte
 	Value     []byte
 	Tombstone bool
 	Seq       uint64
 }
 
-type blockCursor struct {
-	block   *block
+type Cursor struct {
+	block   *Block
 	offset  int
 	limit   int
 	lastKey []byte
 	scratch []byte
 }
 
-func decodeBlock(payload []byte) (*block, error) {
+func Decode(payload []byte) (*Block, error) {
 	if len(payload) < blockCountSize {
 		return nil, errors.New("sstable: block too small")
 	}
@@ -166,16 +233,24 @@ func decodeBlock(payload []byte) (*block, error) {
 		}
 		restartKeys = append(restartKeys, data[keyStart:keyEnd])
 	}
-	return &block{
+	return &Block{
 		data:        data,
 		restarts:    restarts,
 		restartKeys: restartKeys,
 	}, nil
 }
 
-func (b *block) find(key []byte) (types.Entry, bool, error) {
+func (b *Block) Find(key []byte) (types.Entry, bool, error) {
+	view, ok, err := b.FindView(key)
+	if !ok || err != nil {
+		return types.Entry{}, ok, err
+	}
+	return view.ToEntry(), true, nil
+}
+
+func (b *Block) FindView(key []byte) (EntryView, bool, error) {
 	if len(b.restarts) == 0 {
-		return types.Entry{}, false, nil
+		return EntryView{}, false, nil
 	}
 	idx := sort.Search(len(b.restartKeys), func(i int) bool {
 		return bytes.Compare(b.restartKeys[i], key) > 0
@@ -187,28 +262,28 @@ func (b *block) find(key []byte) (types.Entry, bool, error) {
 	if idx+1 < len(b.restarts) {
 		limit = int(b.restarts[idx+1])
 	}
-	cursor := newBlockCursor(b, int(b.restarts[idx]), limit)
+	cursor := NewCursor(b, int(b.restarts[idx]), limit)
 	for {
-		entry, ok, err := cursor.next()
+		entry, ok, err := cursor.Next()
 		if err != nil {
-			return types.Entry{}, false, err
+			return EntryView{}, false, err
 		}
 		if !ok {
-			return types.Entry{}, false, nil
+			return EntryView{}, false, nil
 		}
 		cmp := bytes.Compare(entry.Key, key)
 		if cmp == 0 {
-			return entry.toEntry(), true, nil
+			return entry, true, nil
 		}
 		if cmp > 0 {
-			return types.Entry{}, false, nil
+			return EntryView{}, false, nil
 		}
 	}
 }
 
-func (b *block) seek(key []byte) (*blockCursor, entryView, bool, error) {
+func (b *Block) Seek(key []byte) (*Cursor, EntryView, bool, error) {
 	if len(b.restarts) == 0 {
-		return nil, entryView{}, false, nil
+		return nil, EntryView{}, false, nil
 	}
 	idx := sort.Search(len(b.restartKeys), func(i int) bool {
 		return bytes.Compare(b.restartKeys[i], key) > 0
@@ -216,14 +291,14 @@ func (b *block) seek(key []byte) (*blockCursor, entryView, bool, error) {
 	if idx < 0 {
 		idx = 0
 	}
-	cursor := newBlockCursor(b, int(b.restarts[idx]), len(b.data))
+	cursor := NewCursor(b, int(b.restarts[idx]), len(b.data))
 	for {
-		entry, ok, err := cursor.next()
+		entry, ok, err := cursor.Next()
 		if err != nil {
-			return nil, entryView{}, false, err
+			return nil, EntryView{}, false, err
 		}
 		if !ok {
-			return nil, entryView{}, false, nil
+			return nil, EntryView{}, false, nil
 		}
 		if bytes.Compare(entry.Key, key) >= 0 {
 			return cursor, entry, true, nil
@@ -231,7 +306,7 @@ func (b *block) seek(key []byte) (*blockCursor, entryView, bool, error) {
 	}
 }
 
-func newBlockCursor(b *block, offset, limit int) *blockCursor {
+func NewCursor(b *Block, offset, limit int) *Cursor {
 	if limit <= 0 || limit > len(b.data) {
 		limit = len(b.data)
 	}
@@ -241,16 +316,16 @@ func newBlockCursor(b *block, offset, limit int) *blockCursor {
 	if offset > limit {
 		offset = limit
 	}
-	return &blockCursor{block: b, offset: offset, limit: limit}
+	return &Cursor{block: b, offset: offset, limit: limit}
 }
 
-func (c *blockCursor) next() (entryView, bool, error) {
+func (c *Cursor) Next() (EntryView, bool, error) {
 	if c.offset >= c.limit {
-		return entryView{}, false, nil
+		return EntryView{}, false, nil
 	}
 	data := c.block.data
 	if c.limit-c.offset < entryHeaderSize {
-		return entryView{}, false, errors.New("sstable: entry truncated")
+		return EntryView{}, false, errors.New("sstable: entry truncated")
 	}
 	shared := binary.LittleEndian.Uint32(data[c.offset : c.offset+4])
 	unshared := binary.LittleEndian.Uint32(data[c.offset+4 : c.offset+8])
@@ -262,10 +337,10 @@ func (c *blockCursor) next() (entryView, bool, error) {
 	keyEnd := keyStart + int(unshared)
 	valEnd := keyEnd + int(valLen)
 	if keyStart < 0 || valEnd > c.limit {
-		return entryView{}, false, errors.New("sstable: entry truncated")
+		return EntryView{}, false, errors.New("sstable: entry truncated")
 	}
 	if int(shared) > len(c.lastKey) {
-		return entryView{}, false, errors.New("sstable: entry shared prefix invalid")
+		return EntryView{}, false, errors.New("sstable: entry shared prefix invalid")
 	}
 	need := int(shared) + int(unshared)
 	if cap(c.scratch) < need {
@@ -281,12 +356,19 @@ func (c *blockCursor) next() (entryView, bool, error) {
 	c.offset = valEnd
 	c.lastKey = append(c.lastKey[:0], key...)
 
-	return entryView{
+	return EntryView{
 		Key:       key,
 		Value:     value,
 		Tombstone: flags&0x1 == 0x1,
 		Seq:       seq,
 	}, true, nil
+}
+
+func (b *Block) DataLen() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.data)
 }
 
 func appendEntry(dst []byte, shared, unshared int, entry types.Entry) []byte {
@@ -306,7 +388,7 @@ func appendEntry(dst []byte, shared, unshared int, entry types.Entry) []byte {
 	return dst
 }
 
-func (e entryView) toEntry() types.Entry {
+func (e EntryView) ToEntry() types.Entry {
 	return types.Entry{
 		Key:       append([]byte(nil), e.Key...),
 		Value:     append([]byte(nil), e.Value...),
@@ -330,32 +412,4 @@ func commonPrefixLen(a, b []byte) int {
 		}
 	}
 	return max
-}
-
-func compressBlock(payload []byte, compression Compression) ([]byte, uint32, error) {
-	if compression == CompressionNone {
-		return payload, uint32(len(payload)), nil
-	}
-	if compression == CompressionSnappy {
-		out := snappy.Encode(nil, payload)
-		return out, uint32(len(payload)), nil
-	}
-	return payload, uint32(len(payload)), nil
-}
-
-func decompressBlock(payload []byte, compression Compression, uncompressedLen uint32) ([]byte, error) {
-	if compression == CompressionNone {
-		return payload, nil
-	}
-	if compression == CompressionSnappy {
-		out, err := snappy.Decode(nil, payload)
-		if err != nil {
-			return nil, err
-		}
-		if uncompressedLen > 0 && uint32(len(out)) != uncompressedLen {
-			return nil, errors.New("sstable: decompressed length mismatch")
-		}
-		return out, nil
-	}
-	return payload, nil
 }

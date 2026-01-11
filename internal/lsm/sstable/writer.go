@@ -2,12 +2,17 @@ package sstable
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
+	"lsmengine/internal/lsm/sstable/block"
+	"lsmengine/internal/lsm/sstable/bloom"
+	"lsmengine/internal/lsm/sstable/format"
+	"lsmengine/internal/lsm/sstable/index"
+	"lsmengine/internal/lsm/sstable/meta"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -36,8 +41,8 @@ type Writer struct {
 }
 
 func NewSSTableWriter(opts Options) (*Writer, error) {
-	opts.normalize()
-	if err := opts.validate(); err != nil {
+	opts.Normalize()
+	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
 	if opts.Dir == "" {
@@ -54,14 +59,27 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	if len(entries) == 0 {
 		return SSTable{}, fmt.Errorf("no entries to write")
 	}
-	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].Key, entries[j].Key) < 0 })
+	sort.Slice(entries, func(i, j int) bool {
+		cmp := bytes.Compare(entries[i].Key, entries[j].Key)
+		if cmp != 0 {
+			return cmp < 0
+		}
+		if entries[i].Seq != entries[j].Seq {
+			return entries[i].Seq > entries[j].Seq
+		}
+		if entries[i].Tombstone != entries[j].Tombstone {
+			return entries[i].Tombstone
+		}
+		return false
+	})
 	seqMin := entries[0].Seq
 	seqMax := entries[len(entries)-1].Seq
 	minKey := append([]byte(nil), entries[0].Key...)
 	maxKey := append([]byte(nil), entries[len(entries)-1].Key...)
 
-	tempPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%d.sst.tmp", seqMax))
-	finalPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%d.sst", seqMax))
+	fileID := fmt.Sprintf("%d-%d", seqMax, time.Now().UnixNano())
+	tempPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%s.sst.tmp", fileID))
+	finalPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%s.sst", fileID))
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return SSTable{}, fmt.Errorf("create sstable: %w", err)
@@ -69,10 +87,11 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	defer f.Close()
 
 	var offset uint64
-	builder := newBlockBuilder(w.opts.RestartInterval)
-	var index []indexEntry
+	builder := block.NewBuilder(w.opts.RestartInterval, w.opts.RestartIntervalAdaptive, w.opts.RestartIntervalMin, w.opts.RestartIntervalMax)
+	var indexEntries []index.Entry
+	var blockEntryCounts []int
 
-	filter := newBloomFilter(len(entries), w.opts.BloomBitsPerKey)
+	filter := bloom.NewFilter(len(entries), w.opts.BloomBitsPerKey)
 	for _, e := range entries {
 		if e.Seq < seqMin {
 			seqMin = e.Seq
@@ -81,39 +100,101 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 			seqMax = e.Seq
 		}
 		if filter != nil {
-			filter.add(e.Key)
+			filter.Add(e.Key)
 		}
-		if builder.sizeBytes() > 0 && builder.estimatedSizeAfter(e) > w.opts.BlockTargetBytes {
-			if err := w.flushBlock(f, builder, &offset, &index); err != nil {
+		if builder.SizeBytes() > 0 && builder.EstimatedSizeAfter(e) > w.opts.BlockTargetBytes {
+			count, err := w.flushBlock(f, builder, &offset, &indexEntries)
+			if err != nil {
 				return SSTable{}, err
 			}
+			blockEntryCounts = append(blockEntryCounts, count)
 		}
-		if builder.sizeBytes() == 0 && builder.estimatedSizeAfter(e) > w.opts.BlockMaxBytes {
-			builder.add(e)
-			if err := w.flushBlock(f, builder, &offset, &index); err != nil {
+		if builder.SizeBytes() == 0 && builder.EstimatedSizeAfter(e) > w.opts.BlockMaxBytes {
+			builder.Add(e)
+			count, err := w.flushBlock(f, builder, &offset, &indexEntries)
+			if err != nil {
 				return SSTable{}, err
 			}
+			blockEntryCounts = append(blockEntryCounts, count)
 			continue
 		}
-		builder.add(e)
-		if builder.sizeBytes() >= w.opts.BlockMaxBytes {
-			if err := w.flushBlock(f, builder, &offset, &index); err != nil {
+		builder.Add(e)
+		if builder.SizeBytes() >= w.opts.BlockMaxBytes {
+			count, err := w.flushBlock(f, builder, &offset, &indexEntries)
+			if err != nil {
 				return SSTable{}, err
 			}
+			blockEntryCounts = append(blockEntryCounts, count)
 		}
 	}
-	if builder.sizeBytes() > 0 {
-		if err := w.flushBlock(f, builder, &offset, &index); err != nil {
+	if builder.SizeBytes() > 0 {
+		count, err := w.flushBlock(f, builder, &offset, &indexEntries)
+		if err != nil {
 			return SSTable{}, err
 		}
+		blockEntryCounts = append(blockEntryCounts, count)
 	}
+
+	partitioned := w.opts.IndexPartitionEntries > 0 && len(indexEntries) > w.opts.IndexPartitionEntries
+	filterPartitioned := partitioned && filter != nil && w.opts.FilterPartitioned
 
 	var bloomOffset uint64
 	var bloomLen uint32
+	var filterIndexEntries []index.Entry
 	if filter != nil {
+		if filterPartitioned {
+			var err error
+			filterIndexEntries, err = bloom.WritePartitionedBloomFilters(f, entries, indexEntries, blockEntryCounts, w.opts, &offset)
+			if err != nil {
+				return SSTable{}, err
+			}
+		} else {
+			var err error
+			bloomOffset, bloomLen, err = bloom.WriteBloomBlock(f, filter, &offset)
+			if err != nil {
+				return SSTable{}, err
+			}
+		}
+	}
+
+	topIndex := indexEntries
+	if partitioned {
+		topIndex = nil
+		for i := 0; i < len(indexEntries); i += w.opts.IndexPartitionEntries {
+			end := i + w.opts.IndexPartitionEntries
+			if end > len(indexEntries) {
+				end = len(indexEntries)
+			}
+			part := indexEntries[i:end]
+			payload := index.Encode(part)
+			block := format.EncodeBlock(payload, format.BlockTypeIndex, CompressionNone, uint32(len(payload)))
+			n, err := f.Write(block)
+			if err != nil {
+				return SSTable{}, fmt.Errorf("write index partition: %w", err)
+			}
+			topIndex = append(topIndex, index.Entry{
+				Key:    append([]byte(nil), part[0].Key...),
+				Offset: offset,
+				Length: uint32(n),
+			})
+			offset += uint64(n)
+		}
+	}
+
+	indexOffset := offset
+	indexPayload := index.Encode(topIndex)
+	indexBlock := format.EncodeBlock(indexPayload, format.BlockTypeIndex, CompressionNone, uint32(len(indexPayload)))
+	if n, err := f.Write(indexBlock); err != nil {
+		return SSTable{}, fmt.Errorf("write index: %w", err)
+	} else {
+		offset += uint64(n)
+	}
+
+	if filterPartitioned && len(filterIndexEntries) > 0 {
 		bloomOffset = offset
-		payload := filter.encode()
-		n, err := writeBlockWithCRC(f, payload)
+		payload := index.Encode(filterIndexEntries)
+		block := format.EncodeBlock(payload, format.BlockTypeFilter, CompressionNone, uint32(len(payload)))
+		n, err := f.Write(block)
 		if err != nil {
 			return SSTable{}, err
 		}
@@ -121,17 +202,8 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 		offset += uint64(n)
 	}
 
-	indexOffset := offset
-	indexPayload := encodeIndex(index)
-	indexBlock := encodeWithCRC(indexPayload)
-	if n, err := f.Write(indexBlock); err != nil {
-		return SSTable{}, fmt.Errorf("write index: %w", err)
-	} else {
-		offset += uint64(n)
-	}
-
 	metaOffset := offset
-	metaPayload := encodeMeta(meta{
+	metaPayload := meta.Encode(meta.Meta{
 		MinKey:      minKey,
 		MaxKey:      maxKey,
 		EntryCount:  uint64(len(entries)),
@@ -143,14 +215,22 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 		BloomOffset: bloomOffset,
 		BloomLen:    bloomLen,
 	})
-	metaBlock := encodeWithCRC(metaPayload)
+	metaBlock := format.EncodeBlock(metaPayload, format.BlockTypeMeta, CompressionNone, uint32(len(metaPayload)))
 	if n, err := f.Write(metaBlock); err != nil {
 		return SSTable{}, fmt.Errorf("write meta: %w", err)
 	} else {
 		offset += uint64(n)
 	}
 
-	footerBytes := encodeFooter(footer{
+	var footerFlags uint8
+	if partitioned {
+		footerFlags |= format.FooterFlagIndexPartitioned
+	}
+	if filterPartitioned {
+		footerFlags |= format.FooterFlagFilterPartitioned
+	}
+	footerBytes := format.EncodeFooter(format.Footer{
+		Flags:       footerFlags,
 		IndexOffset: indexOffset,
 		IndexLen:    uint32(len(indexBlock)),
 		MetaOffset:  metaOffset,
@@ -168,53 +248,48 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return SSTable{}, fmt.Errorf("rename sstable: %w", err)
 	}
+	if err := syncDir(w.opts.Dir); err != nil {
+		return SSTable{}, fmt.Errorf("sync sstable dir: %w", err)
+	}
 	return LoadSSTable(finalPath, w.opts)
 }
 
-func (w *Writer) flushBlock(f *os.File, builder *blockBuilder, offset *uint64, index *[]indexEntry) error {
-	payload := builder.finish()
-	compressed, uncompressedLen, err := compressBlock(payload, w.opts.Compression)
+func (w *Writer) flushBlock(f *os.File, builder *block.Builder, offset *uint64, indexEntries *[]index.Entry) (int, error) {
+	count := builder.EntryCount()
+	payload := builder.Finish()
+	compressed, uncompressedLen, err := format.CompressPayload(payload, w.opts.Compression)
 	if err != nil {
-		return fmt.Errorf("compress block: %w", err)
+		return 0, fmt.Errorf("compress block: %w", err)
 	}
-	var header [blockHeaderSize]byte
-	header[0] = compressionID(w.opts.Compression)
-	binary.LittleEndian.PutUint32(header[1:5], uncompressedLen)
-	var block bytes.Buffer
-	block.Write(header[:])
-	block.Write(compressed)
-	crc := checksum(block.Bytes())
-	var crcBytes [4]byte
-	binary.LittleEndian.PutUint32(crcBytes[:], crc)
-	block.Write(crcBytes[:])
-	n, err := f.Write(block.Bytes())
-	if err != nil {
-		return fmt.Errorf("write block: %w", err)
-	}
-	if len(builder.first) > 0 {
-		*index = append(*index, indexEntry{
-			key:    append([]byte(nil), builder.first...),
-			offset: *offset,
-			length: uint32(n),
-		})
-	}
-	*offset += uint64(n)
-	builder.reset()
-	return nil
-}
-
-func writeBlockWithCRC(f *os.File, payload []byte) (int, error) {
-	block := encodeWithCRC(payload)
+	block := format.EncodeBlock(compressed, format.BlockTypeData, w.opts.Compression, uncompressedLen)
 	n, err := f.Write(block)
 	if err != nil {
 		return 0, fmt.Errorf("write block: %w", err)
 	}
-	return n, nil
+	if len(builder.FirstKey()) > 0 {
+		*indexEntries = append(*indexEntries, index.Entry{
+			Key:    append([]byte(nil), builder.FirstKey()...),
+			Offset: *offset,
+			Length: uint32(n),
+		})
+	}
+	*offset += uint64(n)
+	builder.Reset()
+	return count, nil
 }
 
-func filterK(filter *bloomFilter) uint8 {
+func filterK(filter *bloom.Filter) uint8 {
 	if filter == nil {
 		return 0
 	}
-	return filter.k
+	return filter.K()
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
