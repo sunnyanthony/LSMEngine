@@ -16,83 +16,35 @@ func (l *LSM) startCompaction(ctx context.Context, opts Options) {
 	if opts.CompactionL0Threshold <= 0 {
 		return
 	}
-	l.compactionPlanner = &compaction.StrictLevelledPlanner{
+	planner := &compaction.StrictLevelledPlanner{
 		L0FileThreshold: opts.CompactionL0Threshold,
 	}
-	l.compactionRunner = &compaction.SimpleRunner{
+	runner := &compaction.SimpleRunner{
 		Flusher:        l.flusher,
 		DropTombstones: opts.CompactionDropTombstones,
 	}
-	l.compactionApplier = &lsmCompactionApplier{lsm: l}
-	l.compactionCh = make(chan struct{}, 1)
-	go l.compactionLoop(ctx)
+	applier := &lsmCompactionApplier{lsm: l}
+	controller := &compaction.Coordinator{
+		Planner: planner,
+		Runner:  runner,
+		Applier: applier,
+		Resolve: l.tables.Resolve,
+		Logger:  l.logger,
+		Metrics: l.flowMetrics,
+	}
+	service := compaction.NewService(controller, l.compactionState)
+	service.OnError = func(err error) {
+		if err != nil && l.logger != nil {
+			l.logger.Printf("compaction: %v", err)
+		}
+	}
+	l.compactionService = service
+	go service.Run(ctx)
 	if l.bus != nil {
-		go l.compactionEvents(ctx, l.bus.Subscribe(bus.EventFlushCompleted))
+		scheduler := compaction.NewScheduler(service, compaction.FlushTriggerPolicy{})
+		go scheduler.Run(ctx, l.bus.Subscribe(bus.EventFlushCompleted))
 	}
-	l.triggerCompaction()
-}
-
-func (l *LSM) compactionEvents(ctx context.Context, ch <-chan bus.Event) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ch:
-			l.triggerCompaction()
-		}
-	}
-}
-
-func (l *LSM) triggerCompaction() {
-	if l.compactionCh == nil {
-		return
-	}
-	select {
-	case l.compactionCh <- struct{}{}:
-	default:
-	}
-}
-
-func (l *LSM) compactionLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-l.compactionCh:
-			for {
-				ran, err := l.runCompactionOnce()
-				if err != nil && l.logger != nil {
-					l.logger.Printf("compaction: %v", err)
-				}
-				if !ran {
-					break
-				}
-			}
-		}
-	}
-}
-
-func (l *LSM) runCompactionOnce() (bool, error) {
-	if l.compactionPlanner == nil || l.compactionRunner == nil || l.compactionApplier == nil {
-		return false, nil
-	}
-	state := l.compactionState()
-	plan, ok, err := l.compactionPlanner.Next(state)
-	if err != nil || !ok {
-		return false, err
-	}
-	inputs, err := l.tables.Resolve(plan.Inputs)
-	if err != nil {
-		return false, err
-	}
-	result, err := l.compactionRunner.Run(plan, inputs)
-	if err != nil {
-		return false, err
-	}
-	if err := l.compactionApplier.Apply(result); err != nil {
-		return false, err
-	}
-	return true, nil
+	service.Trigger()
 }
 
 func (l *LSM) compactionState() compaction.State {

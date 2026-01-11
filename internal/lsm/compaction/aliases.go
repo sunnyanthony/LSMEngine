@@ -23,3 +23,17 @@ type StrictLevelledPlanner = strategy.StrictLevelledPlanner
 type SimpleRunner = runner.SimpleRunner
 type Controller = controller.Controller
 type Coordinator = controller.Coordinator
+type Triggerer = controller.Triggerer
+type StateSource = controller.StateSource
+type Service = controller.Service
+type Scheduler = controller.Scheduler
+type TriggerPolicy = controller.TriggerPolicy
+type FlushTriggerPolicy = controller.FlushTriggerPolicy
+
+func NewService(ctrl Controller, source StateSource) *Service {
+	return controller.NewService(ctrl, source)
+}
+
+func NewScheduler(trigger Triggerer, policy TriggerPolicy) *Scheduler {
+	return controller.NewScheduler(trigger, policy)
+}
