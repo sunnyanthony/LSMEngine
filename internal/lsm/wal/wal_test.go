@@ -37,7 +37,7 @@ func TestWALAppendAndReplay(t *testing.T) {
 		t.Fatalf("close wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err = wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -72,7 +72,7 @@ func TestWALAsyncAppendAndReplay(t *testing.T) {
 		t.Fatalf("close wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err = wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -103,7 +103,7 @@ func TestWALAppendLargeValue(t *testing.T) {
 	appendOwned(t, w, types.Entry{Key: []byte("big"), Value: large, Seq: 1})
 	_ = w.Close()
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err = wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -154,7 +154,7 @@ func TestWALTombstoneReplay(t *testing.T) {
 	appendOwned(t, w, types.Entry{Key: []byte("k"), Tombstone: true, Seq: 2})
 	_ = w.Close()
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var last types.Entry
 	if err := wal.Replay(func(e types.Entry) error {
 		last = e
@@ -175,7 +175,7 @@ func TestWALReplayHandlerError(t *testing.T) {
 	_ = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: []byte("v2"), Seq: 2}))
 	_ = w.Close()
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	count := 0
 	err := wal.Replay(func(e types.Entry) error {
 		count++
@@ -236,7 +236,7 @@ func TestWALCorruptHeaderLenStops(t *testing.T) {
 		t.Fatalf("write wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err := wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -270,7 +270,7 @@ func TestWALReplayAutoRepairTruncatesTail(t *testing.T) {
 		t.Fatalf("truncate wal: %v", err)
 	}
 
-	wal := &WAL{path: path, repairOnReplay: true}
+	wal := OpenReplay(path, true)
 	_ = wal.Replay(func(e types.Entry) error { return nil })
 
 	after, err := os.Stat(path)
@@ -299,7 +299,7 @@ func TestWALMissingSegmentCausesError(t *testing.T) {
 	if err := os.WriteFile(seg3, buf3.Bytes(), 0o644); err != nil {
 		t.Fatalf("write seg3: %v", err)
 	}
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	err := wal.Replay(func(e types.Entry) error { return nil })
 	if !errors.Is(err, errs.ErrWALMissingSegment) {
 		t.Fatalf("expected ErrMissingSegment, got %v", err)
@@ -348,7 +348,7 @@ func TestWALReplayPartialMagicReportsCorrupt(t *testing.T) {
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("write wal: %v", err)
 	}
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	err := wal.Replay(func(e types.Entry) error { return nil })
 	if !errors.Is(err, errs.ErrWALCorruptSegment) {
 		t.Fatalf("expected corrupt segment error, got %v", err)
@@ -367,7 +367,7 @@ func TestWALReplayPartialBlockHeaderReportsCorrupt(t *testing.T) {
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("write wal: %v", err)
 	}
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	err := wal.Replay(func(e types.Entry) error { return nil })
 	if !errors.Is(err, errs.ErrWALCorruptSegment) {
 		t.Fatalf("expected corrupt segment error, got %v", err)
@@ -433,7 +433,7 @@ func runConcurrentAppend(t *testing.T, async bool) {
 		t.Fatalf("close wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var count int
 	err = wal.Replay(func(e types.Entry) error {
 		count++

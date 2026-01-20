@@ -1,3 +1,5 @@
+// WAL lifecycle and options.
+
 package wal
 
 import (
@@ -7,13 +9,17 @@ import (
 	"runtime"
 	"sync"
 
+	"lsmengine/internal/lsm/iofs"
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/internal/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/segment"
 )
 
 // WAL appends mutations for durability and supports replay.
 type WAL struct {
 	mu        sync.Mutex
-	f         *os.File
+	f         iofs.File
+	fs        iofs.FS
 	path      string
 	sync      bool
 	maxBytes  uint64
@@ -32,6 +38,7 @@ type WAL struct {
 	closed   uint32
 
 	repairOnReplay bool
+	replayPool     *memory.ReaderPool
 }
 
 type Options struct {
@@ -40,10 +47,12 @@ type Options struct {
 	MaxSegment     uint64 // rotate when bytes exceed; 0 means no rotation
 	MaxRecordBytes uint64 // per-record cap; 0 means no limit
 	BlockSize      uint32 // block size for framing; 0 means default
+	ReplayBuffer   int    // replay read buffer size; 0 means block size
 	Async          bool
 	QueueDepth     int // async queue size; 0 means default
 	BatchMax       int // max requests per batch; 0 means drain queue
 	RepairOnReplay bool
+	FS             iofs.FS
 }
 
 func NewWAL(opts Options) (*WAL, error) {
@@ -58,10 +67,14 @@ func NewWAL(opts Options) (*WAL, error) {
 	if blockSize < minBlockSize {
 		return nil, fmt.Errorf("wal block size too small (%d < %d)", blockSize, minBlockSize)
 	}
-	if err := os.MkdirAll(filepath.Dir(opts.Path), 0o755); err != nil {
+	fs := opts.FS
+	if fs == nil {
+		fs = iofs.OSFS{}
+	}
+	if err := fs.MkdirAll(filepath.Dir(opts.Path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir wal dir: %w", err)
 	}
-	f, err := os.OpenFile(opts.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := fs.OpenFile(opts.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
@@ -70,7 +83,7 @@ func NewWAL(opts Options) (*WAL, error) {
 		f.Close()
 		return nil, fmt.Errorf("stat wal: %w", err)
 	}
-	segmentID := nextSegmentID(opts.Path)
+	segmentID := segment.NextSegmentID(opts.Path)
 	if info.Size() == 0 {
 		if _, err := codec.WriteSegmentHeader(f, blockSize, segmentID); err != nil {
 			f.Close()
@@ -78,7 +91,7 @@ func NewWAL(opts Options) (*WAL, error) {
 		}
 		info, _ = f.Stat()
 	} else {
-		r, err := os.Open(opts.Path)
+		r, err := fs.Open(opts.Path)
 		if err == nil {
 			if hdr, err := codec.ReadSegmentHeader(r); err == nil {
 				blockSize = hdr.BlockSize
@@ -95,8 +108,13 @@ func NewWAL(opts Options) (*WAL, error) {
 		f.Close()
 		return nil, fmt.Errorf("wal max record bytes (%d) exceeds block size (%d)", opts.MaxRecordBytes, blockSize)
 	}
+	replayBuffer := opts.ReplayBuffer
+	if replayBuffer <= 0 {
+		replayBuffer = int(blockSize)
+	}
 	w := &WAL{
 		f:              f,
+		fs:             fs,
 		path:           opts.Path,
 		sync:           opts.Sync,
 		maxBytes:       opts.MaxSegment,
@@ -107,6 +125,7 @@ func NewWAL(opts Options) (*WAL, error) {
 		async:          opts.Async,
 		batchMax:       opts.BatchMax,
 		repairOnReplay: opts.RepairOnReplay,
+		replayPool:     memory.NewReaderPool(replayBuffer),
 	}
 	if opts.Async {
 		queueDepth := opts.QueueDepth
@@ -122,4 +141,13 @@ func NewWAL(opts Options) (*WAL, error) {
 		go w.runWriter()
 	}
 	return w, nil
+}
+
+// OpenReplay returns a WAL handle suitable for replay-only usage.
+func OpenReplay(path string, repairOnReplay bool) *WAL {
+	return &WAL{
+		fs:             iofs.OSFS{},
+		path:           path,
+		repairOnReplay: repairOnReplay,
+	}
 }

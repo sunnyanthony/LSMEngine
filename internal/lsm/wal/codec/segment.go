@@ -1,3 +1,5 @@
+// WAL segment header encode/decode.
+
 package codec
 
 import (

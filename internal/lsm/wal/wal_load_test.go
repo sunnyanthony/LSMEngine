@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"lsmengine/internal/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/segment"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
@@ -34,7 +35,7 @@ func TestWALLoadManySmallRecords(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var count int
 	if err := wal.Replay(func(e types.Entry) error {
 		count++
@@ -65,7 +66,7 @@ func TestWALLoadLargeValues(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var count int
 	if err := wal.Replay(func(e types.Entry) error {
 		count++
@@ -92,7 +93,7 @@ func TestWALRotationReplay(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var seqs []uint64
 	if err := wal.Replay(func(e types.Entry) error {
 		seqs = append(seqs, e.Seq)
@@ -135,7 +136,7 @@ func TestWALReplayStopsOnCorruptTail(t *testing.T) {
 		t.Fatalf("truncate wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err = wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -186,7 +187,7 @@ func TestWALReplayChecksumMismatch(t *testing.T) {
 		t.Fatalf("write wal: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var replayed []types.Entry
 	err = wal.Replay(func(e types.Entry) error {
 		replayed = append(replayed, e)
@@ -227,7 +228,7 @@ func TestWALLoadManySmallWithTombstones(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	var count, tombCount int
 	if err := wal.Replay(func(e types.Entry) error {
 		count++
@@ -261,7 +262,7 @@ func TestWALLoadHandlerErrorMidReplay(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	stopErr := errors.New("stop")
 	count := 0
 	err = wal.Replay(func(e types.Entry) error {
@@ -294,7 +295,7 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	segs, _, err := listSegments(path)
+	segs, _, err := segment.ListSegments(path)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 		t.Fatalf("remove segment: %v", err)
 	}
 
-	wal := &WAL{path: path}
+	wal := OpenReplay(path, false)
 	count := 0
 	err = wal.Replay(func(e types.Entry) error {
 		count++

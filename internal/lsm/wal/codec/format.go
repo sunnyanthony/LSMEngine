@@ -1,3 +1,5 @@
+// WAL format constants and helpers.
+
 package codec
 
 var (

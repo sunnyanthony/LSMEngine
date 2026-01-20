@@ -5,24 +5,34 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 ## What is here
 - LSM facade with memtable, WAL replay, and async flush dispatcher.
 - Sharded skiplist memtable (plus map) with ordered iterators.
-- Snapshot range scans over memtables with merge + tombstone filtering.
+- Snapshot range scans across memtables + SSTables with merge + tombstone filtering.
 - WAL append/replay with corruption repair policy hooks.
-- SSTable writer placeholder and manifest store.
+- SSTable writer/reader with block index, bloom filter, cache/prefetch, and manifest store.
+- Compaction engine skeleton with strict levelled policy (pluggable).
 - Event bus for async signals.
+- SSTable FlowObserver + FlowMetrics hooks for read-path visibility.
+- Backpressure returns `ErrBackpressure` instead of synchronous flush when the flush queue is full.
 
 ## Quick start
 ```bash
 go test ./...
 ```
 
+## Testing
+- Default tests: `go test ./...`
+- Integration + test-only hooks: `go test -tags test ./tests/integration`
+- Docker (runs tests with `-tags test`): `scripts/docker-test.sh`
+
 Design docs:
 - `docs/design.md` (index)
 - `docs/architecture.md`
 - `docs/memtable.md`
+- `docs/sstable.md`
 - `docs/wal.md`
+- `docs/compaction.md`
 
 ## Package layout
-Public surface (for users building a distributed KV/NoSQL on top):
+Public surface (for users building a KV/NoSQL on top):
 - `pkg/lsm`: LSM facade and options.
 - `pkg/lsm/types`: entry and shared types.
 - `pkg/lsm/errs`: error definitions.
@@ -31,7 +41,7 @@ Public surface (for users building a distributed KV/NoSQL on top):
 Internal engine components (subject to change):
 - `internal/lsm/memtable`: in-memory table implementations; `internal/lsm/memtable/skiplist`: ordered index.
 - `internal/lsm/wal`: write-ahead log append/replay; `internal/lsm/wal/codec`: WAL framing/codec.
-- `internal/lsm/sstable`: placeholder SSTable writer/reader.
+- `internal/lsm/sstable`: SSTable writer/reader with block index, bloom, and cache/prefetch.
 - `internal/lsm/dispatch`: flush dispatcher.
 - `internal/lsm/manifest`: manifest store.
 - `internal/lsm/logging`: logger helpers.
@@ -47,7 +57,5 @@ Internal engine components (subject to change):
 - Memtable: `go test ./internal/lsm/memtable -bench=Memtable -benchmem`
 
 ## Next steps
-- Implement SSTable block format (index + data blocks).
-- Add SSTable range scan iterator for snapshot merges.
 - Add benchmarks and micro-bench tools for writes/reads.
-- Add metrics/health endpoints and replication transport.
+- Add metrics/health endpoints.

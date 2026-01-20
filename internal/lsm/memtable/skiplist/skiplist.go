@@ -1,3 +1,5 @@
+// Skiplist data structure and search logic.
+
 package skiplist
 
 import (

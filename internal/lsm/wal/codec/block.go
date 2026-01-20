@@ -1,3 +1,5 @@
+// WAL block framing encode/decode.
+
 package codec
 
 import (

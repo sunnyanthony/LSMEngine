@@ -1,14 +1,16 @@
-package memtable
+package memtable_test
 
 import (
 	"bytes"
 	"testing"
 
+	memtable "lsmengine/internal/lsm/memtable"
+	memtabletable "lsmengine/internal/lsm/memtable/table"
 	"lsmengine/pkg/lsm/types"
 )
 
 func TestSkipListTableIter(t *testing.T) {
-	table := NewSkipListTable()
+	table := memtabletable.NewSkipListTable()
 	applyOwned(table, []byte("b"), []byte("2"), false, 1)
 	applyOwned(table, []byte("a"), []byte("1"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -27,7 +29,7 @@ func TestSkipListTableIter(t *testing.T) {
 }
 
 func TestSkipListTableRangeBounds(t *testing.T) {
-	table := NewSkipListTable()
+	table := memtabletable.NewSkipListTable()
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -44,7 +46,7 @@ func TestSkipListTableRangeBounds(t *testing.T) {
 }
 
 func TestSkipListTableRangeEmpty(t *testing.T) {
-	table := NewSkipListTable()
+	table := memtabletable.NewSkipListTable()
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
@@ -55,7 +57,7 @@ func TestSkipListTableRangeEmpty(t *testing.T) {
 }
 
 func TestShardedSkipListIter(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("b"), []byte("2"), false, 1)
 	applyOwned(table, []byte("a"), []byte("1"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -74,7 +76,7 @@ func TestShardedSkipListIter(t *testing.T) {
 }
 
 func TestShardedSkipListRange(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -91,7 +93,7 @@ func TestShardedSkipListRange(t *testing.T) {
 }
 
 func TestShardedSkipListRangeEmpty(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
@@ -102,7 +104,7 @@ func TestShardedSkipListRangeEmpty(t *testing.T) {
 }
 
 func TestShardedSkipListRangeNilStart(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -118,7 +120,7 @@ func TestShardedSkipListRangeNilStart(t *testing.T) {
 }
 
 func TestShardedSkipListRangeNilEnd(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 	applyOwned(table, []byte("c"), []byte("3"), false, 3)
@@ -134,7 +136,7 @@ func TestShardedSkipListRangeNilEnd(t *testing.T) {
 }
 
 func TestSkipListTableSizeBytesOverwrite(t *testing.T) {
-	table := NewSkipListTable().(*SkipListTable)
+	table := memtabletable.NewSkipListTable().(*memtabletable.SkipListTable)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	if table.Size() != 2 {
 		t.Fatalf("expected size 2, got %d", table.Size())
@@ -146,7 +148,7 @@ func TestSkipListTableSizeBytesOverwrite(t *testing.T) {
 }
 
 func TestSkipListTableApplyBatchOwned(t *testing.T) {
-	table := NewSkipListTable().(*SkipListTable)
+	table := memtabletable.NewSkipListTable().(*memtabletable.SkipListTable)
 	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
@@ -164,7 +166,7 @@ func TestSkipListTableApplyBatchOwned(t *testing.T) {
 }
 
 func TestShardedSkipListStats(t *testing.T) {
-	table := NewShardedSkipListTableWithShards(4).(*ShardedSkipListTable)
+	table := memtabletable.NewShardedSkipListTableWithShards(4).(*memtabletable.ShardedSkipListTable)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("22"), false, 2)
 	stats := table.Stats()
@@ -180,7 +182,7 @@ func TestShardedSkipListStats(t *testing.T) {
 }
 
 func TestShardedSkipListRangeInvalidBounds(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
@@ -191,7 +193,7 @@ func TestShardedSkipListRangeInvalidBounds(t *testing.T) {
 }
 
 func TestSkipListTableRangeInvalidBounds(t *testing.T) {
-	table := NewSkipListTable()
+	table := memtabletable.NewSkipListTable()
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("2"), false, 2)
 
@@ -202,7 +204,7 @@ func TestSkipListTableRangeInvalidBounds(t *testing.T) {
 }
 
 func TestSkipListTableApplyCopiesEntry(t *testing.T) {
-	table := NewSkipListTable().(*SkipListTable)
+	table := memtabletable.NewSkipListTable().(*memtabletable.SkipListTable)
 	key := []byte("alpha")
 	val := []byte("one")
 
@@ -221,7 +223,7 @@ func TestSkipListTableApplyCopiesEntry(t *testing.T) {
 }
 
 func TestShardedSkipListApplyCopiesEntry(t *testing.T) {
-	table := NewShardedSkipListTable(2)
+	table := memtabletable.NewShardedSkipListTable(2)
 	key := []byte("alpha")
 	val := []byte("one")
 
@@ -240,7 +242,7 @@ func TestShardedSkipListApplyCopiesEntry(t *testing.T) {
 }
 
 func TestSkipListTableStats(t *testing.T) {
-	table := NewSkipListTable().(*SkipListTable)
+	table := memtabletable.NewSkipListTable().(*memtabletable.SkipListTable)
 	applyOwned(table, []byte("a"), []byte("1"), false, 1)
 	applyOwned(table, []byte("b"), []byte("22"), false, 2)
 
@@ -254,14 +256,14 @@ func TestSkipListTableStats(t *testing.T) {
 }
 
 func TestSkipListTableApplyConcurrentDoesNotPanic(t *testing.T) {
-	runConcurrentApply(t, NewSkipListTable(), 4*1024)
+	runConcurrentApply(t, memtabletable.NewSkipListTable(), 4*1024)
 }
 
 func TestShardedSkipListApplyConcurrentDoesNotPanic(t *testing.T) {
-	runConcurrentApply(t, NewShardedSkipListTable(2), 4*1024)
+	runConcurrentApply(t, memtabletable.NewShardedSkipListTable(2), 4*1024)
 }
 
-func applyOwned(table Table, key, value []byte, tombstone bool, seq uint64) {
+func applyOwned(table memtable.Table, key, value []byte, tombstone bool, seq uint64) {
 	entry := types.Entry{
 		Key:       key,
 		Value:     value,

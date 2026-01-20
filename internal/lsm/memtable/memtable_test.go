@@ -1,4 +1,4 @@
-package memtable
+package memtable_test
 
 import (
 	"bytes"
@@ -9,11 +9,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	memtable "lsmengine/internal/lsm/memtable"
+	memtabletable "lsmengine/internal/lsm/memtable/table"
 	"lsmengine/pkg/lsm/types"
 )
 
 func TestMemTablePutGet(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	entry := applyOwnedEntry(mt, []byte("alpha"), []byte("one"), false, 1)
 	got, ok := mt.Get([]byte("alpha"))
 	if !ok {
@@ -28,7 +30,7 @@ func TestMemTablePutGet(t *testing.T) {
 }
 
 func TestMemTableDelete(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("alpha"), []byte("one"), false, 1)
 	del := applyOwnedEntry(mt, []byte("alpha"), nil, true, 2)
 	if !del.Tombstone {
@@ -41,7 +43,7 @@ func TestMemTableDelete(t *testing.T) {
 }
 
 func TestMemTableDrainSorted(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
 	entries := mt.Drain()
@@ -57,7 +59,7 @@ func TestMemTableDrainSorted(t *testing.T) {
 }
 
 func TestMemTableIterSorted(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
 	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
@@ -76,7 +78,7 @@ func TestMemTableIterSorted(t *testing.T) {
 }
 
 func TestMemTableRange(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
 	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
@@ -93,7 +95,7 @@ func TestMemTableRange(t *testing.T) {
 }
 
 func TestMemTableRangeEmptyBounds(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 1)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 2)
 	applyOwnedEntry(mt, []byte("c"), []byte("3"), false, 3)
@@ -112,7 +114,7 @@ func TestMemTableRangeEmptyBounds(t *testing.T) {
 }
 
 func TestMemTableRangeNoMatch(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
 
@@ -123,7 +125,7 @@ func TestMemTableRangeNoMatch(t *testing.T) {
 }
 
 func TestMapTableSizeBytesOverwrite(t *testing.T) {
-	mt := NewMapTable().(*MapTable)
+	mt := memtabletable.NewMapTable().(*memtabletable.MapTable)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	if mt.Size() != 2 {
 		t.Fatalf("expected size 2, got %d", mt.Size())
@@ -135,7 +137,7 @@ func TestMapTableSizeBytesOverwrite(t *testing.T) {
 }
 
 func TestMapTableSizeBytesTombstone(t *testing.T) {
-	mt := NewMapTable().(*MapTable)
+	mt := memtabletable.NewMapTable().(*memtabletable.MapTable)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	applyOwnedEntry(mt, []byte("a"), nil, true, 2)
 	if mt.Size() != 1 {
@@ -144,7 +146,7 @@ func TestMapTableSizeBytesTombstone(t *testing.T) {
 }
 
 func TestMapTableApplyBatchOwned(t *testing.T) {
-	mt := NewMapTable().(*MapTable)
+	mt := memtabletable.NewMapTable().(*memtabletable.MapTable)
 	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
 		{Key: []byte("b"), Value: []byte("2"), Seq: 2},
@@ -162,7 +164,7 @@ func TestMapTableApplyBatchOwned(t *testing.T) {
 }
 
 func TestMapTableRangeInvalidBounds(t *testing.T) {
-	mt := NewMapTable()
+	mt := memtabletable.NewMapTable()
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	applyOwnedEntry(mt, []byte("b"), []byte("2"), false, 2)
 
@@ -173,7 +175,7 @@ func TestMapTableRangeInvalidBounds(t *testing.T) {
 }
 
 func TestMapTableApplyCopiesEntry(t *testing.T) {
-	mt := NewMapTable().(*MapTable)
+	mt := memtabletable.NewMapTable().(*memtabletable.MapTable)
 	key := []byte("alpha")
 	val := []byte("one")
 
@@ -192,7 +194,7 @@ func TestMapTableApplyCopiesEntry(t *testing.T) {
 }
 
 func TestMapTableStats(t *testing.T) {
-	mt := NewMapTable().(*MapTable)
+	mt := memtabletable.NewMapTable().(*memtabletable.MapTable)
 	applyOwnedEntry(mt, []byte("a"), []byte("1"), false, 1)
 	applyOwnedEntry(mt, []byte("b"), []byte("22"), false, 2)
 
@@ -206,14 +208,14 @@ func TestMapTableStats(t *testing.T) {
 }
 
 func TestMapTableApplyConcurrentDoesNotPanic(t *testing.T) {
-	runConcurrentApply(t, NewMapTable(), 4*1024)
+	runConcurrentApply(t, memtabletable.NewMapTable(), 4*1024)
 }
 
 func TestMemtableCopyEntryEmptyValue(t *testing.T) {
-	tables := []Table{
-		NewMapTable(),
-		NewSkipListTable(),
-		NewShardedSkipListTable(2),
+	tables := []memtable.Table{
+		memtabletable.NewMapTable(),
+		memtabletable.NewSkipListTable(),
+		memtabletable.NewShardedSkipListTable(2),
 	}
 	for _, table := range tables {
 		entry := types.Entry{Key: []byte("k"), Value: nil, Seq: 1}
@@ -229,10 +231,10 @@ func TestMemtableCopyEntryEmptyValue(t *testing.T) {
 }
 
 func TestMemtableCopyEntryEmptyKey(t *testing.T) {
-	tables := []Table{
-		NewMapTable(),
-		NewSkipListTable(),
-		NewShardedSkipListTable(2),
+	tables := []memtable.Table{
+		memtabletable.NewMapTable(),
+		memtabletable.NewSkipListTable(),
+		memtabletable.NewShardedSkipListTable(2),
 	}
 	for _, table := range tables {
 		val := []byte("v")
@@ -249,18 +251,18 @@ func TestMemtableCopyEntryEmptyKey(t *testing.T) {
 }
 
 func TestMapTableConcurrentPutGet(t *testing.T) {
-	runConcurrentPutGet(t, NewMapTable())
+	runConcurrentPutGet(t, memtabletable.NewMapTable())
 }
 
 func TestSkipListTableConcurrentPutGet(t *testing.T) {
-	runConcurrentPutGet(t, NewSkipListTable())
+	runConcurrentPutGet(t, memtabletable.NewSkipListTable())
 }
 
 func TestShardedSkipListTableConcurrentPutGet(t *testing.T) {
-	runConcurrentPutGet(t, NewShardedSkipListTable(2))
+	runConcurrentPutGet(t, memtabletable.NewShardedSkipListTable(2))
 }
 
-func runConcurrentApply(t *testing.T, table Table, valueSize int) {
+func runConcurrentApply(t *testing.T, table memtable.Table, valueSize int) {
 	t.Helper()
 
 	val := make([]byte, valueSize)
@@ -293,7 +295,7 @@ func runConcurrentApply(t *testing.T, table Table, valueSize int) {
 	}
 }
 
-func runConcurrentPutGet(t *testing.T, table Table) {
+func runConcurrentPutGet(t *testing.T, table memtable.Table) {
 	t.Helper()
 
 	val := []byte("v")
@@ -337,7 +339,7 @@ func runConcurrentPutGet(t *testing.T, table Table) {
 	}
 }
 
-func applyOwnedEntry(table Table, key, value []byte, tombstone bool, seq uint64) types.Entry {
+func applyOwnedEntry(table memtable.Table, key, value []byte, tombstone bool, seq uint64) types.Entry {
 	entry := types.Entry{
 		Key:       key,
 		Value:     value,

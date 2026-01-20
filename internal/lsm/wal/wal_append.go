@@ -1,3 +1,5 @@
+// WAL append path and batching.
+
 package wal
 
 import (
@@ -267,7 +269,7 @@ func (w *WAL) rotate() error {
 		return fmt.Errorf("rename wal segment: %w", err)
 	}
 	w.segmentID++
-	newFile, err := os.OpenFile(w.path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	newFile, err := w.fs.OpenFile(w.path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open new wal: %w", err)
 	}
