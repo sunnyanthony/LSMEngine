@@ -1,3 +1,5 @@
+// Logger interface and default logger helpers.
+
 package logging
 
 import (

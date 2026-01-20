@@ -1,3 +1,5 @@
+// Flush dispatcher for immutable memtables.
+
 package dispatch
 
 import (
