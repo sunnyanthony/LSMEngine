@@ -1,9 +1,9 @@
+//go:build test
+
 package integration_test
 
 import (
-	"path/filepath"
 	"testing"
-	"time"
 
 	"lsmengine/pkg/lsm"
 )
@@ -23,6 +23,7 @@ func TestLSMCompactionMergesTables(t *testing.T) {
 	defer store.Close()
 
 	// Enough writes to trigger multiple flushes.
+	waiter := startCompactionWait(t)
 	for _, kv := range [][2]string{
 		{"a", "1"},
 		{"b", "2"},
@@ -36,26 +37,13 @@ func TestLSMCompactionMergesTables(t *testing.T) {
 		}
 	}
 
-	waitForSSTableCount(t, dir, 1)
+	result := waiter.Wait(t)
+	if len(result.Obsolete) < 2 {
+		t.Fatalf("expected at least 2 obsolete tables, got %d", len(result.Obsolete))
+	}
 
 	got, ok := store.Get([]byte("a"))
 	if !ok || string(got.Value) != "4" {
 		t.Fatalf("expected a=4 after compaction, ok=%v val=%q", ok, got.Value)
 	}
-}
-
-func waitForSSTableCount(t *testing.T, dir string, want int) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		matches, err := filepath.Glob(filepath.Join(dir, "sstables", "sstable-*.sst"))
-		if err != nil {
-			t.Fatalf("glob sstables: %v", err)
-		}
-		if len(matches) == want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("expected %d sstable files within timeout", want)
 }
