@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 
 	memtable "lsmengine/internal/lsm/memtable"
-	"lsmengine/internal/lsm/sstable"
+	"lsmengine/internal/lsm/tableset"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -14,7 +14,7 @@ import (
 type Snapshot struct {
 	lsm    *LSM
 	mems   []memtable.Table
-	tables []sstable.SSTable
+	tables []tableset.Table
 	pinned memtable.Table
 	closed uint32
 }
@@ -31,7 +31,10 @@ func (l *LSM) Snapshot() *Snapshot {
 		mems[i] = immutables[len(immutables)-1-i]
 	}
 
-	tables := l.tables.Tables()
+	var tables []tableset.Table
+	if l.tables != nil {
+		tables = l.tables.SnapshotAndPin()
+	}
 
 	return &Snapshot{
 		lsm:    l,
@@ -43,13 +46,23 @@ func (l *LSM) Snapshot() *Snapshot {
 
 // Close releases the pinned memtable so it can be flushed.
 func (s *Snapshot) Close() error {
-	if s == nil || s.lsm == nil || s.pinned == nil {
+	if s == nil || s.lsm == nil {
 		return nil
 	}
 	if !atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
 		return nil
 	}
-	s.lsm.releasePinned(s.pinned)
+	if s.pinned != nil {
+		s.lsm.releasePinned(s.pinned)
+	}
+	if s.lsm.tables != nil && len(s.tables) > 0 {
+		paths := make([]string, 0, len(s.tables))
+		for _, t := range s.tables {
+			paths = append(paths, t.Meta.Path)
+		}
+		pending := s.lsm.tables.Unpin(paths)
+		s.lsm.cleanupTables(pending)
+	}
 	return nil
 }
 
@@ -61,7 +74,7 @@ func (s *Snapshot) Get(key []byte) (types.Entry, bool) {
 		}
 	}
 	for _, table := range s.tables {
-		if view, ok := table.GetView(key); ok {
+		if view, ok := table.Handle.GetView(key); ok {
 			entry := types.Entry{
 				Key:       view.Key,
 				Value:     view.Value,
@@ -84,7 +97,7 @@ func (s *Snapshot) Range(start, end []byte) Iterator {
 		iters = append(iters, &memtableViewIter{iter: table.Range(start, end)})
 	}
 	for _, table := range s.tables {
-		iters = append(iters, &sstableViewIter{iter: table.Range(start, end)})
+		iters = append(iters, &sstableViewIter{iter: table.Handle.Range(start, end)})
 	}
 	return newViewToEntryIterator(newViewMergeIterator(iters))
 }

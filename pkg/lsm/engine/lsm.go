@@ -15,8 +15,8 @@ import (
 	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
 	sstableconfig "lsmengine/internal/lsm/sstable/config"
-	"lsmengine/internal/lsm/tableset"
 	"lsmengine/internal/lsm/tableedit"
+	"lsmengine/internal/lsm/tableset"
 	wal "lsmengine/internal/lsm/wal"
 	"lsmengine/pkg/lsm/bus"
 )
@@ -49,6 +49,9 @@ type Options struct {
 	BusBuffer                 int
 	LogDir                    string
 	Logger                    logging.Logger
+	TrashDir                  string
+	TrashMaxBytes             int64
+	TrashMaxFiles             int
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
@@ -140,6 +143,7 @@ type LSM struct {
 	flushSvc             *flushService
 	compactionSvc        *compactionruntime.Runtime
 	tableEdits           tableedit.Editor
+	remover              tableedit.Remover
 	bg                   sync.WaitGroup
 }
 
@@ -162,6 +166,9 @@ func (l *LSM) Close() error {
 	tables := l.tables.Tables()
 	for _, table := range tables {
 		_ = table.Close()
+	}
+	if l.tables != nil {
+		l.cleanupTables(l.tables.Pending())
 	}
 	if l.logCloser != nil {
 		_ = l.logCloser.Close()

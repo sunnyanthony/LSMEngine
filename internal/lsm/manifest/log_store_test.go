@@ -89,6 +89,46 @@ func TestLogStoreIgnoresCorruptTail(t *testing.T) {
 	}
 }
 
+func TestLogStoreIgnoresCorruptCheckpointUsesLog(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "manifest.log")
+	cpPath := filepath.Join(dir, "manifest.json")
+	store, err := NewLogStore(LogOptions{
+		LogPath:          logPath,
+		CheckpointPath:   cpPath,
+		CheckpointEveryN: 100,
+	})
+	if err != nil {
+		t.Fatalf("new log store: %v", err)
+	}
+	if err := store.Update(func(m Manifest) Manifest {
+		m.WALSeq = 99
+		m.Tables = append(m.Tables, Entry{Path: "t1", Level: 0, SeqMax: 99})
+		return m
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := os.WriteFile(cpPath, []byte("{bad json"), 0o644); err != nil {
+		t.Fatalf("write corrupt checkpoint: %v", err)
+	}
+
+	reopen, err := NewLogStore(LogOptions{
+		LogPath:          logPath,
+		CheckpointPath:   cpPath,
+		CheckpointEveryN: 100,
+	})
+	if err != nil {
+		t.Fatalf("new log store reopen: %v", err)
+	}
+	got, err := reopen.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.WALSeq != 99 || len(got.Tables) != 1 || got.Tables[0].Path != "t1" {
+		t.Fatalf("unexpected manifest: %+v", got)
+	}
+}
+
 func TestLogStoreCheckpointTruncatesLog(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "manifest.log")

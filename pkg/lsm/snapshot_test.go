@@ -25,14 +25,23 @@ func TestSnapshotGetSeesFrozenValue(t *testing.T) {
 	if err := store.Put([]byte("k"), []byte("v2")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
+	if err := store.Put([]byte("y"), []byte("y1")); err != nil {
+		t.Fatalf("put y: %v", err)
+	}
 
 	got, ok := snap.Get([]byte("k"))
 	if !ok || !bytes.Equal(got.Value, []byte("v1")) {
 		t.Fatalf("expected snapshot value v1, got %+v (ok=%v)", got, ok)
 	}
+	if got, ok := snap.Get([]byte("y")); ok || got.Tombstone {
+		t.Fatalf("expected snapshot to miss y, ok=%v entry=%+v", ok, got)
+	}
 	current, ok := store.Get([]byte("k"))
 	if !ok || !bytes.Equal(current.Value, []byte("v2")) {
 		t.Fatalf("expected current value v2, got %+v (ok=%v)", current, ok)
+	}
+	if got, ok := store.Get([]byte("y")); !ok || !bytes.Equal(got.Value, []byte("y1")) {
+		t.Fatalf("expected current y1, got %+v (ok=%v)", got, ok)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -167,6 +176,9 @@ func TestSnapshotRangeSkipsTombstone(t *testing.T) {
 	if !ok || !bytes.Equal(got.Value, []byte("v1")) {
 		t.Fatalf("expected snapshot1 to retain v1, got %+v (ok=%v)", got, ok)
 	}
+	if got, ok := snap2.Get([]byte("k")); ok || !got.Tombstone {
+		t.Fatalf("expected snapshot2 tombstone, ok=%v entry=%+v", ok, got)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -215,6 +227,15 @@ func TestSnapshotRangeIncludesSSTable(t *testing.T) {
 	}
 	if !bytes.Equal(keys[0], []byte("a")) || !bytes.Equal(keys[1], []byte("b")) || !bytes.Equal(keys[2], []byte("c")) {
 		t.Fatalf("unexpected order: %q %q %q", keys[0], keys[1], keys[2])
+	}
+	if got, ok := snap.Get([]byte("a")); !ok || !bytes.Equal(got.Value, []byte("1")) {
+		t.Fatalf("expected snapshot a=1, ok=%v val=%q", ok, got.Value)
+	}
+	if got, ok := snap.Get([]byte("b")); !ok || !bytes.Equal(got.Value, []byte("22")) {
+		t.Fatalf("expected snapshot b=22, ok=%v val=%q", ok, got.Value)
+	}
+	if got, ok := snap.Get([]byte("c")); !ok || !bytes.Equal(got.Value, []byte("3")) {
+		t.Fatalf("expected snapshot c=3, ok=%v val=%q", ok, got.Value)
 	}
 }
 
@@ -265,6 +286,9 @@ func TestSnapshotRangeMemtableOverridesSSTable(t *testing.T) {
 	}
 	if !bytes.Equal(keys[0], []byte("a")) || !bytes.Equal(vals[0], []byte("9")) {
 		t.Fatalf("expected updated value, got %q=%q", keys[0], vals[0])
+	}
+	if got, ok := snap.Get([]byte("b")); ok || !got.Tombstone {
+		t.Fatalf("expected snapshot b tombstone, ok=%v entry=%+v", ok, got)
 	}
 }
 

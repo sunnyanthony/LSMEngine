@@ -18,7 +18,7 @@ type ReplayConfig struct {
 	Checkpoint uint64
 	BatchSize  int
 	Build      func(memory.EntryView) types.Entry
-	Apply      func([]types.Entry)
+	Apply      func([]types.Entry) error
 	BumpSeq    func(uint64)
 }
 
@@ -32,12 +32,14 @@ func ReplayWAL(cfg ReplayConfig) error {
 		batchSize = defaultReplayBatchSize
 	}
 	var batch []types.Entry
-	flushBatch := func() {
+	flushBatch := func() error {
 		if len(batch) == 0 {
-			return
+			return nil
 		}
 		if cfg.Apply != nil {
-			cfg.Apply(batch)
+			if err := cfg.Apply(batch); err != nil {
+				return err
+			}
 		}
 		if cfg.BumpSeq != nil {
 			for i := range batch {
@@ -45,6 +47,7 @@ func ReplayWAL(cfg ReplayConfig) error {
 			}
 		}
 		batch = batch[:0]
+		return nil
 	}
 	err := cfg.WAL.ReplayViews(func(view memory.EntryView) error {
 		if view.Seq <= cfg.Checkpoint {
@@ -53,10 +56,15 @@ func ReplayWAL(cfg ReplayConfig) error {
 		owned := cfg.Build(view)
 		batch = append(batch, owned)
 		if len(batch) >= batchSize {
-			flushBatch()
+			return flushBatch()
 		}
 		return nil
 	})
-	flushBatch()
-	return err
+	if err := flushBatch(); err != nil {
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }

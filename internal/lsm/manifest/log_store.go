@@ -13,11 +13,11 @@ import (
 
 // LogOptions configures the append-only manifest store.
 type LogOptions struct {
-	LogPath              string
-	CheckpointPath       string
-	CheckpointEveryN     int
-	CheckpointPerm       os.FileMode
-	LogPerm              os.FileMode
+	LogPath          string
+	CheckpointPath   string
+	CheckpointEveryN int
+	CheckpointPerm   os.FileMode
+	LogPerm          os.FileMode
 }
 
 // LogStore persists manifest updates to an append-only log with checkpoints.
@@ -114,7 +114,8 @@ func (s *LogStore) loadLocked() error {
 	state := Manifest{}
 	if data, err := os.ReadFile(s.opts.CheckpointPath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &state); err != nil {
-			return fmt.Errorf("manifest checkpoint unmarshal: %w", err)
+			// Ignore corrupt checkpoints; fall back to replaying the log.
+			state = Manifest{}
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("manifest checkpoint read: %w", err)

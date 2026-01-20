@@ -9,7 +9,7 @@ func (l *LSM) tableEditor() tableedit.Editor {
 		return nil
 	}
 	if l.tableEdits == nil {
-		l.tableEdits = tableedit.New(l.tables, l.manifest, l.logger)
+		l.tableEdits = tableedit.New(l.tables, l.manifest, l.logger, l.remover)
 	}
 	return l.tableEdits
 }
