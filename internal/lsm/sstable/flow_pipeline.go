@@ -1,4 +1,6 @@
-package flow
+// SSTable read pipeline (index/filter/data/prefetch).
+
+package sstable
 
 import (
 	"bytes"
@@ -7,15 +9,75 @@ import (
 	"sort"
 	"sync"
 
-	"lsmengine/internal/lsm/sstable/block"
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/internal/lsm/sstable/bloom"
 	"lsmengine/internal/lsm/sstable/cache"
 	"lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/sstable/format"
-	"lsmengine/internal/lsm/sstable/index"
 	"lsmengine/internal/lsm/sstable/storage"
 	"lsmengine/pkg/lsm/errs"
 )
+
+// FlowItem is the message passed through the read DAG/state machine.
+type FlowItem struct {
+	Key   []byte
+	Index format.IndexEntry
+	Block *format.Block
+	Entry memory.EntryView
+	Found bool
+	Done  bool
+	Err   error
+}
+
+type NodeResult struct {
+	Next Node
+	Done bool
+	Err  error
+}
+
+// Node processes a FlowItem and returns the next step.
+type Node interface {
+	Process(ctx context.Context, item *FlowItem) NodeResult
+}
+
+type nopObserver struct{}
+
+func (nopObserver) OnNode(event config.FlowEvent, node string)             {}
+func (nopObserver) OnError(event config.FlowEvent, node string, err error) {}
+
+type PrefetchBudget struct {
+	bytes  int
+	blocks int
+}
+
+func NewPrefetchBudget(policy config.PolicySnapshot) *PrefetchBudget {
+	if policy.PrefetchBudgetBytes > 0 {
+		return &PrefetchBudget{bytes: policy.PrefetchBudgetBytes}
+	}
+	if policy.PrefetchBudgetBlocks > 0 {
+		return &PrefetchBudget{blocks: policy.PrefetchBudgetBlocks}
+	}
+	return nil
+}
+
+// ReadBlockPayload is shared between controller and nodes.
+func ReadBlockPayload(ctx context.Context, source storage.BlockSource, desc storage.BlockDescriptor, errBad error) ([]byte, error) {
+	view, err := source.Read(ctx, desc, storage.ReadHint{})
+	if err != nil {
+		if err == io.EOF {
+			return nil, errBad
+		}
+		return nil, err
+	}
+	if view.Release != nil {
+		defer view.Release()
+	}
+	payload, err := format.DecodeBlockPayload(view.Data, desc.Type, errBad)
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
 
 // Pipeline centralizes index/filter lookup, data fetch, and prefetch so
 // reader/writer stay small and act like controllers.
@@ -29,14 +91,14 @@ type Pipeline struct {
 	prefetcher *prefetchNode
 	cache      *cache.BlockCache
 	size       int64
-	observer   FlowObserver
+	observer   config.FlowObserver
 	policy     config.PolicySnapshot
 }
 
-func NewPipeline(source storage.BlockSource, cache *cache.BlockCache, indexCache *cache.IndexCache, filterCache *cache.FilterCache, entries []index.Entry, indexPartitioned bool, filter *bloom.Filter, filterIndex []index.Entry, filterPartitioned bool, size int64, policy config.PolicySnapshot) *Pipeline {
+func NewPipeline(source storage.BlockSource, cache *cache.BlockCache, indexCache *cache.IndexCache, filterCache *cache.FilterCache, entries []format.IndexEntry, indexPartitioned bool, filter *bloom.Filter, filterIndex []format.IndexEntry, filterPartitioned bool, size int64, policy config.PolicySnapshot) *Pipeline {
 	nodes := newNodeRegistry()
-	observer := FlowObserver(nopObserver{})
-	// decode: locate the entry within a data block.
+	observer := config.FlowObserver(nopObserver{})
+	// decode: locate the entry within a data format.
 	decode := &decodeNode{observer: observer}
 	// data: fetch data blocks (with cache) before decoding.
 	data := newDataNode(source, cache, nodes, policy, size, decode, observer)
@@ -68,7 +130,7 @@ func NewPipeline(source storage.BlockSource, cache *cache.BlockCache, indexCache
 	return p
 }
 
-func (p *Pipeline) WithObserver(obs FlowObserver) *Pipeline {
+func (p *Pipeline) WithObserver(obs config.FlowObserver) *Pipeline {
 	if obs == nil {
 		p.observer = nopObserver{}
 		return p
@@ -121,16 +183,16 @@ func (p *Pipeline) startNode() Node {
 }
 
 // get runs the DAG for a single key and returns the decoded entry view.
-func (p *Pipeline) Get(ctx context.Context, key []byte) (block.EntryView, bool, error) {
+func (p *Pipeline) Get(ctx context.Context, key []byte) (memory.EntryView, bool, error) {
 	if p == nil {
-		return block.EntryView{}, false, nil
+		return memory.EntryView{}, false, nil
 	}
 	item := &FlowItem{Key: key}
 	node := p.startNode()
 	for node != nil {
 		res := node.Process(ctx, item)
 		if res.Err != nil {
-			return block.EntryView{}, false, res.Err
+			return memory.EntryView{}, false, res.Err
 		}
 		if res.Done || item.Done {
 			break
@@ -140,10 +202,10 @@ func (p *Pipeline) Get(ctx context.Context, key []byte) (block.EntryView, bool, 
 	if item.Found {
 		return item.Entry, true, nil
 	}
-	return block.EntryView{}, false, nil
+	return memory.EntryView{}, false, nil
 }
 
-func (p *Pipeline) ReadBlockEntry(entry index.Entry) (*block.Block, error) {
+func (p *Pipeline) ReadBlockEntry(entry format.IndexEntry) (*format.Block, error) {
 	if err := p.dataNode.validateEntry(entry, errs.ErrSSTableBadBlock); err != nil {
 		return nil, err
 	}
@@ -151,7 +213,7 @@ func (p *Pipeline) ReadBlockEntry(entry index.Entry) (*block.Block, error) {
 	return blk, err
 }
 
-func (p *Pipeline) Prefetch(entries []index.Entry, start int, budget *PrefetchBudget) {
+func (p *Pipeline) Prefetch(entries []format.IndexEntry, start int, budget *PrefetchBudget) {
 	if p == nil || p.prefetcher == nil || !p.policy.UsePrefetch {
 		return
 	}
@@ -167,10 +229,10 @@ type dataNode struct {
 	policy config.PolicySnapshot
 	size   int64
 	next   Node
-	obs    FlowObserver
+	obs    config.FlowObserver
 }
 
-func newDataNode(source storage.BlockSource, cache *cache.BlockCache, nodes *nodeRegistry, policy config.PolicySnapshot, size int64, next Node, obs FlowObserver) *dataNode {
+func newDataNode(source storage.BlockSource, cache *cache.BlockCache, nodes *nodeRegistry, policy config.PolicySnapshot, size int64, next Node, obs config.FlowObserver) *dataNode {
 	return &dataNode{
 		source: source,
 		cache:  cache,
@@ -189,13 +251,13 @@ func (n *dataNode) Process(ctx context.Context, item *FlowItem) NodeResult {
 	blk, cacheHit, err := n.fetch(ctx, item.Index)
 	if err != nil {
 		if n.obs != nil {
-			n.obs.OnError(FlowEvent{Key: item.Key, Node: "data", Err: err}, "data", err)
+			n.obs.OnError(config.FlowEvent{Key: item.Key, Node: "data", Err: err}, "data", err)
 		}
 		return NodeResult{Err: err}
 	}
 	item.Block = blk
 	if n.obs != nil {
-		n.obs.OnNode(FlowEvent{
+		n.obs.OnNode(config.FlowEvent{
 			Key:      item.Key,
 			Node:     "data",
 			CacheHit: cacheHit,
@@ -205,7 +267,7 @@ func (n *dataNode) Process(ctx context.Context, item *FlowItem) NodeResult {
 	return NodeResult{Next: n.next}
 }
 
-func (n *dataNode) validateEntry(entry index.Entry, errBad error) error {
+func (n *dataNode) validateEntry(entry format.IndexEntry, errBad error) error {
 	if entry.Length == 0 {
 		return errBad
 	}
@@ -218,7 +280,7 @@ func (n *dataNode) validateEntry(entry index.Entry, errBad error) error {
 	return nil
 }
 
-func (n *dataNode) fetch(ctx context.Context, entry index.Entry) (*block.Block, bool, error) {
+func (n *dataNode) fetch(ctx context.Context, entry format.IndexEntry) (*format.Block, bool, error) {
 	desc := storage.BlockDescriptor{
 		ID:     entry.Offset,
 		Type:   format.BlockTypeData,
@@ -231,7 +293,7 @@ func (n *dataNode) fetch(ctx context.Context, entry index.Entry) (*block.Block, 
 }
 
 type decodeNode struct {
-	observer FlowObserver
+	observer config.FlowObserver
 }
 
 func (n *decodeNode) Process(_ context.Context, item *FlowItem) NodeResult {
@@ -241,7 +303,7 @@ func (n *decodeNode) Process(_ context.Context, item *FlowItem) NodeResult {
 	entry, ok, err := item.Block.FindView(item.Key)
 	if err != nil {
 		if n.observer != nil {
-			n.observer.OnError(FlowEvent{Key: item.Key, Node: "decode", Err: err}, "decode", err)
+			n.observer.OnError(config.FlowEvent{Key: item.Key, Node: "decode", Err: err}, "decode", err)
 		}
 		return NodeResult{Err: err}
 	}
@@ -249,7 +311,7 @@ func (n *decodeNode) Process(_ context.Context, item *FlowItem) NodeResult {
 	item.Found = ok
 	item.Done = true
 	if n != nil && n.observer != nil {
-		n.observer.OnNode(FlowEvent{Key: item.Key, Node: "decode"}, "decode")
+		n.observer.OnNode(config.FlowEvent{Key: item.Key, Node: "decode"}, "decode")
 	}
 	return NodeResult{Done: true}
 }
@@ -270,7 +332,7 @@ func newDataBlockNode(desc storage.BlockDescriptor, source storage.BlockSource, 
 	}
 }
 
-func (n *dataBlockNode) Fetch(ctx context.Context) (*block.Block, bool, error) {
+func (n *dataBlockNode) Fetch(ctx context.Context) (*format.Block, bool, error) {
 	if n.cache != nil {
 		if blk, ok := n.cache.Get(n.desc.Offset); ok {
 			return blk, true, nil
@@ -290,7 +352,7 @@ func (n *dataBlockNode) Fetch(ctx context.Context) (*block.Block, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	blk, err := block.Decode(payload)
+	blk, err := format.Decode(payload)
 	if err != nil {
 		return nil, false, err
 	}
@@ -314,7 +376,7 @@ func newIndexBlockNode(desc storage.BlockDescriptor, source storage.BlockSource,
 	}
 }
 
-func (n *indexBlockNode) Fetch(ctx context.Context) ([]index.Entry, error) {
+func (n *indexBlockNode) Fetch(ctx context.Context) ([]format.IndexEntry, error) {
 	if n.cache != nil {
 		if entries, ok := n.cache.Get(n.desc.Offset); ok {
 			return entries, nil
@@ -334,7 +396,7 @@ func (n *indexBlockNode) Fetch(ctx context.Context) ([]index.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := index.Decode(payload)
+	entries, err := format.DecodeIndex(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -439,16 +501,16 @@ func (r *nodeRegistry) filterNode(desc storage.BlockDescriptor, source storage.B
 // --- Index ---
 
 type indexNode struct {
-	top         []index.Entry
+	top         []format.IndexEntry
 	partitioned bool
 	source      storage.BlockSource
 	cache       *cache.IndexCache
 	nodes       *nodeRegistry
 	next        Node
-	obs         FlowObserver
+	obs         config.FlowObserver
 }
 
-func newIndexNode(top []index.Entry, partitioned bool, source storage.BlockSource, cache *cache.IndexCache, nodes *nodeRegistry, next Node, obs FlowObserver) *indexNode {
+func newIndexNode(top []format.IndexEntry, partitioned bool, source storage.BlockSource, cache *cache.IndexCache, nodes *nodeRegistry, next Node, obs config.FlowObserver) *indexNode {
 	return &indexNode{
 		top:         top,
 		partitioned: partitioned,
@@ -474,33 +536,33 @@ func (n *indexNode) Process(ctx context.Context, item *FlowItem) NodeResult {
 	}
 	item.Index = entry
 	if n.obs != nil {
-		n.obs.OnNode(FlowEvent{Key: item.Key, Node: "index"}, "index")
+		n.obs.OnNode(config.FlowEvent{Key: item.Key, Node: "index"}, "index")
 	}
 	return NodeResult{Next: n.next}
 }
 
-func (n *indexNode) Find(ctx context.Context, key []byte) (index.Entry, bool, error) {
+func (n *indexNode) Find(ctx context.Context, key []byte) (format.IndexEntry, bool, error) {
 	if n == nil {
-		return index.Entry{}, false, nil
+		return format.IndexEntry{}, false, nil
 	}
 	if !n.partitioned {
 		idx := findBlock(n.top, key)
 		if idx < 0 {
-			return index.Entry{}, false, nil
+			return format.IndexEntry{}, false, nil
 		}
 		return n.top[idx], true, nil
 	}
 	partIdx := findBlock(n.top, key)
 	if partIdx < 0 {
-		return index.Entry{}, false, nil
+		return format.IndexEntry{}, false, nil
 	}
 	part, err := n.readPartition(ctx, n.top[partIdx])
 	if err != nil {
-		return index.Entry{}, false, err
+		return format.IndexEntry{}, false, err
 	}
 	idx := findBlock(part, key)
 	if idx < 0 {
-		return index.Entry{}, false, nil
+		return format.IndexEntry{}, false, nil
 	}
 	return part[idx], true, nil
 }
@@ -515,7 +577,7 @@ func (n *indexNode) NewRange(start []byte) *IndexRangePlan {
 	}
 }
 
-func (n *indexNode) readPartition(ctx context.Context, entry index.Entry) ([]index.Entry, error) {
+func (n *indexNode) readPartition(ctx context.Context, entry format.IndexEntry) ([]format.IndexEntry, error) {
 	desc := storage.BlockDescriptor{
 		ID:     entry.Offset,
 		Type:   format.BlockTypeIndex,
@@ -535,7 +597,7 @@ type IndexRangePlan struct {
 	started   bool
 }
 
-func (p *IndexRangePlan) Next(ctx context.Context) ([]index.Entry, error) {
+func (p *IndexRangePlan) Next(ctx context.Context) ([]format.IndexEntry, error) {
 	if p == nil || p.node == nil || p.done {
 		return nil, io.EOF
 	}
@@ -576,16 +638,16 @@ func (p *IndexRangePlan) Next(ctx context.Context) ([]index.Entry, error) {
 
 type filterNode struct {
 	filter      *bloom.Filter
-	filterIndex []index.Entry
+	filterIndex []format.IndexEntry
 	partitioned bool
 	source      storage.BlockSource
 	cache       *cache.FilterCache
 	nodes       *nodeRegistry
 	next        Node
-	obs         FlowObserver
+	obs         config.FlowObserver
 }
 
-func newFilterNode(filter *bloom.Filter, filterIndex []index.Entry, partitioned bool, source storage.BlockSource, cache *cache.FilterCache, nodes *nodeRegistry, next Node, obs FlowObserver) *filterNode {
+func newFilterNode(filter *bloom.Filter, filterIndex []format.IndexEntry, partitioned bool, source storage.BlockSource, cache *cache.FilterCache, nodes *nodeRegistry, next Node, obs config.FlowObserver) *filterNode {
 	return &filterNode{
 		filter:      filter,
 		filterIndex: filterIndex,
@@ -608,7 +670,7 @@ func (n *filterNode) Process(ctx context.Context, item *FlowItem) NodeResult {
 		return NodeResult{Done: true}
 	}
 	if n.obs != nil {
-		n.obs.OnNode(FlowEvent{Key: item.Key, Node: "filter"}, "filter")
+		n.obs.OnNode(config.FlowEvent{Key: item.Key, Node: "filter"}, "filter")
 	}
 	return NodeResult{Next: n.next}
 }
@@ -655,7 +717,7 @@ type prefetchNode struct {
 	nodes  *nodeRegistry
 
 	mu sync.Mutex
-	ch chan index.Entry
+	ch chan format.IndexEntry
 	wg sync.WaitGroup
 }
 
@@ -680,14 +742,14 @@ func (p *prefetchNode) Start() {
 	if p.ch != nil {
 		return
 	}
-	p.ch = make(chan index.Entry, p.policy.PrefetchQueueDepth)
+	p.ch = make(chan format.IndexEntry, p.policy.PrefetchQueueDepth)
 	workers := p.policy.PrefetchWorkers
 	if workers <= 0 {
 		workers = 1
 	}
 	for i := 0; i < workers; i++ {
 		p.wg.Add(1)
-		go func(ch <-chan index.Entry) {
+		go func(ch <-chan format.IndexEntry) {
 			defer p.wg.Done()
 			for entry := range ch {
 				p.prefetchEntry(entry)
@@ -711,7 +773,7 @@ func (p *prefetchNode) Stop() {
 	p.wg.Wait()
 }
 
-func (p *prefetchNode) Prefetch(entries []index.Entry, start int, budget *PrefetchBudget) {
+func (p *prefetchNode) Prefetch(entries []format.IndexEntry, start int, budget *PrefetchBudget) {
 	if p == nil || p.cache == nil {
 		return
 	}
@@ -730,7 +792,7 @@ func (p *prefetchNode) Prefetch(entries []index.Entry, start int, budget *Prefet
 	}
 }
 
-func (p *prefetchNode) enqueue(entry index.Entry) {
+func (p *prefetchNode) enqueue(entry format.IndexEntry) {
 	p.mu.Lock()
 	ch := p.ch
 	p.mu.Unlock()
@@ -743,7 +805,7 @@ func (p *prefetchNode) enqueue(entry index.Entry) {
 	}
 }
 
-func (p *prefetchNode) prefetchEntry(entry index.Entry) {
+func (p *prefetchNode) prefetchEntry(entry format.IndexEntry) {
 	if entry.Length == 0 {
 		return
 	}
@@ -761,14 +823,14 @@ func (p *prefetchNode) prefetchEntry(entry index.Entry) {
 	_, _, _ = node.Fetch(context.Background())
 }
 
-func (p *prefetchNode) prefetchTargets(entries []index.Entry, start int, budget *PrefetchBudget) []index.Entry {
+func (p *prefetchNode) prefetchTargets(entries []format.IndexEntry, start int, budget *PrefetchBudget) []format.IndexEntry {
 	if len(entries) == 0 {
 		return nil
 	}
 	if budget == nil {
 		return nil
 	}
-	out := make([]index.Entry, 0, budget.blocks)
+	out := make([]format.IndexEntry, 0, budget.blocks)
 	remainingBytes := budget.bytes
 	for i := 1; ; i++ {
 		idx := start + i
@@ -796,14 +858,14 @@ func (p *prefetchNode) prefetchTargets(entries []index.Entry, start int, budget 
 	return out
 }
 
-func (p *prefetchNode) prefetchTargetsBudget(entries []index.Entry, start int, budget *PrefetchBudget) []index.Entry {
+func (p *prefetchNode) prefetchTargetsBudget(entries []format.IndexEntry, start int, budget *PrefetchBudget) []format.IndexEntry {
 	if budget.bytes <= 0 && budget.blocks <= 0 {
 		return nil
 	}
 	if budget.bytes > 0 {
 		remaining := budget.bytes
 		prefetched := 0
-		var out []index.Entry
+		var out []format.IndexEntry
 		for idx := start + 1; idx < len(entries); idx++ {
 			entry := entries[idx]
 			if !p.prefetchEntryCandidate(entry) {
@@ -822,7 +884,7 @@ func (p *prefetchNode) prefetchTargetsBudget(entries []index.Entry, start int, b
 		budget.bytes = remaining
 		return out
 	}
-	out := make([]index.Entry, 0, budget.blocks)
+	out := make([]format.IndexEntry, 0, budget.blocks)
 	for i := 1; i <= budget.blocks; i++ {
 		idx := start + i
 		if idx >= len(entries) {
@@ -843,7 +905,7 @@ func (p *prefetchNode) prefetchTargetsBudget(entries []index.Entry, start int, b
 	return out
 }
 
-func (p *prefetchNode) prefetchEntryCandidate(entry index.Entry) bool {
+func (p *prefetchNode) prefetchEntryCandidate(entry format.IndexEntry) bool {
 	if entry.Length == 0 {
 		return false
 	}
@@ -856,7 +918,7 @@ func (p *prefetchNode) prefetchEntryCandidate(entry index.Entry) bool {
 	return true
 }
 
-func findBlock(entries []index.Entry, key []byte) int {
+func findBlock(entries []format.IndexEntry, key []byte) int {
 	if len(entries) == 0 {
 		return -1
 	}

@@ -1,4 +1,6 @@
-package block
+// Data block builder/decoder and cursor.
+
+package format
 
 import (
 	"bytes"
@@ -6,6 +8,7 @@ import (
 	"errors"
 	"sort"
 
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -174,14 +177,6 @@ type Block struct {
 	restartKeys [][]byte
 }
 
-// EntryView is a zero-copy view; slices are valid until the iterator advances.
-type EntryView struct {
-	Key       []byte
-	Value     []byte
-	Tombstone bool
-	Seq       uint64
-}
-
 type Cursor struct {
 	block   *Block
 	offset  int
@@ -248,9 +243,9 @@ func (b *Block) Find(key []byte) (types.Entry, bool, error) {
 	return view.ToEntry(), true, nil
 }
 
-func (b *Block) FindView(key []byte) (EntryView, bool, error) {
+func (b *Block) FindView(key []byte) (memory.EntryView, bool, error) {
 	if len(b.restarts) == 0 {
-		return EntryView{}, false, nil
+		return memory.EntryView{}, false, nil
 	}
 	idx := sort.Search(len(b.restartKeys), func(i int) bool {
 		return bytes.Compare(b.restartKeys[i], key) > 0
@@ -266,24 +261,24 @@ func (b *Block) FindView(key []byte) (EntryView, bool, error) {
 	for {
 		entry, ok, err := cursor.Next()
 		if err != nil {
-			return EntryView{}, false, err
+			return memory.EntryView{}, false, err
 		}
 		if !ok {
-			return EntryView{}, false, nil
+			return memory.EntryView{}, false, nil
 		}
 		cmp := bytes.Compare(entry.Key, key)
 		if cmp == 0 {
 			return entry, true, nil
 		}
 		if cmp > 0 {
-			return EntryView{}, false, nil
+			return memory.EntryView{}, false, nil
 		}
 	}
 }
 
-func (b *Block) Seek(key []byte) (*Cursor, EntryView, bool, error) {
+func (b *Block) Seek(key []byte) (*Cursor, memory.EntryView, bool, error) {
 	if len(b.restarts) == 0 {
-		return nil, EntryView{}, false, nil
+		return nil, memory.EntryView{}, false, nil
 	}
 	idx := sort.Search(len(b.restartKeys), func(i int) bool {
 		return bytes.Compare(b.restartKeys[i], key) > 0
@@ -295,10 +290,10 @@ func (b *Block) Seek(key []byte) (*Cursor, EntryView, bool, error) {
 	for {
 		entry, ok, err := cursor.Next()
 		if err != nil {
-			return nil, EntryView{}, false, err
+			return nil, memory.EntryView{}, false, err
 		}
 		if !ok {
-			return nil, EntryView{}, false, nil
+			return nil, memory.EntryView{}, false, nil
 		}
 		if bytes.Compare(entry.Key, key) >= 0 {
 			return cursor, entry, true, nil
@@ -319,13 +314,13 @@ func NewCursor(b *Block, offset, limit int) *Cursor {
 	return &Cursor{block: b, offset: offset, limit: limit}
 }
 
-func (c *Cursor) Next() (EntryView, bool, error) {
+func (c *Cursor) Next() (memory.EntryView, bool, error) {
 	if c.offset >= c.limit {
-		return EntryView{}, false, nil
+		return memory.EntryView{}, false, nil
 	}
 	data := c.block.data
 	if c.limit-c.offset < entryHeaderSize {
-		return EntryView{}, false, errors.New("sstable: entry truncated")
+		return memory.EntryView{}, false, errors.New("sstable: entry truncated")
 	}
 	shared := binary.LittleEndian.Uint32(data[c.offset : c.offset+4])
 	unshared := binary.LittleEndian.Uint32(data[c.offset+4 : c.offset+8])
@@ -337,10 +332,10 @@ func (c *Cursor) Next() (EntryView, bool, error) {
 	keyEnd := keyStart + int(unshared)
 	valEnd := keyEnd + int(valLen)
 	if keyStart < 0 || valEnd > c.limit {
-		return EntryView{}, false, errors.New("sstable: entry truncated")
+		return memory.EntryView{}, false, errors.New("sstable: entry truncated")
 	}
 	if int(shared) > len(c.lastKey) {
-		return EntryView{}, false, errors.New("sstable: entry shared prefix invalid")
+		return memory.EntryView{}, false, errors.New("sstable: entry shared prefix invalid")
 	}
 	need := int(shared) + int(unshared)
 	if cap(c.scratch) < need {
@@ -356,7 +351,7 @@ func (c *Cursor) Next() (EntryView, bool, error) {
 	c.offset = valEnd
 	c.lastKey = append(c.lastKey[:0], key...)
 
-	return EntryView{
+	return memory.EntryView{
 		Key:       key,
 		Value:     value,
 		Tombstone: flags&0x1 == 0x1,
@@ -386,15 +381,6 @@ func appendEntry(dst []byte, shared, unshared int, entry types.Entry) []byte {
 	dst = append(dst, entry.Key[shared:]...)
 	dst = append(dst, entry.Value...)
 	return dst
-}
-
-func (e EntryView) ToEntry() types.Entry {
-	return types.Entry{
-		Key:       append([]byte(nil), e.Key...),
-		Value:     append([]byte(nil), e.Value...),
-		Tombstone: e.Tombstone,
-		Seq:       e.Seq,
-	}
 }
 
 func entryEncodedSize(unshared, valLen int) int {

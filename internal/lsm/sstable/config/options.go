@@ -1,6 +1,13 @@
+// SSTable options, defaults, and validation.
+
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+
+	"lsmengine/internal/lsm/iofs"
+)
 
 type Compression string
 
@@ -25,6 +32,7 @@ const (
 
 type Options struct {
 	Dir                     string
+	FS                      iofs.FS
 	BlockTargetBytes        int
 	BlockMaxBytes           int
 	RestartInterval         int
@@ -59,6 +67,7 @@ type Options struct {
 func DefaultOptions(dir string) Options {
 	return Options{
 		Dir:                     dir,
+		FS:                      iofs.OSFS{},
 		BlockTargetBytes:        64 * 1024,
 		BlockMaxBytes:           256 * 1024,
 		RestartInterval:         16,
@@ -87,6 +96,9 @@ func DefaultOptions(dir string) Options {
 }
 
 func (o *Options) Normalize() {
+	if o.FS == nil {
+		o.FS = iofs.OSFS{}
+	}
 	indexCacheDisabled := o.IndexCacheBytes < 0
 	filterCacheDisabled := o.FilterCacheBytes < 0
 	readBufferDisabled := o.ReadBufferMaxBytes < 0
@@ -191,4 +203,135 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("unsupported corruption policy %q", o.CorruptionPolicy)
 	}
 	return nil
+}
+
+// PolicySnapshot is a read-only set of tunables the controller can issue to the
+// pipeline without touching data path logic.
+type PolicySnapshot struct {
+	UsePrefetch          bool
+	PrefetchBudgetBytes  int
+	PrefetchBudgetBlocks int
+	PrefetchAsync        bool
+	PrefetchQueueDepth   int
+	PrefetchWorkers      int
+	UsePartitionedIndex  bool
+	UsePartitionedFilter bool
+	UseMmap              bool
+	ReadBufferMaxBytes   int
+	ReadBlockMaxBytes    int
+	CorruptionPolicy     CorruptionPolicy
+}
+
+func SnapshotFromOptions(opts Options, partitionedIndex bool, partitionedFilter bool) PolicySnapshot {
+	budgetBytes := opts.PrefetchBudgetBytes
+	budgetBlocks := opts.PrefetchBudgetBlocks
+	// Backward compat: fold lookahead knobs into the budget so prefetch has a single source of truth.
+	if budgetBytes == 0 && opts.PrefetchBytes > 0 {
+		budgetBytes = opts.PrefetchBytes
+	}
+	if budgetBlocks == 0 && opts.PrefetchBlocks > 0 {
+		budgetBlocks = opts.PrefetchBlocks
+	}
+	base := PolicySnapshot{
+		UsePrefetch:          budgetBytes > 0 || budgetBlocks > 0 || opts.PrefetchAsync,
+		PrefetchBudgetBytes:  budgetBytes,
+		PrefetchBudgetBlocks: budgetBlocks,
+		PrefetchAsync:        opts.PrefetchAsync,
+		PrefetchQueueDepth:   opts.PrefetchQueueDepth,
+		PrefetchWorkers:      opts.PrefetchWorkers,
+		UsePartitionedIndex:  partitionedIndex,
+		UsePartitionedFilter: partitionedFilter,
+		UseMmap:              opts.UseMmap,
+		ReadBufferMaxBytes:   opts.ReadBufferMaxBytes,
+		ReadBlockMaxBytes:    opts.ReadBlockMaxBytes,
+		CorruptionPolicy:     opts.CorruptionPolicy,
+	}
+	if opts.PolicyOverride != nil {
+		return *opts.PolicyOverride
+	}
+	return base
+}
+
+// FlowEvent is emitted to observers; it is a copy of the pipeline state.
+type FlowEvent struct {
+	Key      []byte
+	Node     string
+	CacheHit bool
+	Mmapped  bool
+	Err      error
+}
+
+// FlowObserver receives events from the pipeline; observers should be fast.
+type FlowObserver interface {
+	OnNode(event FlowEvent, node string)
+	OnError(event FlowEvent, node string, err error)
+}
+
+// FlowMetrics aggregates lightweight counters from FlowEvents.
+type FlowMetrics struct {
+	cacheHit   atomic.Uint64
+	cacheMiss  atomic.Uint64
+	filterPass atomic.Uint64
+	filterSkip atomic.Uint64
+	errors     atomic.Uint64
+}
+
+func (m *FlowMetrics) Record(event FlowEvent, isFilter bool) {
+	if event.Err != nil {
+		m.errors.Add(1)
+		return
+	}
+	if isFilter {
+		m.filterPass.Add(1)
+		return
+	}
+	if event.CacheHit {
+		m.cacheHit.Add(1)
+	} else {
+		m.cacheMiss.Add(1)
+	}
+}
+
+type MetricsSnapshot struct {
+	CacheHit   uint64
+	CacheMiss  uint64
+	FilterPass uint64
+	FilterSkip uint64
+	Errors     uint64
+}
+
+func (m *FlowMetrics) Snapshot() MetricsSnapshot {
+	return MetricsSnapshot{
+		CacheHit:   m.cacheHit.Load(),
+		CacheMiss:  m.cacheMiss.Load(),
+		FilterPass: m.filterPass.Load(),
+		FilterSkip: m.filterSkip.Load(),
+		Errors:     m.errors.Load(),
+	}
+}
+
+// MetricsObserver is a FlowObserver that accumulates metrics.
+type MetricsObserver struct {
+	metrics *FlowMetrics
+}
+
+func NewMetricsObserver(target *FlowMetrics) *MetricsObserver {
+	if target == nil {
+		target = &FlowMetrics{}
+	}
+	return &MetricsObserver{metrics: target}
+}
+
+func (o *MetricsObserver) OnNode(event FlowEvent, node string) {
+	if o == nil || o.metrics == nil {
+		return
+	}
+	o.metrics.Record(event, node == "filter")
+}
+
+func (o *MetricsObserver) OnError(event FlowEvent, node string, err error) {
+	if o == nil || o.metrics == nil {
+		return
+	}
+	o.metrics.Record(FlowEvent{Err: err}, false)
 }

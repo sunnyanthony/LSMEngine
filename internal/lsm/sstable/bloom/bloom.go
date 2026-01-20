@@ -1,3 +1,5 @@
+// Bloom filter implementation and writers.
+
 package bloom
 
 import (
@@ -7,7 +9,6 @@ import (
 
 	"lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/sstable/format"
-	"lsmengine/internal/lsm/sstable/index"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -119,11 +120,11 @@ func WriteBloomBlock(w io.Writer, filter *Filter, offset *uint64) (uint64, uint3
 	return blockOffset, uint32(n), nil
 }
 
-func WritePartitionedBloomFilters(w io.Writer, entries []types.Entry, blocks []index.Entry, blockEntryCounts []int, opts config.Options, offset *uint64) ([]index.Entry, error) {
+func WritePartitionedBloomFilters(w io.Writer, entries []types.Entry, blocks []format.IndexEntry, blockEntryCounts []int, opts config.Options, offset *uint64) ([]format.IndexEntry, error) {
 	if len(blocks) == 0 || len(blockEntryCounts) == 0 || opts.IndexPartitionEntries <= 0 {
 		return nil, nil
 	}
-	filterIndexEntries := make([]index.Entry, 0, (len(blocks)+opts.IndexPartitionEntries-1)/opts.IndexPartitionEntries)
+	filterIndexEntries := make([]format.IndexEntry, 0, (len(blocks)+opts.IndexPartitionEntries-1)/opts.IndexPartitionEntries)
 	entryIdx := 0
 	for i := 0; i < len(blockEntryCounts); {
 		end := i + opts.IndexPartitionEntries
@@ -147,7 +148,7 @@ func WritePartitionedBloomFilters(w io.Writer, entries []types.Entry, blocks []i
 		if err != nil {
 			return nil, err
 		}
-		filterIndexEntries = append(filterIndexEntries, index.Entry{
+		filterIndexEntries = append(filterIndexEntries, format.IndexEntry{
 			Key:    append([]byte(nil), blocks[i].Key...),
 			Offset: *offset,
 			Length: uint32(n),

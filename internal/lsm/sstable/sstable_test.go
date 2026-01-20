@@ -7,16 +7,15 @@ import (
 	"os"
 	"testing"
 
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/sstable/format"
-	"lsmengine/internal/lsm/sstable/index"
-	"lsmengine/internal/lsm/sstable/meta"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
 
 func TestSSTableWriterReaderGet(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 
@@ -50,7 +49,7 @@ func TestSSTableWriterReaderGet(t *testing.T) {
 
 func TestSSTableGetView(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 
@@ -79,7 +78,7 @@ func TestSSTableGetView(t *testing.T) {
 
 func TestSSTableAdaptiveRestartInterval(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 	opts.RestartIntervalAdaptive = true
@@ -104,7 +103,7 @@ func TestSSTableAdaptiveRestartInterval(t *testing.T) {
 
 func TestSSTableRange(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 96
 	opts.BlockMaxBytes = 160
 	opts.PrefetchBlocks = 1
@@ -135,7 +134,7 @@ func TestSSTableRange(t *testing.T) {
 
 func TestSSTableRangePrefetchBudget(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 96
 	opts.BlockMaxBytes = 160
 	opts.BlockCacheBytes = 1 << 20
@@ -163,7 +162,7 @@ func TestSSTableRangePrefetchBudget(t *testing.T) {
 
 func TestSSTableUseMmap(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.UseMmap = true
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
@@ -186,10 +185,10 @@ func TestSSTableUseMmap(t *testing.T) {
 
 func TestSSTableOptionsDisableFeatures(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BloomBitsPerKey = 0
 	opts.BlockCacheBytes = 0
-	opts.Compression = CompressionNone
+	opts.Compression = sstableconfig.CompressionNone
 
 	writer, err := NewSSTableWriter(opts)
 	if err != nil {
@@ -211,7 +210,7 @@ func TestSSTableOptionsDisableFeatures(t *testing.T) {
 
 func TestSSTableGetPrefersHighestSeq(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 
@@ -255,7 +254,7 @@ func makeEntries(n int) []types.Entry {
 
 func TestSSTableCorruptDataBlockFailFast(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 96
 
@@ -293,7 +292,7 @@ func TestSSTableCorruptDataBlockFailFast(t *testing.T) {
 
 func TestSSTableCorruptDataBlockSkipBlock(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 96
 
@@ -314,7 +313,7 @@ func TestSSTableCorruptDataBlockSkipBlock(t *testing.T) {
 	}
 	corruptByte(t, table.Path, int64(index[0].Offset)+int64(index[0].Length)-1)
 
-	opts.CorruptionPolicy = CorruptionSkipBlock
+	opts.CorruptionPolicy = sstableconfig.CorruptionSkipBlock
 	table, err = LoadSSTable(table.Path, opts)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -337,7 +336,7 @@ func TestSSTableCorruptDataBlockSkipBlock(t *testing.T) {
 
 func TestSSTableCorruptDataBlockDropTable(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 96
 
@@ -358,7 +357,7 @@ func TestSSTableCorruptDataBlockDropTable(t *testing.T) {
 	}
 	corruptByte(t, table.Path, int64(index[0].Offset)+int64(index[0].Length)-1)
 
-	opts.CorruptionPolicy = CorruptionDropTable
+	opts.CorruptionPolicy = sstableconfig.CorruptionDropTable
 	table, err = LoadSSTable(table.Path, opts)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -379,7 +378,7 @@ func TestSSTableCorruptDataBlockDropTable(t *testing.T) {
 
 func TestSSTableCorruptCompressionID(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 96
 
@@ -417,7 +416,7 @@ func TestSSTableCorruptCompressionID(t *testing.T) {
 
 func TestSSTableCorruptMetaBlockFailsOpen(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 
 	writer, err := NewSSTableWriter(opts)
 	if err != nil {
@@ -439,7 +438,7 @@ func TestSSTableCorruptMetaBlockFailsOpen(t *testing.T) {
 
 func TestSSTableCorruptIndexBlockFailsOpen(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 
 	writer, err := NewSSTableWriter(opts)
 	if err != nil {
@@ -461,7 +460,7 @@ func TestSSTableCorruptIndexBlockFailsOpen(t *testing.T) {
 
 func TestSSTableCorruptBloomBlockFailsOpen(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 
 	writer, err := NewSSTableWriter(opts)
 	if err != nil {
@@ -487,7 +486,7 @@ func TestSSTableCorruptBloomBlockFailsOpen(t *testing.T) {
 
 func TestSSTablePartitionedIndexGetRange(t *testing.T) {
 	dir := t.TempDir()
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 96
 	opts.IndexPartitionEntries = 2
@@ -552,28 +551,28 @@ func readFooterForTest(t *testing.T, path string) format.Footer {
 	return ft
 }
 
-func readMetaForTest(t *testing.T, path string, ft format.Footer) meta.Meta {
+func readMetaForTest(t *testing.T, path string, ft format.Footer) format.Meta {
 	t.Helper()
 	buf := readBlockForTest(t, path, int64(ft.MetaOffset), ft.MetaLen)
 	payload, err := format.DecodeBlockPayload(buf, format.BlockTypeMeta, errs.ErrSSTableBadMeta)
 	if err != nil {
 		t.Fatalf("decode meta payload: %v", err)
 	}
-	m, err := meta.Decode(payload)
+	m, err := format.DecodeMeta(payload)
 	if err != nil {
 		t.Fatalf("decode meta: %v", err)
 	}
 	return m
 }
 
-func readIndexForTest(t *testing.T, path string, ft format.Footer) []index.Entry {
+func readIndexForTest(t *testing.T, path string, ft format.Footer) []format.IndexEntry {
 	t.Helper()
 	buf := readBlockForTest(t, path, int64(ft.IndexOffset), ft.IndexLen)
 	payload, err := format.DecodeBlockPayload(buf, format.BlockTypeIndex, errs.ErrSSTableBadIndex)
 	if err != nil {
 		t.Fatalf("decode index payload: %v", err)
 	}
-	indexEntries, err := index.Decode(payload)
+	indexEntries, err := format.DecodeIndex(payload)
 	if err != nil {
 		t.Fatalf("decode index: %v", err)
 	}
@@ -611,7 +610,7 @@ func corruptByte(t *testing.T, path string, offset int64) {
 	}
 }
 
-func corruptCompressionID(t *testing.T, path string, entry index.Entry) {
+func corruptCompressionID(t *testing.T, path string, entry format.IndexEntry) {
 	t.Helper()
 
 	f, err := os.OpenFile(path, os.O_RDWR, 0o644)

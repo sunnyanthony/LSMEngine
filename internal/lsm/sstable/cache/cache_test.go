@@ -3,18 +3,17 @@ package cache
 import (
 	"testing"
 
-	"lsmengine/internal/lsm/sstable/block"
 	"lsmengine/internal/lsm/sstable/bloom"
-	"lsmengine/internal/lsm/sstable/index"
+	"lsmengine/internal/lsm/sstable/format"
 	"lsmengine/pkg/lsm/types"
 )
 
-func newTestBlock(t *testing.T, key string) *block.Block {
+func newTestBlock(t *testing.T, key string) *format.Block {
 	t.Helper()
-	builder := block.NewBuilder(4, false, 0, 0)
+	builder := format.NewBuilder(4, false, 0, 0)
 	builder.Add(types.Entry{Key: []byte(key), Value: []byte("v")})
 	payload := builder.Finish()
-	blk, err := block.Decode(payload)
+	blk, err := format.Decode(payload)
 	if err != nil {
 		t.Fatalf("decode block: %v", err)
 	}
@@ -46,13 +45,13 @@ func TestBlockCacheEviction(t *testing.T) {
 
 func TestIndexCacheEviction(t *testing.T) {
 	cache := NewIndexCache(40)
-	entries := []index.Entry{{Key: []byte("a"), Offset: 1, Length: 1}}
+	entries := []format.IndexEntry{{Key: []byte("a"), Offset: 1, Length: 1}}
 	cache.Add(1, entries)
-	cache.Add(2, []index.Entry{{Key: []byte("b"), Offset: 2, Length: 1}})
+	cache.Add(2, []format.IndexEntry{{Key: []byte("b"), Offset: 2, Length: 1}})
 	if _, ok := cache.Get(1); !ok {
 		t.Fatalf("expected key 1 cached")
 	}
-	cache.Add(3, []index.Entry{{Key: []byte("c"), Offset: 3, Length: 1}})
+	cache.Add(3, []format.IndexEntry{{Key: []byte("c"), Offset: 3, Length: 1}})
 	if _, ok := cache.Get(2); ok {
 		t.Fatalf("expected key 2 evicted")
 	}

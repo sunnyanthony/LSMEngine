@@ -1,3 +1,5 @@
+// SSTable block and footer wire format helpers.
+
 package format
 
 import (

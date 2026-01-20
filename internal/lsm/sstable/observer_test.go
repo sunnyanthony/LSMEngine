@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -13,7 +14,7 @@ type countingObserver struct {
 	errors int
 }
 
-func (o *countingObserver) OnNode(_ FlowEvent, node string) {
+func (o *countingObserver) OnNode(_ sstableconfig.FlowEvent, node string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.nodes == nil {
@@ -22,7 +23,7 @@ func (o *countingObserver) OnNode(_ FlowEvent, node string) {
 	o.nodes[node]++
 }
 
-func (o *countingObserver) OnError(_ FlowEvent, _ string, _ error) {
+func (o *countingObserver) OnError(_ sstableconfig.FlowEvent, _ string, _ error) {
 	o.mu.Lock()
 	o.errors++
 	o.mu.Unlock()
@@ -31,7 +32,7 @@ func (o *countingObserver) OnError(_ FlowEvent, _ string, _ error) {
 func TestFlowObserverReceivesEvents(t *testing.T) {
 	dir := t.TempDir()
 	obs := &countingObserver{}
-	opts := DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.FlowObserver = obs
 
 	writer, err := NewSSTableWriter(opts)

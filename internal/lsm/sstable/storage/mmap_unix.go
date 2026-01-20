@@ -1,13 +1,12 @@
 //go:build unix
 
+// Unix mmap implementation for SSTable reads.
+
 package storage
 
-import (
-	"os"
-	"syscall"
-)
+import "syscall"
 
-func mmapFile(f *os.File, size int64) ([]byte, error) {
+func mmapFile(f interface{ Fd() uintptr }, size int64) ([]byte, error) {
 	if size <= 0 {
 		return nil, nil
 	}

@@ -1,10 +1,10 @@
 //go:build !unix
 
+// mmap stub for unsupported platforms.
+
 package storage
 
-import "os"
-
-func mmapFile(_ *os.File, _ int64) ([]byte, error) {
+func mmapFile(_ interface{ Fd() uintptr }, _ int64) ([]byte, error) {
 	return nil, errMmapUnsupported
 }
 

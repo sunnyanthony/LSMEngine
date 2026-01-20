@@ -1,3 +1,5 @@
+// SSTable writer and flush logic.
+
 package sstable
 
 import (
@@ -8,11 +10,10 @@ import (
 	"sort"
 	"time"
 
-	"lsmengine/internal/lsm/sstable/block"
+	"lsmengine/internal/lsm/iofs"
 	"lsmengine/internal/lsm/sstable/bloom"
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/sstable/format"
-	"lsmengine/internal/lsm/sstable/index"
-	"lsmengine/internal/lsm/sstable/meta"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -31,16 +32,43 @@ func (s SSTable) Close() error {
 	return s.reader.Close()
 }
 
+// Info summarizes immutable on-disk metadata for a table.
+type Info struct {
+	MinKey     []byte
+	MaxKey     []byte
+	SeqMin     uint64
+	SeqMax     uint64
+	SizeBytes  uint64
+	EntryCount uint64
+}
+
+// Info returns immutable metadata for the table.
+func (s SSTable) Info() Info {
+	if s.reader == nil {
+		return Info{SeqMax: s.Seq}
+	}
+	m := s.reader.meta
+	return Info{
+		MinKey:     append([]byte(nil), m.MinKey...),
+		MaxKey:     append([]byte(nil), m.MaxKey...),
+		SeqMin:     m.SeqMin,
+		SeqMax:     m.SeqMax,
+		EntryCount: m.EntryCount,
+		SizeBytes:  uint64(s.reader.size),
+	}
+}
+
 // Flusher writes entries to SSTable storage.
 type Flusher interface {
 	Flush(entries []types.Entry) (SSTable, error)
 }
 
 type Writer struct {
-	opts Options
+	opts sstableconfig.Options
+	fs   iofs.FS
 }
 
-func NewSSTableWriter(opts Options) (*Writer, error) {
+func NewSSTableWriter(opts sstableconfig.Options) (*Writer, error) {
 	opts.Normalize()
 	if err := opts.Validate(); err != nil {
 		return nil, err
@@ -48,10 +76,13 @@ func NewSSTableWriter(opts Options) (*Writer, error) {
 	if opts.Dir == "" {
 		return nil, fmt.Errorf("sstable dir required")
 	}
-	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
+	if opts.FS == nil {
+		opts.FS = iofs.OSFS{}
+	}
+	if err := opts.FS.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir sstable dir: %w", err)
 	}
-	return &Writer{opts: opts}, nil
+	return &Writer{opts: opts, fs: opts.FS}, nil
 }
 
 // Flush creates a new SSTable file with entries sorted by key.
@@ -80,15 +111,15 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	fileID := fmt.Sprintf("%d-%d", seqMax, time.Now().UnixNano())
 	tempPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%s.sst.tmp", fileID))
 	finalPath := filepath.Join(w.opts.Dir, fmt.Sprintf("sstable-%s.sst", fileID))
-	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := w.fs.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return SSTable{}, fmt.Errorf("create sstable: %w", err)
 	}
 	defer f.Close()
 
 	var offset uint64
-	builder := block.NewBuilder(w.opts.RestartInterval, w.opts.RestartIntervalAdaptive, w.opts.RestartIntervalMin, w.opts.RestartIntervalMax)
-	var indexEntries []index.Entry
+	builder := format.NewBuilder(w.opts.RestartInterval, w.opts.RestartIntervalAdaptive, w.opts.RestartIntervalMin, w.opts.RestartIntervalMax)
+	var indexEntries []format.IndexEntry
 	var blockEntryCounts []int
 
 	filter := bloom.NewFilter(len(entries), w.opts.BloomBitsPerKey)
@@ -140,7 +171,7 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 
 	var bloomOffset uint64
 	var bloomLen uint32
-	var filterIndexEntries []index.Entry
+	var filterIndexEntries []format.IndexEntry
 	if filter != nil {
 		if filterPartitioned {
 			var err error
@@ -166,13 +197,13 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 				end = len(indexEntries)
 			}
 			part := indexEntries[i:end]
-			payload := index.Encode(part)
-			block := format.EncodeBlock(payload, format.BlockTypeIndex, CompressionNone, uint32(len(payload)))
+			payload := format.EncodeIndex(part)
+			block := format.EncodeBlock(payload, format.BlockTypeIndex, sstableconfig.CompressionNone, uint32(len(payload)))
 			n, err := f.Write(block)
 			if err != nil {
 				return SSTable{}, fmt.Errorf("write index partition: %w", err)
 			}
-			topIndex = append(topIndex, index.Entry{
+			topIndex = append(topIndex, format.IndexEntry{
 				Key:    append([]byte(nil), part[0].Key...),
 				Offset: offset,
 				Length: uint32(n),
@@ -182,8 +213,8 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	}
 
 	indexOffset := offset
-	indexPayload := index.Encode(topIndex)
-	indexBlock := format.EncodeBlock(indexPayload, format.BlockTypeIndex, CompressionNone, uint32(len(indexPayload)))
+	indexPayload := format.EncodeIndex(topIndex)
+	indexBlock := format.EncodeBlock(indexPayload, format.BlockTypeIndex, sstableconfig.CompressionNone, uint32(len(indexPayload)))
 	if n, err := f.Write(indexBlock); err != nil {
 		return SSTable{}, fmt.Errorf("write index: %w", err)
 	} else {
@@ -192,8 +223,8 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 
 	if filterPartitioned && len(filterIndexEntries) > 0 {
 		bloomOffset = offset
-		payload := index.Encode(filterIndexEntries)
-		block := format.EncodeBlock(payload, format.BlockTypeFilter, CompressionNone, uint32(len(payload)))
+		payload := format.EncodeIndex(filterIndexEntries)
+		block := format.EncodeBlock(payload, format.BlockTypeFilter, sstableconfig.CompressionNone, uint32(len(payload)))
 		n, err := f.Write(block)
 		if err != nil {
 			return SSTable{}, err
@@ -203,7 +234,7 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	}
 
 	metaOffset := offset
-	metaPayload := meta.Encode(meta.Meta{
+	metaPayload := format.EncodeMeta(format.Meta{
 		MinKey:      minKey,
 		MaxKey:      maxKey,
 		EntryCount:  uint64(len(entries)),
@@ -215,7 +246,7 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 		BloomOffset: bloomOffset,
 		BloomLen:    bloomLen,
 	})
-	metaBlock := format.EncodeBlock(metaPayload, format.BlockTypeMeta, CompressionNone, uint32(len(metaPayload)))
+	metaBlock := format.EncodeBlock(metaPayload, format.BlockTypeMeta, sstableconfig.CompressionNone, uint32(len(metaPayload)))
 	if n, err := f.Write(metaBlock); err != nil {
 		return SSTable{}, fmt.Errorf("write meta: %w", err)
 	} else {
@@ -245,16 +276,16 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	if err := f.Close(); err != nil {
 		return SSTable{}, fmt.Errorf("close sstable: %w", err)
 	}
-	if err := os.Rename(tempPath, finalPath); err != nil {
+	if err := w.fs.Rename(tempPath, finalPath); err != nil {
 		return SSTable{}, fmt.Errorf("rename sstable: %w", err)
 	}
-	if err := syncDir(w.opts.Dir); err != nil {
+	if err := syncDir(w.fs, w.opts.Dir); err != nil {
 		return SSTable{}, fmt.Errorf("sync sstable dir: %w", err)
 	}
 	return LoadSSTable(finalPath, w.opts)
 }
 
-func (w *Writer) flushBlock(f *os.File, builder *block.Builder, offset *uint64, indexEntries *[]index.Entry) (int, error) {
+func (w *Writer) flushBlock(f iofs.File, builder *format.Builder, offset *uint64, indexEntries *[]format.IndexEntry) (int, error) {
 	count := builder.EntryCount()
 	payload := builder.Finish()
 	compressed, uncompressedLen, err := format.CompressPayload(payload, w.opts.Compression)
@@ -267,7 +298,7 @@ func (w *Writer) flushBlock(f *os.File, builder *block.Builder, offset *uint64, 
 		return 0, fmt.Errorf("write block: %w", err)
 	}
 	if len(builder.FirstKey()) > 0 {
-		*indexEntries = append(*indexEntries, index.Entry{
+		*indexEntries = append(*indexEntries, format.IndexEntry{
 			Key:    append([]byte(nil), builder.FirstKey()...),
 			Offset: *offset,
 			Length: uint32(n),
@@ -285,8 +316,11 @@ func filterK(filter *bloom.Filter) uint8 {
 	return filter.K()
 }
 
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
+func syncDir(fs iofs.FS, dir string) error {
+	if fs == nil {
+		fs = iofs.OSFS{}
+	}
+	d, err := fs.Open(dir)
 	if err != nil {
 		return err
 	}

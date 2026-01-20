@@ -1,12 +1,13 @@
+// SSTable block/index/filter caches.
+
 package cache
 
 import (
 	"container/list"
 	"sync"
 
-	"lsmengine/internal/lsm/sstable/block"
 	"lsmengine/internal/lsm/sstable/bloom"
-	"lsmengine/internal/lsm/sstable/index"
+	"lsmengine/internal/lsm/sstable/format"
 )
 
 // BlockCache caches on-disk data blocks only (no memtable overlap).
@@ -20,7 +21,7 @@ type BlockCache struct {
 
 type cacheEntry struct {
 	key   uint64
-	block *block.Block
+	block *format.Block
 	size  int64
 }
 
@@ -35,7 +36,7 @@ func NewBlockCache(capBytes int64) *BlockCache {
 	}
 }
 
-func (c *BlockCache) Get(key uint64) (*block.Block, bool) {
+func (c *BlockCache) Get(key uint64) (*format.Block, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -48,7 +49,7 @@ func (c *BlockCache) Get(key uint64) (*block.Block, bool) {
 	return nil, false
 }
 
-func (c *BlockCache) Add(key uint64, blk *block.Block) {
+func (c *BlockCache) Add(key uint64, blk *format.Block) {
 	if c == nil || blk == nil {
 		return
 	}
@@ -90,7 +91,7 @@ type IndexCache struct {
 
 type indexCacheEntry struct {
 	key   uint64
-	value []index.Entry
+	value []format.IndexEntry
 	size  int64
 }
 
@@ -105,7 +106,7 @@ func NewIndexCache(capBytes int64) *IndexCache {
 	}
 }
 
-func (c *IndexCache) Get(key uint64) ([]index.Entry, bool) {
+func (c *IndexCache) Get(key uint64) ([]format.IndexEntry, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -118,7 +119,7 @@ func (c *IndexCache) Get(key uint64) ([]index.Entry, bool) {
 	return nil, false
 }
 
-func (c *IndexCache) Add(key uint64, value []index.Entry) {
+func (c *IndexCache) Add(key uint64, value []format.IndexEntry) {
 	if c == nil || value == nil {
 		return
 	}
@@ -237,10 +238,10 @@ func (c *FilterCache) evict() {
 	}
 }
 
-func indexEntriesSize(entries []index.Entry) int64 {
+func indexEntriesSize(entries []format.IndexEntry) int64 {
 	var size int64
 	for _, e := range entries {
-		size += int64(index.HeaderSize + len(e.Key))
+		size += int64(format.IndexHeaderSize + len(e.Key))
 	}
 	return size
 }

@@ -1,3 +1,5 @@
+// SSTable reader and range iterator.
+
 package sstable
 
 import (
@@ -5,34 +7,30 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"sort"
 
-	"lsmengine/internal/lsm/sstable/block"
+	"lsmengine/internal/lsm/iofs"
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/internal/lsm/sstable/bloom"
 	"lsmengine/internal/lsm/sstable/cache"
 	"lsmengine/internal/lsm/sstable/config"
-	"lsmengine/internal/lsm/sstable/flow"
 	"lsmengine/internal/lsm/sstable/format"
-	"lsmengine/internal/lsm/sstable/index"
-	"lsmengine/internal/lsm/sstable/meta"
 	"lsmengine/internal/lsm/sstable/storage"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
 
 type Reader struct {
-	file    *os.File
+	file    iofs.File
 	size    int64
-	meta    meta.Meta
-	opts    Options
+	meta    format.Meta
+	opts    config.Options
 	dropped bool
 
 	source storage.BlockSource
-	pipe   *flow.Pipeline
+	pipe   *Pipeline
 }
 
-func LoadSSTable(path string, opts Options) (SSTable, error) {
+func LoadSSTable(path string, opts config.Options) (SSTable, error) {
 	reader, seq, err := openReader(path, opts)
 	if err != nil {
 		return SSTable{}, err
@@ -44,12 +42,16 @@ func LoadSSTable(path string, opts Options) (SSTable, error) {
 	}, nil
 }
 
-func openReader(path string, opts Options) (*Reader, uint64, error) {
+func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 	opts.Normalize()
 	if err := opts.Validate(); err != nil {
 		return nil, 0, err
 	}
-	f, err := os.Open(path)
+	fs := opts.FS
+	if fs == nil {
+		fs = iofs.OSFS{}
+	}
+	f, err := fs.Open(path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open sstable: %w", err)
 	}
@@ -90,13 +92,13 @@ func openReader(path string, opts Options) (*Reader, uint64, error) {
 		Offset: ft.MetaOffset,
 		Length: ft.MetaLen,
 	}
-	metaPayload, err := flow.ReadBlockPayload(context.Background(), source, metaDesc, errs.ErrSSTableBadMeta)
+	metaPayload, err := ReadBlockPayload(context.Background(), source, metaDesc, errs.ErrSSTableBadMeta)
 	if err != nil {
 		_ = source.Close()
 		f.Close()
 		return nil, 0, err
 	}
-	m, err := meta.Decode(metaPayload)
+	m, err := format.DecodeMeta(metaPayload)
 	if err != nil {
 		_ = source.Close()
 		f.Close()
@@ -108,20 +110,20 @@ func openReader(path string, opts Options) (*Reader, uint64, error) {
 		Offset: ft.IndexOffset,
 		Length: ft.IndexLen,
 	}
-	indexPayload, err := flow.ReadBlockPayload(context.Background(), source, indexDesc, errs.ErrSSTableBadIndex)
+	indexPayload, err := ReadBlockPayload(context.Background(), source, indexDesc, errs.ErrSSTableBadIndex)
 	if err != nil {
 		_ = source.Close()
 		f.Close()
 		return nil, 0, err
 	}
-	indexEntries, err := index.Decode(indexPayload)
+	indexEntries, err := format.DecodeIndex(indexPayload)
 	if err != nil {
 		_ = source.Close()
 		f.Close()
 		return nil, 0, err
 	}
 	var filter *bloom.Filter
-	var filterIndex []index.Entry
+	var filterIndex []format.IndexEntry
 	filterPartitioned := ft.Flags&format.FooterFlagFilterPartitioned != 0
 	if m.BloomLen > 0 && m.BloomOffset > 0 {
 		filterDesc := storage.BlockDescriptor{
@@ -130,14 +132,14 @@ func openReader(path string, opts Options) (*Reader, uint64, error) {
 			Offset: m.BloomOffset,
 			Length: m.BloomLen,
 		}
-		filterPayload, err := flow.ReadBlockPayload(context.Background(), source, filterDesc, errs.ErrSSTableBadMeta)
+		filterPayload, err := ReadBlockPayload(context.Background(), source, filterDesc, errs.ErrSSTableBadMeta)
 		if err != nil {
 			_ = source.Close()
 			f.Close()
 			return nil, 0, err
 		}
 		if filterPartitioned {
-			filterIndex, err = index.Decode(filterPayload)
+			filterIndex, err = format.DecodeIndex(filterPayload)
 			if err != nil {
 				_ = source.Close()
 				f.Close()
@@ -163,7 +165,7 @@ func openReader(path string, opts Options) (*Reader, uint64, error) {
 		filterCache = cache.NewFilterCache(opts.FilterCacheBytes)
 	}
 	policy := config.SnapshotFromOptions(opts, partitioned, filterPartitioned)
-	pipe := flow.NewPipeline(
+	pipe := NewPipeline(
 		source,
 		blockCache,
 		indexCache,
@@ -197,9 +199,9 @@ func (s SSTable) Get(key []byte) (types.Entry, bool) {
 	return s.reader.Get(key)
 }
 
-func (s SSTable) GetView(key []byte) (EntryView, bool) {
+func (s SSTable) GetView(key []byte) (memory.EntryView, bool) {
 	if s.reader == nil {
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
 	return s.reader.GetView(key)
 }
@@ -219,27 +221,30 @@ func (r *Reader) Get(key []byte) (types.Entry, bool) {
 	return view.ToEntry(), true
 }
 
-func (r *Reader) GetView(key []byte) (EntryView, bool) {
+func (r *Reader) GetView(key []byte) (memory.EntryView, bool) {
 	if r.dropped {
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
 	if len(r.meta.MinKey) > 0 && bytes.Compare(key, r.meta.MinKey) < 0 {
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
 	if len(r.meta.MaxKey) > 0 && bytes.Compare(key, r.meta.MaxKey) > 0 {
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
 	if r.pipe == nil {
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
 	entry, ok, err := r.pipe.Get(context.Background(), key)
 	if err != nil {
-		if r.opts.CorruptionPolicy == CorruptionDropTable {
+		if r.opts.CorruptionPolicy == config.CorruptionDropTable {
 			r.dropped = true
 		}
-		return EntryView{}, false
+		return memory.EntryView{}, false
 	}
-	return entry, ok
+	if !ok {
+		return memory.EntryView{}, false
+	}
+	return entry, true
 }
 
 func (r *Reader) Range(start, end []byte) *RangeIterator {
@@ -261,43 +266,21 @@ func (r *Reader) Close() error {
 	return r.file.Close()
 }
 
-func findBlock(entries []index.Entry, key []byte) int {
-	if len(entries) == 0 {
-		return -1
-	}
-	if bytes.Compare(key, entries[0].Key) < 0 {
-		return -1
-	}
-	i := sort.Search(len(entries), func(i int) bool {
-		return bytes.Compare(entries[i].Key, key) > 0
-	})
-	if i == 0 {
-		return -1
-	}
-	idx := i - 1
-	if bytes.Equal(entries[idx].Key, key) {
-		for idx > 0 && bytes.Equal(entries[idx-1].Key, key) {
-			idx--
-		}
-	}
-	return idx
-}
-
 type RangeIterator struct {
 	reader         *Reader
 	start          []byte
 	end            []byte
-	block          *block.Block
+	block          *format.Block
 	blockI         int
-	partIndex      []index.Entry
-	plan           *flow.IndexRangePlan
-	cursor         *block.Cursor
-	pending        EntryView
+	partIndex      []format.IndexEntry
+	plan           *IndexRangePlan
+	cursor         *format.Cursor
+	pending        memory.EntryView
 	hasPending     bool
 	startApplied   bool
-	curr           EntryView
+	curr           memory.EntryView
 	err            error
-	prefetchBudget *flow.PrefetchBudget
+	prefetchBudget *PrefetchBudget
 }
 
 func newRangeIterator(r *Reader, start, end []byte) *RangeIterator {
@@ -360,7 +343,7 @@ func (it *RangeIterator) Next() bool {
 				it.hasPending = true
 			} else {
 				it.startApplied = true
-				it.cursor = block.NewCursor(it.block, 0, it.block.DataLen())
+				it.cursor = format.NewCursor(it.block, 0, it.block.DataLen())
 			}
 		}
 		if it.hasPending {
@@ -420,7 +403,7 @@ func (it *RangeIterator) Entry() types.Entry {
 	return it.curr.ToEntry()
 }
 
-func (it *RangeIterator) EntryView() EntryView {
+func (it *RangeIterator) EntryView() memory.EntryView {
 	return it.curr
 }
 
@@ -430,13 +413,13 @@ func (it *RangeIterator) Err() error {
 
 func (it *RangeIterator) handleCorruption(err error) bool {
 	switch it.reader.opts.CorruptionPolicy {
-	case CorruptionSkipBlock:
+	case config.CorruptionSkipBlock:
 		it.block = nil
 		it.cursor = nil
 		it.hasPending = false
 		it.blockI++
 		return true
-	case CorruptionDropTable:
+	case config.CorruptionDropTable:
 		it.reader.dropped = true
 		return false
 	default:
@@ -447,13 +430,13 @@ func (it *RangeIterator) handleCorruption(err error) bool {
 
 func (it *RangeIterator) handleIndexCorruption(err error) bool {
 	switch it.reader.opts.CorruptionPolicy {
-	case CorruptionSkipBlock:
+	case config.CorruptionSkipBlock:
 		it.partIndex = nil
 		it.block = nil
 		it.cursor = nil
 		it.hasPending = false
 		return true
-	case CorruptionDropTable:
+	case config.CorruptionDropTable:
 		it.reader.dropped = true
 		return false
 	default:
