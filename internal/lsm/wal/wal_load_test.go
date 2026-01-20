@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"lsmengine/internal/lsm/wal/codec"
+	"lsmengine/internal/lsm/wal/segment"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
@@ -294,7 +295,7 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	segs, _, err := listSegments(path)
+	segs, _, err := segment.ListSegments(path)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}

@@ -1,3 +1,5 @@
+// WAL segment discovery helpers.
+
 package segment
 
 import (

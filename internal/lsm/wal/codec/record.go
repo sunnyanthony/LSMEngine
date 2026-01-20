@@ -1,3 +1,5 @@
+// WAL record encode/decode.
+
 package codec
 
 import (
@@ -5,6 +7,7 @@ import (
 	"hash/crc32"
 	"net"
 
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
@@ -111,6 +114,49 @@ func DecodeRecords(payload []byte) ([]types.Entry, error) {
 		entries = append(entries, types.Entry{
 			Key:       append([]byte(nil), key...),
 			Value:     append([]byte(nil), val...),
+			Tombstone: flags&0x1 == 0x1,
+			Seq:       seq,
+		})
+	}
+	return entries, nil
+}
+
+// DecodeRecordViews parses records without copying key/value buffers.
+// The returned EntryView slices are valid only while payload is alive.
+func DecodeRecordViews(payload []byte) ([]memory.EntryView, error) {
+	var entries []memory.EntryView
+	offset := 0
+	for offset < len(payload) {
+		if len(payload)-offset < RecordHeaderSize+RecordCRCSize {
+			return entries, errs.ErrWALCorrupt
+		}
+		header := payload[offset : offset+RecordHeaderSize]
+		flags := header[recordFlagsOffset]
+		seq := binary.LittleEndian.Uint64(header[recordSeqOffset : recordSeqOffset+recordSeqSize])
+		keyLen := binary.LittleEndian.Uint32(header[recordKeyLenOffset : recordKeyLenOffset+recordKeyLenSize])
+		valLen := binary.LittleEndian.Uint32(header[recordValLenOffset : recordValLenOffset+recordValLenSize])
+		offset += RecordHeaderSize
+
+		if len(payload)-offset < int(keyLen+valLen)+RecordCRCSize {
+			return entries, errs.ErrWALCorrupt
+		}
+		key := payload[offset : offset+int(keyLen)]
+		offset += int(keyLen)
+		val := payload[offset : offset+int(valLen)]
+		offset += int(valLen)
+		crcBytes := payload[offset : offset+RecordCRCSize]
+		offset += RecordCRCSize
+
+		crc := crc32.NewIEEE()
+		crc.Write(header)
+		crc.Write(key)
+		crc.Write(val)
+		if binary.LittleEndian.Uint32(crcBytes) != crc.Sum32() {
+			return entries, errs.ErrWALCorrupt
+		}
+		entries = append(entries, memory.EntryView{
+			Key:       key,
+			Value:     val,
 			Tombstone: flags&0x1 == 0x1,
 			Seq:       seq,
 		})
