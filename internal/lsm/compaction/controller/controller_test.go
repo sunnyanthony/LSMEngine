@@ -3,31 +3,30 @@ package controller
 import (
 	"testing"
 
-	"lsmengine/internal/lsm/compaction/data"
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/metadata"
 	"lsmengine/internal/lsm/sstable"
 )
 
 type plannerStub struct {
-	plan   model.Plan
+	plan   compaction.Plan
 	ok     bool
 	err    error
 	called int
 }
 
-func (p *plannerStub) Next(state model.State) (model.Plan, bool, error) {
+func (p *plannerStub) Next(state compaction.State) (compaction.Plan, bool, error) {
 	p.called++
 	return p.plan, p.ok, p.err
 }
 
 type runnerStub struct {
-	result data.Result
+	result compaction.Result
 	err    error
 	called int
 }
 
-func (r *runnerStub) Run(plan model.Plan, inputs []sstable.SSTable) (data.Result, error) {
+func (r *runnerStub) Run(plan compaction.Plan, inputs []sstable.SSTable) (compaction.Result, error) {
 	r.called++
 	return r.result, r.err
 }
@@ -37,7 +36,7 @@ type applierStub struct {
 	called int
 }
 
-func (a *applierStub) Apply(result data.Result) error {
+func (a *applierStub) Apply(result compaction.Result) error {
 	a.called++
 	return a.err
 }
@@ -55,7 +54,7 @@ func (r *resolverStub) Resolve(_ []metadata.TableMeta) ([]sstable.SSTable, error
 
 func TestCoordinatorStepMissingDependencies(t *testing.T) {
 	var nilController *Coordinator
-	ok, err := nilController.Step(model.State{})
+	ok, err := nilController.Step(compaction.State{})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -64,7 +63,7 @@ func TestCoordinatorStepMissingDependencies(t *testing.T) {
 	}
 
 	controller := &Coordinator{}
-	ok, err = controller.Step(model.State{})
+	ok, err = controller.Step(compaction.State{})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -81,7 +80,7 @@ func TestCoordinatorStepNoPlan(t *testing.T) {
 		Applier: &applierStub{},
 		Resolve: (&resolverStub{}).Resolve,
 	}
-	ok, err := controller.Step(model.State{})
+	ok, err := controller.Step(compaction.State{})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -100,7 +99,7 @@ func TestCoordinatorStepSuccessInitializesMetrics(t *testing.T) {
 		Applier: applier,
 		Resolve: (&resolverStub{}).Resolve,
 	}
-	ok, err := controller.Step(model.State{})
+	ok, err := controller.Step(compaction.State{})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

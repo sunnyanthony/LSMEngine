@@ -1,9 +1,11 @@
+// Compaction service loop with trigger coalescing.
+
 package controller
 
 import (
 	"context"
 
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 )
 
 // Triggerer can request a compaction run.
@@ -12,7 +14,7 @@ type Triggerer interface {
 }
 
 // StateSource builds a compaction state snapshot for the controller.
-type StateSource func() model.State
+type StateSource func() compaction.State
 
 // Service runs compaction steps in response to triggers.
 type Service struct {

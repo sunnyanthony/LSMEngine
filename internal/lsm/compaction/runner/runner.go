@@ -1,3 +1,5 @@
+// Simple compaction runner that merges SSTables.
+
 package runner
 
 import (
@@ -6,8 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	"lsmengine/internal/lsm/compaction/data"
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/metadata"
 	"lsmengine/internal/lsm/sstable"
 	"lsmengine/pkg/lsm/types"
@@ -21,15 +22,15 @@ type SimpleRunner struct {
 }
 
 // Run merges the plan inputs and produces a new SSTable.
-func (r *SimpleRunner) Run(p model.Plan, inputs []sstable.SSTable) (data.Result, error) {
+func (r *SimpleRunner) Run(p compaction.Plan, inputs []sstable.SSTable) (compaction.Result, error) {
 	if r == nil || r.Flusher == nil {
-		return data.Result{}, fmt.Errorf("compaction runner: flusher required")
+		return compaction.Result{}, fmt.Errorf("compaction runner: flusher required")
 	}
 	if len(p.Inputs) == 0 {
-		return data.Result{}, nil
+		return compaction.Result{}, nil
 	}
 	if len(inputs) == 0 {
-		return data.Result{}, fmt.Errorf("compaction runner: input tables required")
+		return compaction.Result{}, fmt.Errorf("compaction runner: input tables required")
 	}
 	inputs = append([]sstable.SSTable(nil), inputs...)
 	sort.Slice(inputs, func(i, j int) bool {
@@ -41,19 +42,19 @@ func (r *SimpleRunner) Run(p model.Plan, inputs []sstable.SSTable) (data.Result,
 	}
 	entries, err := mergeEntries(iters, r.DropTombstones)
 	if err != nil {
-		return data.Result{}, err
+		return compaction.Result{}, err
 	}
 	if len(entries) == 0 {
-		return data.Result{
+		return compaction.Result{
 			OutputLevel: p.OutputLevel,
 			Obsolete:    append([]metadata.TableMeta(nil), p.Inputs...),
 		}, nil
 	}
 	out, err := r.Flusher.Flush(entries)
 	if err != nil {
-		return data.Result{}, err
+		return compaction.Result{}, err
 	}
-	return data.Result{
+	return compaction.Result{
 		Output:      []sstable.SSTable{out},
 		Obsolete:    append([]metadata.TableMeta(nil), p.Inputs...),
 		OutputLevel: p.OutputLevel,

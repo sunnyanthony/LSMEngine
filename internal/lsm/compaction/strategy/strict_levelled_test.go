@@ -3,13 +3,13 @@ package strategy
 import (
 	"testing"
 
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/metadata"
 )
 
 func TestStrictLevelledPlannerNil(t *testing.T) {
 	var planner *StrictLevelledPlanner
-	plan, ok, err := planner.Next(model.State{})
+	plan, ok, err := planner.Next(compaction.State{})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -20,8 +20,8 @@ func TestStrictLevelledPlannerNil(t *testing.T) {
 
 func TestStrictLevelledPlannerNoL0(t *testing.T) {
 	planner := &StrictLevelledPlanner{L0FileThreshold: 2}
-	plan, ok, err := planner.Next(model.State{
-		Levels: []model.Level{
+	plan, ok, err := planner.Next(compaction.State{
+		Levels: []compaction.Level{
 			{Level: 1},
 		},
 	})
@@ -35,8 +35,8 @@ func TestStrictLevelledPlannerNoL0(t *testing.T) {
 
 func TestStrictLevelledPlannerBelowThreshold(t *testing.T) {
 	planner := &StrictLevelledPlanner{L0FileThreshold: 3}
-	plan, ok, err := planner.Next(model.State{
-		Levels: []model.Level{
+	plan, ok, err := planner.Next(compaction.State{
+		Levels: []compaction.Level{
 			{Level: 0, Tables: []metadata.TableMeta{{Path: "a", SeqMax: 1}}},
 		},
 	})
@@ -54,8 +54,8 @@ func TestStrictLevelledPlannerThresholdMet(t *testing.T) {
 		{Path: "b", SeqMax: 2},
 	}
 	planner := &StrictLevelledPlanner{L0FileThreshold: 2}
-	plan, ok, err := planner.Next(model.State{
-		Levels: []model.Level{
+	plan, ok, err := planner.Next(compaction.State{
+		Levels: []compaction.Level{
 			{Level: 0, Tables: tables},
 		},
 	})
@@ -89,8 +89,8 @@ func TestStrictLevelledPlannerL0IncludesOverlap(t *testing.T) {
 		{Path: "l1b", SeqMax: 1, MinKey: []byte("e"), MaxKey: []byte("f")},
 	}
 	planner := &StrictLevelledPlanner{L0FileThreshold: 1}
-	plan, ok, err := planner.Next(model.State{
-		Levels: []model.Level{
+	plan, ok, err := planner.Next(compaction.State{
+		Levels: []compaction.Level{
 			{Level: 0, Tables: l0},
 			{Level: 1, Tables: l1},
 		},
@@ -131,8 +131,8 @@ func TestStrictLevelledPlannerLevelSizeExceeded(t *testing.T) {
 		LevelBaseBytes: 10,
 		LevelMultiplier: 10,
 	}
-	plan, ok, err := planner.Next(model.State{
-		Levels: []model.Level{
+	plan, ok, err := planner.Next(compaction.State{
+		Levels: []compaction.Level{
 			{Level: 1, Tables: l1},
 			{Level: 2, Tables: l2},
 		},

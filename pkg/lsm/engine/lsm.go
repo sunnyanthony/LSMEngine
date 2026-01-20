@@ -1,3 +1,5 @@
+// LSM engine options and core runtime state.
+
 package engine
 
 import (
@@ -5,60 +7,59 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"lsmengine/internal/lsm/compaction"
+	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 	"lsmengine/internal/lsm/dispatch"
 	"lsmengine/internal/lsm/logging"
 	"lsmengine/internal/lsm/manifest"
-	"lsmengine/internal/lsm/memtable"
+	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/tableset"
-	"lsmengine/internal/lsm/wal"
+	"lsmengine/internal/lsm/tableedit"
+	wal "lsmengine/internal/lsm/wal"
 	"lsmengine/pkg/lsm/bus"
-	"lsmengine/pkg/lsm/transport"
 )
 
 type Options struct {
-	DataDir                  string
-	MemtableLimit            int
-	MemtableConcurrency      int
-	MemtableShards           int
-	MemtableKind             string
-	MemtableFactory          memtable.Factory
-	MemtableArenaBlockSize   int
-	SSTable                  *SSTableOptions
-	SSTablePolicyOverride    *sstable.PolicySnapshot
-	NodeID                   string
-	NodeTerm                 uint64
-	TermProvider             TermProvider
-	Transport                transport.Transport
-	ReplicationQueueDepth    int
-	ReplicationBatchMax      int
-	ReplicationFlushInterval time.Duration
-	ManifestCheckpointEvery  int
-	WALSync                  bool
-	WALMaxRecord             uint64
-	WALBlockSize             uint32
-	WALAsync                 bool
-	WALQueueDepth            int
-	WALBatchMax              int
-	WALAutoRepair            *bool
-	WALMissingSegmentPolicy  *MissingSegmentPolicy
-	ReplayBatchSize          int
-	FlushQueueSize           int
-	CompactionL0Threshold      int
-	CompactionDropTombstones   bool
-	CompactionLevelBaseBytes   uint64
-	CompactionLevelMultiplier  int
-	BusBuffer                int
-	LogDir                   string
-	Logger                   logging.Logger
+	DataDir                   string
+	MemtableLimit             int
+	MemtableConcurrency       int
+	MemtableShards            int
+	MemtableKind              string
+	MemtableFactory           memtable.Factory
+	MemtableArenaBlockSize    int
+	SSTable                   *SSTableOptions
+	SSTablePolicyOverride     *sstableconfig.PolicySnapshot
+	ManifestCheckpointEvery   int
+	WALSync                   bool
+	WALMaxRecord              uint64
+	WALBlockSize              uint32
+	WALAsync                  bool
+	WALQueueDepth             int
+	WALBatchMax               int
+	WALAutoRepair             *bool
+	WALMissingSegmentPolicy   *MissingSegmentPolicy
+	ReplayBatchSize           int
+	FlushQueueSize            int
+	CompactionL0Threshold     int
+	CompactionDropTombstones  bool
+	CompactionLevelBaseBytes  uint64
+	CompactionLevelMultiplier int
+	BusBuffer                 int
+	LogDir                    string
+	Logger                    logging.Logger
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
-	SSTableFlowObserver sstable.FlowObserver
+	SSTableFlowObserver sstableconfig.FlowObserver
 }
+
+const (
+	MemtableKindMap             = "map"
+	MemtableKindSkipList        = "skiplist"
+	MemtableKindShardedSkipList = "sharded-skiplist"
+)
 
 type SSTableOptions struct {
 	BlockTargetBytes        *int
@@ -86,8 +87,8 @@ type SSTableOptions struct {
 	RestartIntervalAdaptive *bool
 	RestartIntervalMin      *int
 	RestartIntervalMax      *int
-	FlowObserver            sstable.FlowObserver
-	PolicyOverride          *sstable.PolicySnapshot
+	FlowObserver            sstableconfig.FlowObserver
+	PolicyOverride          *sstableconfig.PolicySnapshot
 }
 
 const (
@@ -122,8 +123,8 @@ type LSM struct {
 	logger               logging.Logger
 	logCloser            io.Closer
 	tables               *tableset.Set
-	sstableOpts          sstable.Options
-	flowMetrics          *sstable.FlowMetrics
+	sstableOpts          sstableconfig.Options
+	flowMetrics          *sstableconfig.FlowMetrics
 	mtLimit              int
 	autoRepair           bool
 	ctx                  context.Context
@@ -133,23 +134,37 @@ type LSM struct {
 	seq                  uint64
 	missingSegmentPolicy MissingSegmentPolicy
 	replayBatchSize      int
-	compactionService    *compaction.Service
 	flushBlocked         atomic.Bool
-	transport            transport.Transport
-	nodeID               string
-	nodeTerm             uint64
-	termProvider         TermProvider
-	replicationCh        chan replicationItem
-	replicationBatchMax  int
-	replicationFlush     time.Duration
-	replicationMu        sync.Mutex
-	replicationState     map[string]manifest.ReplicationState
+	writer               *writeService
+	reader               *readService
+	flushSvc             *flushService
+	compactionSvc        *compactionruntime.Runtime
+	tableEdits           tableedit.Editor
+	bg                   sync.WaitGroup
 }
 
 // FlowMetrics returns a snapshot of SSTable read-path metrics if enabled.
-func (l *LSM) FlowMetrics() sstable.MetricsSnapshot {
+func (l *LSM) FlowMetrics() sstableconfig.MetricsSnapshot {
 	if l == nil || l.flowMetrics == nil {
-		return sstable.MetricsSnapshot{}
+		return sstableconfig.MetricsSnapshot{}
 	}
 	return l.flowMetrics.Snapshot()
+}
+
+func (l *LSM) Close() error {
+	// TODO: do we need to use ctx to make the goroutine to know?
+	//       like make sure the data flushed
+	l.cancel()
+	l.bg.Wait()
+	if l.wal != nil {
+		_ = l.wal.Close()
+	}
+	tables := l.tables.Tables()
+	for _, table := range tables {
+		_ = table.Close()
+	}
+	if l.logCloser != nil {
+		_ = l.logCloser.Close()
+	}
+	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 )
 
 type serviceControllerStub struct {
@@ -17,7 +17,7 @@ type serviceControllerStub struct {
 	callsCh  chan struct{}
 }
 
-func (s *serviceControllerStub) Step(state model.State) (bool, error) {
+func (s *serviceControllerStub) Step(state compaction.State) (bool, error) {
 	atomic.AddInt32(&s.calls, 1)
 	if s.callsCh != nil {
 		s.callsCh <- struct{}{}
@@ -42,7 +42,7 @@ func TestServiceRunsOnTrigger(t *testing.T) {
 		sequence: []bool{true, false},
 		callsCh:  callsCh,
 	}
-	service := NewService(ctrl, func() model.State { return model.State{} })
+	service := NewService(ctrl, func() compaction.State { return compaction.State{} })
 
 	go service.Run(ctx)
 	service.Trigger()
@@ -67,7 +67,7 @@ func TestServiceOnErrorStopsLoop(t *testing.T) {
 	ctrl := &serviceControllerStub{
 		err: errors.New("boom"),
 	}
-	service := NewService(ctrl, func() model.State { return model.State{} })
+	service := NewService(ctrl, func() compaction.State { return compaction.State{} })
 	service.OnError = func(err error) {
 		if err != nil {
 			errCh <- struct{}{}

@@ -1,9 +1,11 @@
+// Strict levelled compaction planner.
+
 package strategy
 
 import (
 	"bytes"
 
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/metadata"
 )
 
@@ -18,11 +20,11 @@ type StrictLevelledPlanner struct {
 }
 
 // Next returns a plan when L0 exceeds the configured threshold.
-func (p *StrictLevelledPlanner) Next(state model.State) (model.Plan, bool, error) {
+func (p *StrictLevelledPlanner) Next(state compaction.State) (compaction.Plan, bool, error) {
 	if p == nil {
-		return model.Plan{}, false, nil
+		return compaction.Plan{}, false, nil
 	}
-	var l0 model.Level
+	var l0 compaction.Level
 	found := false
 	for _, level := range state.Levels {
 		if level.Level == 0 {
@@ -35,7 +37,7 @@ func (p *StrictLevelledPlanner) Next(state model.State) (model.Plan, bool, error
 		inputs := append([]metadata.TableMeta(nil), l0.Tables...)
 		inputs = append(inputs, overlapTables(levelByID(state.Levels, 1), l0.Tables)...)
 		inputs = dedupe(inputs)
-		return model.Plan{
+		return compaction.Plan{
 			Inputs:      inputs,
 			OutputLevel: 1,
 			Reason:      "l0 file threshold exceeded",
@@ -43,7 +45,7 @@ func (p *StrictLevelledPlanner) Next(state model.State) (model.Plan, bool, error
 	}
 
 	if p.LevelBaseBytes == 0 {
-		return model.Plan{}, false, nil
+		return compaction.Plan{}, false, nil
 	}
 	multiplier := p.LevelMultiplier
 	if multiplier <= 0 {
@@ -63,17 +65,17 @@ func (p *StrictLevelledPlanner) Next(state model.State) (model.Plan, bool, error
 			inputs := append([]metadata.TableMeta(nil), lvl.Tables...)
 			inputs = append(inputs, overlapTables(next, lvl.Tables)...)
 			inputs = dedupe(inputs)
-			return model.Plan{
+			return compaction.Plan{
 				Inputs:      inputs,
 				OutputLevel: level + 1,
 				Reason:      "level size exceeded",
 			}, true, nil
 		}
 	}
-	return model.Plan{}, false, nil
+	return compaction.Plan{}, false, nil
 }
 
-func levelByID(levels []model.Level, id int) *model.Level {
+func levelByID(levels []compaction.Level, id int) *compaction.Level {
 	for i := range levels {
 		if levels[i].Level == id {
 			return &levels[i]
@@ -101,7 +103,7 @@ func levelTargetBytes(base uint64, multiplier int, level int) uint64 {
 	return target
 }
 
-func overlapTables(level *model.Level, inputs []metadata.TableMeta) []metadata.TableMeta {
+func overlapTables(level *compaction.Level, inputs []metadata.TableMeta) []metadata.TableMeta {
 	if level == nil || len(level.Tables) == 0 {
 		return nil
 	}

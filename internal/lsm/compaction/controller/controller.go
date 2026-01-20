@@ -1,35 +1,36 @@
+// Compaction coordinator that runs planner/runner/applier.
+
 package controller
 
 import (
-	"lsmengine/internal/lsm/compaction/data"
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/logging"
-	"lsmengine/internal/lsm/sstable"
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 )
 
 // Controller drives compaction by coordinating planner, runner, and applier.
 type Controller interface {
-	Step(state model.State) (bool, error)
+	Step(state compaction.State) (bool, error)
 }
 
 // Coordinator is a simple in-process controller.
 type Coordinator struct {
-	Planner model.Planner
-	Runner  data.Runner
-	Applier data.Applier
-	Resolve data.Resolver
+	Planner compaction.Planner
+	Runner  compaction.Runner
+	Applier compaction.Applier
+	Resolve compaction.Resolver
 	Logger  logging.Logger
 
-	Metrics *sstable.FlowMetrics
+	Metrics *sstableconfig.FlowMetrics
 }
 
 // Step performs one compaction cycle if a plan is available.
-func (c *Coordinator) Step(state model.State) (bool, error) {
+func (c *Coordinator) Step(state compaction.State) (bool, error) {
 	if c == nil || c.Planner == nil || c.Runner == nil || c.Applier == nil || c.Resolve == nil {
 		return false, nil
 	}
 	if c.Metrics == nil {
-		c.Metrics = &sstable.FlowMetrics{}
+		c.Metrics = &sstableconfig.FlowMetrics{}
 	}
 	plan, ok, err := c.Planner.Next(state)
 	if err != nil || !ok {
@@ -56,9 +57,9 @@ func (c *Coordinator) Step(state model.State) (bool, error) {
 }
 
 // MetricsSnapshot exposes accumulated flow metrics (if any).
-func (c *Coordinator) MetricsSnapshot() sstable.MetricsSnapshot {
+func (c *Coordinator) MetricsSnapshot() sstableconfig.MetricsSnapshot {
 	if c == nil || c.Metrics == nil {
-		return sstable.MetricsSnapshot{}
+		return sstableconfig.MetricsSnapshot{}
 	}
 	return c.Metrics.Snapshot()
 }

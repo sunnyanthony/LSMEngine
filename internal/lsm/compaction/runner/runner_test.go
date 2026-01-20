@@ -3,15 +3,16 @@ package runner
 import (
 	"testing"
 
-	"lsmengine/internal/lsm/compaction/model"
+	"lsmengine/internal/lsm/compaction"
 	"lsmengine/internal/lsm/metadata"
 	"lsmengine/internal/lsm/sstable"
+	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/pkg/lsm/types"
 )
 
 func TestSimpleRunnerMergesNewest(t *testing.T) {
 	dir := t.TempDir()
-	opts := sstable.DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 	writer, err := sstable.NewSSTableWriter(opts)
@@ -36,7 +37,7 @@ func TestSimpleRunnerMergesNewest(t *testing.T) {
 	defer table2.Close()
 
 	runner := &SimpleRunner{Flusher: writer}
-	result, err := runner.Run(model.Plan{
+	result, err := runner.Run(compaction.Plan{
 		Inputs:      []metadata.TableMeta{{Path: table1.Path, SeqMax: table1.Seq}, {Path: table2.Path, SeqMax: table2.Seq}},
 		OutputLevel: 1,
 	}, []sstable.SSTable{table1, table2})
@@ -65,7 +66,7 @@ func TestSimpleRunnerMergesNewest(t *testing.T) {
 
 func TestSimpleRunnerDropsTombstones(t *testing.T) {
 	dir := t.TempDir()
-	opts := sstable.DefaultOptions(dir)
+	opts := sstableconfig.DefaultOptions(dir)
 	opts.BlockTargetBytes = 64
 	opts.BlockMaxBytes = 128
 	writer, err := sstable.NewSSTableWriter(opts)
@@ -88,7 +89,7 @@ func TestSimpleRunnerDropsTombstones(t *testing.T) {
 	defer table2.Close()
 
 	runner := &SimpleRunner{Flusher: writer, DropTombstones: true}
-	result, err := runner.Run(model.Plan{
+	result, err := runner.Run(compaction.Plan{
 		Inputs: []metadata.TableMeta{{Path: table1.Path, SeqMax: table1.Seq}, {Path: table2.Path, SeqMax: table2.Seq}},
 	}, []sstable.SSTable{table1, table2})
 	if err != nil {

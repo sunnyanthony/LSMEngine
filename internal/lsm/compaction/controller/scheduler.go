@@ -1,3 +1,5 @@
+// Compaction scheduler triggered by flush events.
+
 package controller
 
 import (
