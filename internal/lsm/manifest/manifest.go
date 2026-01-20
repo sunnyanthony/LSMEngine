@@ -1,3 +1,5 @@
+// Manifest types and JSON store implementation.
+
 package manifest
 
 import (
@@ -5,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type Entry struct {
@@ -17,48 +20,53 @@ type Entry struct {
 	SizeBytes uint64 `json:"size_bytes"`
 }
 
-type ReplicationState struct {
-	Term uint64 `json:"term"`
-	Seq  uint64 `json:"seq"`
-}
-
-func (r *ReplicationState) UnmarshalJSON(data []byte) error {
-	if len(data) == 0 {
-		return nil
-	}
-	if data[0] != '{' {
-		var seq uint64
-		if err := json.Unmarshal(data, &seq); err != nil {
-			return err
-		}
-		r.Term = 1
-		r.Seq = seq
-		return nil
-	}
-	var aux struct {
-		Term uint64 `json:"term"`
-		Seq  uint64 `json:"seq"`
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.Term == 0 {
-		aux.Term = 1
-	}
-	r.Term = aux.Term
-	r.Seq = aux.Seq
-	return nil
-}
-
 type Manifest struct {
-	WALSeq      uint64                      `json:"wal_seq"`
-	Tables      []Entry                     `json:"tables"`
-	Replication map[string]ReplicationState `json:"replication,omitempty"`
+	WALSeq uint64  `json:"wal_seq"`
+	Tables []Entry `json:"tables"`
 }
 
 type Store interface {
 	Load() (Manifest, error)
 	Save(Manifest) error
+}
+
+// UpdateStore extends Store with an atomic read-modify-write helper.
+type UpdateStore interface {
+	Store
+	Update(func(Manifest) Manifest) error
+}
+
+// LockedStore serializes manifest updates to avoid lost writes.
+type LockedStore struct {
+	store Store
+	mu    sync.Mutex
+}
+
+// NewLockedStore wraps a Store with a process-local lock.
+func NewLockedStore(store Store) *LockedStore {
+	return &LockedStore{store: store}
+}
+
+func (s *LockedStore) Load() (Manifest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.store.Load()
+}
+
+func (s *LockedStore) Save(m Manifest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.store.Save(m)
+}
+
+func (s *LockedStore) Update(fn func(Manifest) Manifest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	return s.store.Save(fn(m))
 }
 
 // FileManifestStore persists manifest as JSON on disk.

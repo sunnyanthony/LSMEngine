@@ -1,3 +1,5 @@
+// Append-only manifest log store with checkpoints.
+
 package manifest
 
 import (
