@@ -34,10 +34,10 @@ func (w *WAL) append(entry types.Entry) error {
 	if err := w.appendLocked(entry); err != nil {
 		return err
 	}
+	if err := w.flushBlock(); err != nil {
+		return err
+	}
 	if w.sync {
-		if err := w.flushBlock(); err != nil {
-			return err
-		}
 		if err := w.f.Sync(); err != nil {
 			return fmt.Errorf("wal sync: %w", err)
 		}
@@ -178,11 +178,13 @@ func (w *WAL) processBatch(batch []appendRequest, syncNow bool) error {
 			errs[i] = err
 		}
 	}
-	if fatal == nil && syncNow {
+	if fatal == nil {
 		if err := w.flushBlock(); err != nil {
 			fatal = err
-		} else if err := w.f.Sync(); err != nil {
-			fatal = fmt.Errorf("wal sync: %w", err)
+		} else if syncNow {
+			if err := w.f.Sync(); err != nil {
+				fatal = fmt.Errorf("wal sync: %w", err)
+			}
 		}
 	}
 	if fatal != nil {

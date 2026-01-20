@@ -209,6 +209,32 @@ func TestWALSyncTrueFlushes(t *testing.T) {
 	}
 }
 
+func TestWALSyncFalseFlushesBlocks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal.log")
+	w, err := NewWAL(Options{Path: path, Sync: false})
+	if err != nil {
+		t.Fatalf("new wal: %v", err)
+	}
+	appendOwned(t, w, types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1})
+
+	wal := OpenReplay(path, false)
+	var count int
+	err = wal.Replay(func(e types.Entry) error {
+		count++
+		return nil
+	})
+	if err != nil && !errors.Is(err, errs.ErrWALCorruptSegment) {
+		t.Fatalf("replay: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 entry replayed before close, got %d", count)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
+}
+
 func TestWALCorruptHeaderLenStops(t *testing.T) {
 	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
