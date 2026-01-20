@@ -1,4 +1,4 @@
-package memtable
+package memtable_test
 
 import (
 	"encoding/binary"
@@ -6,12 +6,14 @@ import (
 	"sync/atomic"
 	"testing"
 
+	memtable "lsmengine/internal/lsm/memtable"
+	memtabletable "lsmengine/internal/lsm/memtable/table"
 	"lsmengine/pkg/lsm/types"
 )
 
 type benchTable struct {
 	name string
-	new  func() Table
+	new  func() memtable.Table
 }
 
 const benchShardConcurrency = 2
@@ -34,8 +36,8 @@ func buildBenchTables() []benchTable {
 		arenaSize := size
 		label := fmt.Sprintf("%dk", arenaSize/1024)
 		tables = append(tables,
-			benchTable{name: "map/arena" + label, new: func() Table { return NewMapTableWithArena(arenaSize) }},
-			benchTable{name: "skiplist/arena" + label, new: func() Table { return NewSkipListTableWithArena(arenaSize) }},
+			benchTable{name: "map/arena" + label, new: func() memtable.Table { return memtabletable.NewMapTableWithArena(arenaSize) }},
+			benchTable{name: "skiplist/arena" + label, new: func() memtable.Table { return memtabletable.NewSkipListTableWithArena(arenaSize) }},
 		)
 		for _, shards := range benchShardCounts {
 			shardCount := shards
@@ -43,14 +45,18 @@ func buildBenchTables() []benchTable {
 				name := "sharded/auto/arena" + label
 				tables = append(tables, benchTable{
 					name: name,
-					new:  func() Table { return NewShardedSkipListTableWithArena(benchShardConcurrency, arenaSize) },
+					new: func() memtable.Table {
+						return memtabletable.NewShardedSkipListTableWithArena(benchShardConcurrency, arenaSize)
+					},
 				})
 				continue
 			}
 			name := fmt.Sprintf("sharded/%dshards/arena%s", shardCount, label)
 			tables = append(tables, benchTable{
 				name: name,
-				new:  func() Table { return NewShardedSkipListTableWithShardsAndArena(shardCount, arenaSize) },
+				new: func() memtable.Table {
+					return memtabletable.NewShardedSkipListTableWithShardsAndArena(shardCount, arenaSize)
+				},
 			})
 		}
 	}

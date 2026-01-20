@@ -1,13 +1,18 @@
+// Sharded skiplist memtable implementation.
+
 package table
 
 import (
 	"container/heap"
+	"context"
+	"hash/fnv"
 	"runtime"
 	"sync"
 	"sync/atomic"
 
-	"lsmengine/internal/lsm/memtable/arena"
-	"lsmengine/internal/lsm/memtable/core"
+	"lsmengine/internal/lsm/memory"
+	"lsmengine/internal/lsm/memory/arena"
+	"lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
@@ -26,22 +31,23 @@ type ShardedSkipListTable struct {
 	mask      uint64
 	seq       uint64
 	sizeBytes int64
-	cmp       core.Compare
+	cmp       memtable.Compare
+	wg        sync.WaitGroup
 }
 
-func NewShardedSkipListTable(concurrency int) core.Table {
+func NewShardedSkipListTable(concurrency int) memtable.Table {
 	return NewShardedSkipListTableWithArena(concurrency, arena.DefaultArenaBlockSize)
 }
 
-func NewShardedSkipListTableWithShards(shards int) core.Table {
+func NewShardedSkipListTableWithShards(shards int) memtable.Table {
 	return NewShardedSkipListTableWithShardsAndArena(shards, arena.DefaultArenaBlockSize)
 }
 
-func NewShardedSkipListTableWithArena(concurrency int, blockSize int) core.Table {
+func NewShardedSkipListTableWithArena(concurrency int, blockSize int) memtable.Table {
 	return newShardedSkipListTable(shardCount(concurrency), blockSize)
 }
 
-func NewShardedSkipListTableWithShardsAndArena(shards int, blockSize int) core.Table {
+func NewShardedSkipListTableWithShardsAndArena(shards int, blockSize int) memtable.Table {
 	if shards < 1 {
 		shards = 1
 	}
@@ -57,7 +63,7 @@ func newShardedSkipListTable(shards int, blockSize int) *ShardedSkipListTable {
 	return &ShardedSkipListTable{
 		shards: s,
 		mask:   uint64(shards - 1),
-		cmp:    core.DefaultCompare,
+		cmp:    memtable.DefaultCompare,
 	}
 }
 
@@ -81,7 +87,32 @@ func (t *ShardedSkipListTable) ApplyOwned(entry types.Entry) {
 // CopyEntry copies key/value into the shard-owned arena without inserting.
 func (t *ShardedSkipListTable) CopyEntry(entry types.Entry) types.Entry {
 	s := t.pick(entry.Key)
-	return s.copyEntry(entry)
+	return memory.CopyEntry(s.arena, entry)
+}
+
+func (t *ShardedSkipListTable) IncWriter() error {
+	t.wg.Add(1)
+	return nil
+}
+
+func (t *ShardedSkipListTable) DecWriter() {
+	t.wg.Done()
+}
+
+func (t *ShardedSkipListTable) WaitWriters(ctx context.Context) error {
+	done := make(chan struct{})
+
+	go func() {
+		t.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ApplyBatchOwned applies entries without copying key/value.
@@ -132,20 +163,20 @@ func (t *ShardedSkipListTable) Size() int {
 	return int(atomic.LoadInt64(&t.sizeBytes))
 }
 
-func (t *ShardedSkipListTable) Stats() core.TableStats {
-	stats := core.TableStats{
+func (t *ShardedSkipListTable) Stats() memtable.TableStats {
+	stats := memtable.TableStats{
 		Bytes: int(atomic.LoadInt64(&t.sizeBytes)),
 	}
 	if len(t.shards) == 0 {
 		return stats
 	}
-	stats.Shards = make([]core.ShardStats, 0, len(t.shards))
+	stats.Shards = make([]memtable.ShardStats, 0, len(t.shards))
 	var arenaBytes int64
 	var arenaBlocks int
 	for i := range t.shards {
 		s := &t.shards[i]
 		s.mu.RLock()
-		shardStats := core.ShardStats{
+		shardStats := memtable.ShardStats{
 			Entries: s.entries,
 			Bytes:   s.bytes,
 		}
@@ -181,11 +212,11 @@ func (t *ShardedSkipListTable) Drain() []types.Entry {
 	return out
 }
 
-func (t *ShardedSkipListTable) Iter() core.Iterator {
+func (t *ShardedSkipListTable) Iter() memtable.Iterator {
 	return t.Range(nil, nil)
 }
 
-func (t *ShardedSkipListTable) Range(start, end []byte) core.Iterator {
+func (t *ShardedSkipListTable) Range(start, end []byte) memtable.Iterator {
 	if len(start) > 0 && len(end) > 0 && t.cmp(start, end) >= 0 {
 		return newSliceIterator(nil)
 	}
@@ -217,6 +248,12 @@ func (t *ShardedSkipListTable) Reset() {
 func (t *ShardedSkipListTable) pick(key []byte) *shard {
 	idx := hashKey(key) & t.mask
 	return &t.shards[idx]
+}
+
+func hashKey(key []byte) uint64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write(key)
+	return hasher.Sum64()
 }
 
 func (t *ShardedSkipListTable) bumpSeq(seq uint64) {
@@ -286,25 +323,6 @@ func (t *ShardedSkipListTable) collectShardEntries(s *shard, start, end []byte) 
 	return entries
 }
 
-func (s *shard) copyEntry(entry types.Entry) types.Entry {
-	entry.Key = s.copyBytes(entry.Key)
-	entry.Value = s.copyBytes(entry.Value)
-	return entry
-}
-
-func (s *shard) copyBytes(src []byte) []byte {
-	if len(src) == 0 {
-		return nil
-	}
-	if s.arena == nil {
-		return append([]byte(nil), src...)
-	}
-	if dst := s.arena.AllocCopy(src); dst != nil {
-		return dst
-	}
-	return append([]byte(nil), src...)
-}
-
 type sliceCursor struct {
 	entries []types.Entry
 	idx     int
@@ -317,7 +335,7 @@ type sliceItem struct {
 
 type sliceHeap struct {
 	items []sliceItem
-	cmp   core.Compare
+	cmp   memtable.Compare
 }
 
 func (h sliceHeap) Len() int { return len(h.items) }
@@ -335,7 +353,7 @@ func (h *sliceHeap) Pop() any {
 	return item
 }
 
-func mergeEntries(segments [][]types.Entry, total int, cmp core.Compare) []types.Entry {
+func mergeEntries(segments [][]types.Entry, total int, cmp memtable.Compare) []types.Entry {
 	h := &sliceHeap{cmp: cmp}
 	h.items = make([]sliceItem, 0, len(segments))
 	for _, entries := range segments {

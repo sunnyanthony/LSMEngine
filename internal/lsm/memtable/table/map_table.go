@@ -1,12 +1,16 @@
+// Map-backed memtable implementation.
+
 package table
 
 import (
 	"bytes"
+	"context"
 	"sort"
 	"sync"
 
-	"lsmengine/internal/lsm/memtable/arena"
-	"lsmengine/internal/lsm/memtable/core"
+	"lsmengine/internal/lsm/memory"
+	"lsmengine/internal/lsm/memory/arena"
+	"lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -17,23 +21,24 @@ type MapTable struct {
 	entries   map[uint64][]types.Entry
 	keys      [][]byte
 	seq       uint64
-	cmp       core.Compare
+	cmp       memtable.Compare
 	sizeBytes int
 	arena     *arena.Arena
+	wg        sync.WaitGroup
 }
 
-func NewMapTable() core.Table {
+func NewMapTable() memtable.Table {
 	return NewMapTableWithArena(arena.DefaultArenaBlockSize)
 }
 
-func NewMapTableWithArena(blockSize int) core.Table {
+func NewMapTableWithArena(blockSize int) memtable.Table {
 	return newMapTable(blockSize)
 }
 
 func newMapTable(blockSize int) *MapTable {
 	return &MapTable{
 		entries: make(map[uint64][]types.Entry),
-		cmp:     core.DefaultCompare,
+		cmp:     memtable.DefaultCompare,
 		arena:   arena.NewArena(blockSize),
 	}
 }
@@ -51,7 +56,7 @@ func (m *MapTable) ApplyOwned(entry types.Entry) {
 
 // CopyEntry copies key/value into the table-owned arena without inserting.
 func (m *MapTable) CopyEntry(entry types.Entry) types.Entry {
-	return m.copyEntry(entry)
+	return memory.CopyEntry(m.arena, entry)
 }
 
 // ApplyBatchOwned applies entries without copying key/value.
@@ -79,10 +84,10 @@ func (m *MapTable) Size() int {
 	return m.sizeBytes
 }
 
-func (m *MapTable) Stats() core.TableStats {
+func (m *MapTable) Stats() memtable.TableStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	stats := core.TableStats{
+	stats := memtable.TableStats{
 		Entries: len(m.keys),
 		Bytes:   m.sizeBytes,
 	}
@@ -119,11 +124,11 @@ func (m *MapTable) Drain() []types.Entry {
 	return out
 }
 
-func (m *MapTable) Iter() core.Iterator {
+func (m *MapTable) Iter() memtable.Iterator {
 	return m.Range(nil, nil)
 }
 
-func (m *MapTable) Range(start, end []byte) core.Iterator {
+func (m *MapTable) Range(start, end []byte) memtable.Iterator {
 	m.mu.RLock()
 	if len(start) > 0 && len(end) > 0 && m.cmp(start, end) >= 0 {
 		m.mu.RUnlock()
@@ -211,21 +216,31 @@ func (m *MapTable) getByKey(key []byte) (types.Entry, bool) {
 	return types.Entry{}, false
 }
 
-func (m *MapTable) copyEntry(entry types.Entry) types.Entry {
-	entry.Key = m.copyBytes(entry.Key)
-	entry.Value = m.copyBytes(entry.Value)
-	return entry
+func (m *MapTable) IncWriter() error {
+	m.wg.Add(1)
+	return nil
 }
 
-func (m *MapTable) copyBytes(src []byte) []byte {
-	if len(src) == 0 {
+func (m *MapTable) DecWriter() {
+	m.wg.Done()
+}
+
+func (m *MapTable) WaitWriters(ctx context.Context) error {
+	done := make(chan struct{})
+
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if m.arena == nil {
-		return append([]byte(nil), src...)
-	}
-	if dst := m.arena.AllocCopy(src); dst != nil {
-		return dst
-	}
-	return append([]byte(nil), src...)
+}
+
+func entrySize(entry types.Entry) int {
+	return len(entry.Key) + len(entry.Value)
 }

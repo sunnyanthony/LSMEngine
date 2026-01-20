@@ -1,10 +1,14 @@
+// Skiplist-backed memtable implementation.
+
 package table
 
 import (
+	"context"
 	"sync"
 
-	"lsmengine/internal/lsm/memtable/arena"
-	"lsmengine/internal/lsm/memtable/core"
+	"lsmengine/internal/lsm/memory"
+	"lsmengine/internal/lsm/memory/arena"
+	"lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
@@ -14,23 +18,24 @@ type SkipListTable struct {
 	mu        sync.RWMutex
 	list      *skiplist.SkipList
 	seq       uint64
-	cmp       core.Compare
+	cmp       memtable.Compare
 	sizeBytes int
 	arena     *arena.Arena
+	wg        sync.WaitGroup
 }
 
-func NewSkipListTable() core.Table {
+func NewSkipListTable() memtable.Table {
 	return NewSkipListTableWithArena(arena.DefaultArenaBlockSize)
 }
 
-func NewSkipListTableWithArena(blockSize int) core.Table {
+func NewSkipListTableWithArena(blockSize int) memtable.Table {
 	return newSkipListTable(blockSize)
 }
 
 func newSkipListTable(blockSize int) *SkipListTable {
 	return &SkipListTable{
 		list:  skiplist.New(),
-		cmp:   core.DefaultCompare,
+		cmp:   memtable.DefaultCompare,
 		arena: arena.NewArena(blockSize),
 	}
 }
@@ -53,7 +58,7 @@ func (t *SkipListTable) ApplyOwned(entry types.Entry) {
 
 // CopyEntry copies key/value into the table-owned arena without inserting.
 func (t *SkipListTable) CopyEntry(entry types.Entry) types.Entry {
-	return t.copyEntry(entry)
+	return memory.CopyEntry(t.arena, entry)
 }
 
 // ApplyBatchOwned applies entries without copying key/value.
@@ -86,10 +91,10 @@ func (t *SkipListTable) Size() int {
 	return t.sizeBytes
 }
 
-func (t *SkipListTable) Stats() core.TableStats {
+func (t *SkipListTable) Stats() memtable.TableStats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	stats := core.TableStats{
+	stats := memtable.TableStats{
 		Entries: t.list.Len(),
 		Bytes:   t.sizeBytes,
 	}
@@ -119,11 +124,11 @@ func (t *SkipListTable) Drain() []types.Entry {
 	return out
 }
 
-func (t *SkipListTable) Iter() core.Iterator {
+func (t *SkipListTable) Iter() memtable.Iterator {
 	return t.Range(nil, nil)
 }
 
-func (t *SkipListTable) Range(start, end []byte) core.Iterator {
+func (t *SkipListTable) Range(start, end []byte) memtable.Iterator {
 	t.mu.RLock()
 	if len(start) > 0 && len(end) > 0 && t.cmp(start, end) >= 0 {
 		t.mu.RUnlock()
@@ -159,21 +164,34 @@ func (t *SkipListTable) Reset() {
 	}
 }
 
-func (t *SkipListTable) copyEntry(entry types.Entry) types.Entry {
-	entry.Key = t.copyBytes(entry.Key)
-	entry.Value = t.copyBytes(entry.Value)
-	return entry
+func (t *SkipListTable) IncWriter() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	//if atomic.LoadBool(&t.broken) {
+	//    return ErrTableUnhealthy
+	//}
+	t.wg.Add(1)
+	return nil
 }
 
-func (t *SkipListTable) copyBytes(src []byte) []byte {
-	if len(src) == 0 {
+func (t *SkipListTable) DecWriter() {
+	t.wg.Done()
+}
+
+func (t *SkipListTable) WaitWriters(ctx context.Context) error {
+	done := make(chan struct{})
+
+	go func() {
+		t.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
 		return nil
+	case <-ctx.Done():
+		//log.Error("WaitWriters timeout", "err", ctx.Err())
+		//atomic.StoreBool(&t.broken, true)
+		return ctx.Err()
 	}
-	if t.arena == nil {
-		return append([]byte(nil), src...)
-	}
-	if dst := t.arena.AllocCopy(src); dst != nil {
-		return dst
-	}
-	return append([]byte(nil), src...)
 }

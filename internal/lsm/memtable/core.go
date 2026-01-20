@@ -1,6 +1,9 @@
-package core
+// Memtable interfaces and stats types.
+
+package memtable
 
 import (
+	"context"
 	"lsmengine/internal/lsm/memtable/skiplist"
 	"lsmengine/pkg/lsm/types"
 )
@@ -15,6 +18,11 @@ type Table interface {
 	Iter() Iterator
 	Range(start, end []byte) Iterator
 	CopyEntry(entry types.Entry) types.Entry
+
+	// Writer tracking
+	IncWriter() error
+	DecWriter()
+	WaitWriters(ctx context.Context) error
 }
 
 // Factory constructs a new memtable implementation.
