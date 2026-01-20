@@ -17,7 +17,11 @@ func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("a"), []byte("1")); err != nil {
 		t.Fatalf("put a: %v", err)
@@ -32,7 +36,11 @@ func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	}
 
 	snap := store.Snapshot()
-	defer snap.Close()
+	t.Cleanup(func() {
+		if err := snap.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("d"), []byte("4")); err != nil {
 		t.Fatalf("put d: %v", err)

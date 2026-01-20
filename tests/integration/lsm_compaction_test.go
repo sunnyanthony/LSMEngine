@@ -20,7 +20,11 @@ func TestLSMCompactionMergesTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	// Enough writes to trigger multiple flushes.
 	waiter := startCompactionWait(t)

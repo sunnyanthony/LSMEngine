@@ -13,7 +13,11 @@ func (l *LSM) cleanupTables(tables []tableset.Table) {
 		return
 	}
 	for _, table := range tables {
-		_ = table.Handle.Close()
+		if err := table.Handle.Close(); err != nil {
+			if l.logger != nil {
+				l.logger.Printf("table cleanup: close obsolete %s: %v", table.Meta.Path, err)
+			}
+		}
 	}
 	for _, table := range tables {
 		if err := l.removeFile(table.Meta.Path); err != nil {

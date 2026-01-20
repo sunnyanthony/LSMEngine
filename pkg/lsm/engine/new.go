@@ -74,7 +74,6 @@ func New(opts Options) (*LSM, error) {
 	manifestStore := manifest.NewLockedStore(rawManifest)
 
 	eventBus := bus.NewBus(opts.BusBuffer)
-	ctx, cancel := context.WithCancel(context.Background())
 	var remover tableedit.Remover
 	if opts.TrashDir != "" && (opts.TrashMaxBytes > 0 || opts.TrashMaxFiles > 0) {
 		trash, err := cleanup.NewTrash(opts.TrashDir, opts.TrashMaxBytes, opts.TrashMaxFiles)
@@ -83,6 +82,7 @@ func New(opts Options) (*LSM, error) {
 		}
 		remover = trash
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	lsm := &LSM{
 		mem:                  mtFactory(),
 		mtFactory:            mtFactory,
@@ -112,6 +112,7 @@ func New(opts Options) (*LSM, error) {
 
 	m, tables, err := bootstrap.LoadManifestTables(lsm.manifest, lsm.sstableOpts)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	if len(tables) > 0 {
@@ -121,13 +122,16 @@ func New(opts Options) (*LSM, error) {
 	lsm.seq = m.WALSeq
 
 	if err := lsm.replayWAL(m.WALSeq); err != nil {
+		cancel()
 		return nil, err
 	}
 
 	lsm.bg.Add(1)
 	go func() {
 		defer lsm.bg.Done()
-		_ = lsm.dispatch.Run(ctx, lsm.flusher)
+		if err := lsm.dispatch.Run(ctx, lsm.flusher); err != nil && lsm.logger != nil {
+			lsm.logger.Printf("flush dispatcher: %v", err)
+		}
 	}()
 	lsm.compactionSvc = newCompactionRuntime(lsm, opts)
 	if lsm.compactionSvc != nil {

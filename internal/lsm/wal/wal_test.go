@@ -24,7 +24,6 @@ func TestWALAppendAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new wal: %v", err)
 	}
-	defer w.Close()
 
 	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},
@@ -101,7 +100,9 @@ func TestWALAppendLargeValue(t *testing.T) {
 		large[i] = byte(i % 251)
 	}
 	appendOwned(t, w, types.Entry{Key: []byte("big"), Value: large, Seq: 1})
-	_ = w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
 
 	wal := OpenReplay(path, false)
 	var replayed []types.Entry
@@ -152,7 +153,9 @@ func TestWALTombstoneReplay(t *testing.T) {
 	}
 	appendOwned(t, w, types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1})
 	appendOwned(t, w, types.Entry{Key: []byte("k"), Tombstone: true, Seq: 2})
-	_ = w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
 
 	wal := OpenReplay(path, false)
 	var last types.Entry
@@ -170,14 +173,19 @@ func TestWALTombstoneReplay(t *testing.T) {
 func TestWALReplayHandlerError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal.log")
-	w, _ := NewWAL(Options{Path: path, Sync: false})
+	w, err := NewWAL(Options{Path: path, Sync: false})
+	if err != nil {
+		t.Fatalf("new wal: %v", err)
+	}
 	_ = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: []byte("v"), Seq: 1}))
 	_ = w.AppendOwned(copyEntry(types.Entry{Key: []byte("k"), Value: []byte("v2"), Seq: 2}))
-	_ = w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
 
 	wal := OpenReplay(path, false)
 	count := 0
-	err := wal.Replay(func(e types.Entry) error {
+	err = wal.Replay(func(e types.Entry) error {
 		count++
 		return fmt.Errorf("stop")
 	})

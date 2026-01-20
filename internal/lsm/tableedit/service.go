@@ -69,7 +69,9 @@ func (s *Service) Apply(add []tableset.Table, remove []metadata.TableMeta, walSe
 
 	if len(removedTables) > 0 {
 		for _, table := range removedTables {
-			_ = table.Handle.Close()
+			if err := table.Handle.Close(); err != nil && s.Logger != nil {
+				s.Logger.Printf("table edit: close obsolete %s: %v", table.Meta.Path, err)
+			}
 		}
 		for _, table := range removedTables {
 			if err := s.removeFile(table.Meta.Path); err != nil {

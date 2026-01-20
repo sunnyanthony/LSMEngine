@@ -858,53 +858,6 @@ func (p *prefetchNode) prefetchTargets(entries []format.IndexEntry, start int, b
 	return out
 }
 
-func (p *prefetchNode) prefetchTargetsBudget(entries []format.IndexEntry, start int, budget *PrefetchBudget) []format.IndexEntry {
-	if budget.bytes <= 0 && budget.blocks <= 0 {
-		return nil
-	}
-	if budget.bytes > 0 {
-		remaining := budget.bytes
-		prefetched := 0
-		var out []format.IndexEntry
-		for idx := start + 1; idx < len(entries); idx++ {
-			entry := entries[idx]
-			if !p.prefetchEntryCandidate(entry) {
-				continue
-			}
-			if remaining <= 0 && prefetched > 0 {
-				break
-			}
-			if int(entry.Length) > remaining && prefetched > 0 {
-				break
-			}
-			out = append(out, entry)
-			remaining -= int(entry.Length)
-			prefetched++
-		}
-		budget.bytes = remaining
-		return out
-	}
-	out := make([]format.IndexEntry, 0, budget.blocks)
-	for i := 1; i <= budget.blocks; i++ {
-		idx := start + i
-		if idx >= len(entries) {
-			break
-		}
-		entry := entries[idx]
-		if !p.prefetchEntryCandidate(entry) {
-			continue
-		}
-		out = append(out, entry)
-	}
-	if budget.blocks > 0 {
-		budget.blocks -= len(out)
-		if budget.blocks < 0 {
-			budget.blocks = 0
-		}
-	}
-	return out
-}
-
 func (p *prefetchNode) prefetchEntryCandidate(entry format.IndexEntry) bool {
 	if entry.Length == 0 {
 		return false

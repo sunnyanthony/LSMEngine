@@ -29,7 +29,11 @@ func TestBlockSourceRead(t *testing.T) {
 	opts := config.DefaultOptions("dir")
 	opts.UseMmap = false
 	source := NewBlockSource(f, info.Size(), opts)
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 
 	desc := BlockDescriptor{
 		Offset: 0,
@@ -58,7 +62,11 @@ func TestBlockSourceReadOutOfRange(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 	source := NewBlockSource(f, info.Size(), config.DefaultOptions("dir"))
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 
 	desc := BlockDescriptor{
 		Offset: uint64(len(data) + 1),
@@ -84,7 +92,11 @@ func TestBlockSourceReadCanceled(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 	source := NewBlockSource(f, info.Size(), config.DefaultOptions("dir"))
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

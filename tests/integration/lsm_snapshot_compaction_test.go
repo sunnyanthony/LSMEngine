@@ -20,7 +20,11 @@ func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("k"), []byte("v1")); err != nil {
 		t.Fatalf("put k: %v", err)
@@ -31,7 +35,11 @@ func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 	waitForSSTableFiles(t, dir, 1)
 
 	snap := store.Snapshot()
-	defer snap.Close()
+	t.Cleanup(func() {
+		if err := snap.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	waiter := startCompactionWait(t)
 	if err := store.Put([]byte("k"), []byte("v2")); err != nil {

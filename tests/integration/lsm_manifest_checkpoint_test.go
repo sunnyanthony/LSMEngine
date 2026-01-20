@@ -35,7 +35,11 @@ func TestLSMManifestCheckpointWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 
 	if got, ok := reopened.Get([]byte("a")); !ok || string(got.Value) != "1" {
 		t.Fatalf("expected a=1 after reopen, ok=%v val=%q", ok, got.Value)

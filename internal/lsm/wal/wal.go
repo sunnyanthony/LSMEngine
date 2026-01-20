@@ -3,6 +3,7 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,16 +79,23 @@ func NewWAL(opts Options) (*WAL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
+	closeWithErr := func(base error) error {
+		if base == nil {
+			return nil
+		}
+		if cerr := f.Close(); cerr != nil {
+			return errors.Join(base, fmt.Errorf("close wal: %w", cerr))
+		}
+		return base
+	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("stat wal: %w", err)
+		return nil, closeWithErr(fmt.Errorf("stat wal: %w", err))
 	}
 	segmentID := segment.NextSegmentID(opts.Path)
 	if info.Size() == 0 {
 		if _, err := codec.WriteSegmentHeader(f, blockSize, segmentID); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("write segment header: %w", err)
+			return nil, closeWithErr(fmt.Errorf("write segment header: %w", err))
 		}
 		info, _ = f.Stat()
 	} else {
@@ -97,16 +105,16 @@ func NewWAL(opts Options) (*WAL, error) {
 				blockSize = hdr.BlockSize
 				segmentID = hdr.SegmentID
 			}
-			_ = r.Close()
+			if cerr := r.Close(); cerr != nil {
+				return nil, closeWithErr(fmt.Errorf("close wal header: %w", cerr))
+			}
 		}
 		if blockSize < minBlockSize {
-			f.Close()
-			return nil, fmt.Errorf("wal block size too small (%d < %d)", blockSize, minBlockSize)
+			return nil, closeWithErr(fmt.Errorf("wal block size too small (%d < %d)", blockSize, minBlockSize))
 		}
 	}
 	if opts.MaxRecordBytes > 0 && opts.MaxRecordBytes > uint64(blockSize) {
-		f.Close()
-		return nil, fmt.Errorf("wal max record bytes (%d) exceeds block size (%d)", opts.MaxRecordBytes, blockSize)
+		return nil, closeWithErr(fmt.Errorf("wal max record bytes (%d) exceeds block size (%d)", opts.MaxRecordBytes, blockSize))
 	}
 	replayBuffer := opts.ReplayBuffer
 	if replayBuffer <= 0 {

@@ -44,7 +44,11 @@ func TestLSMRecoveryFallbackScanWhenManifestMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	waiter.Wait(t)
 
 	if got, ok := reopened.Get([]byte("a")); !ok || string(got.Value) != "1" {
@@ -87,7 +91,11 @@ func TestLSMRecoveryFallbackScanWhenManifestCorrupt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	waiter.Wait(t)
 
 	if got, ok := reopened.Get([]byte("x")); !ok || string(got.Value) != "9" {
@@ -141,7 +149,11 @@ func TestLSMRecoveryWALOnlyWhenManifestUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 
 	if got, ok := reopened.Get([]byte("k1")); !ok || string(got.Value) != "v1" {
 		t.Fatalf("expected k1=v1 after WAL replay, ok=%v val=%q", ok, got.Value)
@@ -200,7 +212,11 @@ func TestLSMRecoveryFallbackScanWhenManifestMissingTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	waiter.Wait(t)
 
 	if got, ok := reopened.Get([]byte("a")); ok || got.Tombstone {

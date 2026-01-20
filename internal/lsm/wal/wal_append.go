@@ -209,7 +209,9 @@ func (w *WAL) drainAndClose() error {
 			pending = append(pending, req)
 			if w.batchMax > 0 && len(pending) >= w.batchMax {
 				if err := w.processBatch(pending, false); err != nil {
-					w.closeFile()
+					if cerr := w.closeFile(); cerr != nil {
+						return fmt.Errorf("process batch: %w (close: %v)", err, cerr)
+					}
 					return err
 				}
 				pending = pending[:0]
@@ -217,7 +219,9 @@ func (w *WAL) drainAndClose() error {
 		default:
 			if len(pending) > 0 {
 				if err := w.processBatch(pending, false); err != nil {
-					w.closeFile()
+					if cerr := w.closeFile(); cerr != nil {
+						return fmt.Errorf("process batch: %w (close: %v)", err, cerr)
+					}
 					return err
 				}
 			}
@@ -276,7 +280,9 @@ func (w *WAL) rotate() error {
 		return fmt.Errorf("open new wal: %w", err)
 	}
 	if _, err := codec.WriteSegmentHeader(newFile, w.blockSize, w.segmentID); err != nil {
-		_ = newFile.Close()
+		if cerr := newFile.Close(); cerr != nil {
+			return errors.Join(fmt.Errorf("write segment header: %w", err), fmt.Errorf("close wal: %w", cerr))
+		}
 		return fmt.Errorf("write segment header: %w", err)
 	}
 	w.f = newFile

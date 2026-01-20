@@ -36,7 +36,11 @@ func TestLSMFlushToSSTableAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if got, ok := store.Get([]byte("a")); !ok || string(got.Value) != "1" {
 		t.Fatalf("reopen get a: ok=%v val=%q", ok, got.Value)
@@ -77,7 +81,11 @@ func TestLSMMultiFlushReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	for _, kv := range [][2]string{
 		{"a", "1"},
@@ -120,7 +128,11 @@ func TestLSMReadFromSSTableWithoutWAL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if got, ok := store.Get([]byte("a")); !ok || string(got.Value) != "1" {
 		t.Fatalf("get a: ok=%v val=%q", ok, got.Value)

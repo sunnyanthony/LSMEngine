@@ -89,7 +89,7 @@ func (w *WAL) ReplayViews(fn func(memory.EntryView) error) error {
 	return nil
 }
 
-func replaySegment(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(types.Entry) error) (int64, error) {
+func replaySegment(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(types.Entry) error) (lastGood int64, err error) {
 	if fs == nil {
 		fs = iofs.OSFS{}
 	}
@@ -100,7 +100,15 @@ func replaySegment(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(typ
 		}
 		return 0, fmt.Errorf("open wal for replay: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("close wal segment: %w", cerr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("close wal segment: %w", cerr))
+			}
+		}
+	}()
 
 	var br *bufio.Reader
 	if pool != nil {
@@ -161,7 +169,7 @@ func replaySegment(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(typ
 	return lastGoodOffset, nil
 }
 
-func replaySegmentViews(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(memory.EntryView) error) (int64, error) {
+func replaySegmentViews(fs iofs.FS, pool *memory.ReaderPool, path string, fn func(memory.EntryView) error) (lastGood int64, err error) {
 	if fs == nil {
 		fs = iofs.OSFS{}
 	}
@@ -172,7 +180,15 @@ func replaySegmentViews(fs iofs.FS, pool *memory.ReaderPool, path string, fn fun
 		}
 		return 0, fmt.Errorf("open wal for replay: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("close wal segment: %w", cerr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("close wal segment: %w", cerr))
+			}
+		}
+	}()
 
 	var br *bufio.Reader
 	if pool != nil {

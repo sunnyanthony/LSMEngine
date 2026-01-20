@@ -26,7 +26,9 @@ func TestLSMWALReplay(t *testing.T) {
 	if err := store.Delete([]byte("beta")); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	store.Close()
+	if err := store.Close(); err != nil {
+		t.Fatalf("close lsm: %v", err)
+	}
 
 	// Sanity: wal file exists.
 	if _, err := os.Stat(filepath.Join(dir, "wal.log")); err != nil {
@@ -38,7 +40,11 @@ func TestLSMWALReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm reopen: %v", err)
 	}
-	defer store2.Close()
+	t.Cleanup(func() {
+		if err := store2.Close(); err != nil {
+			t.Errorf("close lsm reopen: %v", err)
+		}
+	})
 
 	if got, ok := store2.Get([]byte("alpha")); !ok || !bytes.Equal(got.Value, []byte("one")) {
 		t.Fatalf("replayed alpha missing: %+v ok=%v", got, ok)

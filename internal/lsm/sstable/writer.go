@@ -4,6 +4,7 @@ package sstable
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,7 +87,7 @@ func NewSSTableWriter(opts sstableconfig.Options) (*Writer, error) {
 }
 
 // Flush creates a new SSTable file with entries sorted by key.
-func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
+func (w *Writer) Flush(entries []types.Entry) (table SSTable, err error) {
 	if len(entries) == 0 {
 		return SSTable{}, fmt.Errorf("no entries to write")
 	}
@@ -115,7 +116,19 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 	if err != nil {
 		return SSTable{}, fmt.Errorf("create sstable: %w", err)
 	}
-	defer f.Close()
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
+		if cerr := f.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("close sstable: %w", cerr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("close sstable: %w", cerr))
+			}
+		}
+	}()
 
 	var offset uint64
 	builder := format.NewBuilder(w.opts.RestartInterval, w.opts.RestartIntervalAdaptive, w.opts.RestartIntervalMin, w.opts.RestartIntervalMax)
@@ -274,8 +287,10 @@ func (w *Writer) Flush(entries []types.Entry) (SSTable, error) {
 		return SSTable{}, fmt.Errorf("sync sstable: %w", err)
 	}
 	if err := f.Close(); err != nil {
+		closed = true
 		return SSTable{}, fmt.Errorf("close sstable: %w", err)
 	}
+	closed = true
 	if err := w.fs.Rename(tempPath, finalPath); err != nil {
 		return SSTable{}, fmt.Errorf("rename sstable: %w", err)
 	}
@@ -324,6 +339,14 @@ func syncDir(fs iofs.FS, dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	if err := d.Sync(); err != nil {
+		if cerr := d.Close(); cerr != nil {
+			return errors.Join(err, fmt.Errorf("close dir: %w", cerr))
+		}
+		return err
+	}
+	if err := d.Close(); err != nil {
+		return err
+	}
+	return nil
 }

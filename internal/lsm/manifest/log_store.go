@@ -5,6 +5,7 @@ package manifest
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,15 +130,24 @@ func (s *LogStore) loadLocked() error {
 	return nil
 }
 
-func (s *LogStore) readLogLocked(state Manifest) (Manifest, error) {
+func (s *LogStore) readLogLocked(state Manifest) (out Manifest, err error) {
+	out = state
 	f, err := os.Open(s.opts.LogPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return state, nil
+			return out, nil
 		}
 		return Manifest{}, fmt.Errorf("manifest log open: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("manifest log close: %w", cerr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("manifest log close: %w", cerr))
+			}
+		}
+	}()
 
 	reader := bufio.NewReader(f)
 	for {
@@ -157,13 +167,13 @@ func (s *LogStore) readLogLocked(state Manifest) (Manifest, error) {
 			break
 		}
 		if rec.Type == "snapshot" {
-			state = rec.Manifest
+			out = rec.Manifest
 		}
 		if err != nil {
 			break
 		}
 	}
-	return state, nil
+	return out, nil
 }
 
 func trimLine(line []byte) []byte {
@@ -187,7 +197,9 @@ func (s *LogStore) appendLocked(rec logRecord) error {
 		return fmt.Errorf("manifest log open append: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
+		if cerr := f.Close(); cerr != nil {
+			return errors.Join(fmt.Errorf("manifest log append: %w", err), fmt.Errorf("manifest log close: %w", cerr))
+		}
 		return fmt.Errorf("manifest log append: %w", err)
 	}
 	if err := f.Close(); err != nil {

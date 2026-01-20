@@ -23,7 +23,11 @@ func TestLSMCompactionDropsTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	waiter := startCompactionWait(t)
 	if err := store.Put([]byte("k"), []byte("v1")); err != nil {
@@ -58,7 +62,9 @@ func TestLSMCompactionDropsTombstone(t *testing.T) {
 			t.Fatalf("load sstable: %v", err)
 		}
 		if entry, ok := table.Get([]byte("k")); ok {
-			_ = table.Close()
+			if cerr := table.Close(); cerr != nil {
+				t.Errorf("close sstable: %v", cerr)
+			}
 			t.Fatalf("expected tombstone dropped, found entry: %+v", entry)
 		}
 		if err := table.Close(); err != nil {

@@ -88,14 +88,6 @@ func (s *writeService) flushService() *flushService {
 	return s.l.flushSvc
 }
 
-func (s *writeService) shouldThrottleWrite(delta int) bool {
-	s.l.memMu.RLock()
-	mem := s.l.mem
-	throttle := s.shouldThrottleWriteForMem(mem, delta)
-	s.l.memMu.RUnlock()
-	return throttle
-}
-
 func (s *writeService) shouldThrottleWriteForMem(mem memtable.Table, delta int) bool {
 	if s.l == nil || s.l.dispatch == nil || s.l.mtLimit <= 0 {
 		return false

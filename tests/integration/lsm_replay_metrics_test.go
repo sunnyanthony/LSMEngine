@@ -31,7 +31,11 @@ func TestLSMReplayWithoutFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	if got, ok := reopened.Get([]byte("alpha")); !ok || string(got.Value) != "one" {
 		t.Fatalf("replay get alpha: ok=%v val=%q", ok, got.Value)
 	}
@@ -67,7 +71,11 @@ func TestLSMFlowMetricsNonZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	if _, ok := reopened.Get([]byte("a")); !ok {
 		t.Fatalf("expected key in sstable")
 	}

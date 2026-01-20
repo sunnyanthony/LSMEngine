@@ -25,19 +25,6 @@ func (l *LSM) memSnapshot() (memtable.Table, []memtable.Table) {
 	return mem, immutables
 }
 
-func (l *LSM) immutableMems() []memtable.Table {
-	l.memMu.RLock()
-	defer l.memMu.RUnlock()
-	if len(l.immutables) == 0 {
-		return nil
-	}
-	out := make([]memtable.Table, len(l.immutables))
-	for i := range l.immutables {
-		out[i] = l.immutables[len(l.immutables)-1-i]
-	}
-	return out
-}
-
 func (l *LSM) freezeMemtableIfCurrent(current memtable.Table) memtable.Table {
 	if current == nil {
 		return nil

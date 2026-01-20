@@ -128,7 +128,7 @@ func TestStrictLevelledPlannerLevelSizeExceeded(t *testing.T) {
 		{Path: "l2a", SeqMax: 7, MinKey: []byte("b"), MaxKey: []byte("c")},
 	}
 	planner := &StrictLevelledPlanner{
-		LevelBaseBytes: 10,
+		LevelBaseBytes:  10,
 		LevelMultiplier: 10,
 	}
 	plan, ok, err := planner.Next(compaction.State{

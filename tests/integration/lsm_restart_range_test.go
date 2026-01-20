@@ -38,14 +38,22 @@ func TestLSMRangeAfterRestartSeesMemtableAndSSTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 
 	if err := reopened.Put([]byte("c"), []byte("3")); err != nil {
 		t.Fatalf("put c: %v", err)
 	}
 
 	snap := reopened.Snapshot()
-	defer snap.Close()
+	t.Cleanup(func() {
+		if err := snap.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	it := snap.Range(nil, nil)
 	var keys [][]byte

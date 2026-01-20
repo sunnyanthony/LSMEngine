@@ -34,22 +34,3 @@ func waitForManifest(t *testing.T, dir string, minTables int, minWALSeq uint64) 
 	}
 	t.Fatalf("expected manifest with tables>=%d wal_seq>=%d", minTables, minWALSeq)
 }
-
-func waitForManifestCount(t *testing.T, dir string, want int) {
-	t.Helper()
-	path := filepath.Join(dir, "manifest.json")
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			var view manifestView
-			if err := json.Unmarshal(data, &view); err == nil {
-				if len(view.Tables) == want {
-					return
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("expected manifest with %d tables", want)
-}

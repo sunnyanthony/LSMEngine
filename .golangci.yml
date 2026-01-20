@@ -1,0 +1,16 @@
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - test
+
+linters:
+  enable:
+    - errcheck
+    - staticcheck
+    - govet
+    - ineffassign
+    - typecheck
+    - unused
+  disable:
+    - gosimple

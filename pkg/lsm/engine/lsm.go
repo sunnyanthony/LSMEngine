@@ -4,7 +4,10 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -132,7 +135,6 @@ type LSM struct {
 	autoRepair           bool
 	ctx                  context.Context
 	cancel               context.CancelFunc
-	startOnce            sync.Once
 	lastFlush            uint64
 	seq                  uint64
 	missingSegmentPolicy MissingSegmentPolicy
@@ -160,18 +162,32 @@ func (l *LSM) Close() error {
 	//       like make sure the data flushed
 	l.cancel()
 	l.bg.Wait()
+	var errOut error
 	if l.wal != nil {
-		_ = l.wal.Close()
+		if err := l.wal.Close(); err != nil {
+			if l.logger != nil {
+				l.logger.Printf("wal close: %v", err)
+			}
+			errOut = errors.Join(errOut, err)
+		}
 	}
 	tables := l.tables.Tables()
 	for _, table := range tables {
-		_ = table.Close()
+		if err := table.Close(); err != nil {
+			if l.logger != nil {
+				l.logger.Printf("table close: %v", err)
+			}
+			errOut = errors.Join(errOut, err)
+		}
 	}
 	if l.tables != nil {
 		l.cleanupTables(l.tables.Pending())
 	}
 	if l.logCloser != nil {
-		_ = l.logCloser.Close()
+		if err := l.logCloser.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "lsm: log close: %v\n", err)
+			errOut = errors.Join(errOut, err)
+		}
 	}
-	return nil
+	return errOut
 }

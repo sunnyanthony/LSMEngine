@@ -67,10 +67,14 @@ func TestLogStoreIgnoresCorruptTail(t *testing.T) {
 		t.Fatalf("open log: %v", err)
 	}
 	if _, err := f.Write([]byte("{bad json\n")); err != nil {
-		_ = f.Close()
+		if cerr := f.Close(); cerr != nil {
+			t.Errorf("close log: %v", cerr)
+		}
 		t.Fatalf("append corrupt: %v", err)
 	}
-	_ = f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close log: %v", err)
+	}
 
 	reopen, err := NewLogStore(LogOptions{
 		LogPath:          logPath,

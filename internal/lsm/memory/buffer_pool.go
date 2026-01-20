@@ -24,7 +24,7 @@ func (p *BufferPool) Get(n int) []byte {
 		return make([]byte, n)
 	}
 	if v := p.pool.Get(); v != nil {
-		buf := v.([]byte)
+		buf := *v.(*[]byte)
 		if cap(buf) >= n {
 			recordBufferGet(true)
 			return buf[:n]
@@ -43,7 +43,8 @@ func (p *BufferPool) Put(buf []byte) {
 		return
 	}
 	recordBufferPut()
-	p.pool.Put(buf[:cap(buf)])
+	pooled := buf[:cap(buf)]
+	p.pool.Put(&pooled)
 }
 
 // Max returns the maximum buffer size allowed by the pool.

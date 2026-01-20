@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 	"lsmengine/internal/lsm/compaction"
+	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 )
 
 type compactionWaiter struct {

@@ -45,7 +45,11 @@ func TestFlowObserverReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	t.Cleanup(func() {
+		if err := table.Close(); err != nil {
+			t.Errorf("close table: %v", err)
+		}
+	})
 
 	if _, ok := table.Get([]byte("k1")); !ok {
 		t.Fatalf("expected key present")

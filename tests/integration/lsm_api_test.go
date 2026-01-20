@@ -22,7 +22,7 @@ func TestLSMPutGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Put([]byte("alpha"), []byte("one")); err != nil {
 		t.Fatalf("put: %v", err)
@@ -49,7 +49,7 @@ func TestLSMGetTombstoneReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Put([]byte("alpha"), []byte("one")); err != nil {
 		t.Fatalf("put: %v", err)
@@ -78,7 +78,7 @@ func TestLSMMemtableKindMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Put([]byte("alpha"), []byte("one")); err != nil {
 		t.Fatalf("put: %v", err)
@@ -105,7 +105,7 @@ func TestLSMPutEmptyKeyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Put(nil, []byte("v")); err == nil {
 		t.Fatalf("expected error for empty key")
@@ -120,7 +120,7 @@ func TestLSMPutEmptyValueRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Put([]byte("k"), nil); err == nil {
 		t.Fatalf("expected error for empty value")
@@ -135,7 +135,7 @@ func TestLSMDeleteEmptyKeyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	cleanupCloser(t, "store", store)
 
 	if err := store.Delete(nil); err == nil {
 		t.Fatalf("expected error for empty key")
@@ -176,7 +176,11 @@ func TestLSMPutCopiesInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen lsm: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 	replayed, ok := reopened.Get([]byte("alpha"))
 	if !ok {
 		t.Fatalf("expected replayed key to exist")
@@ -184,4 +188,13 @@ func TestLSMPutCopiesInput(t *testing.T) {
 	if !bytes.Equal(replayed.Key, wantKey) || !bytes.Equal(replayed.Value, wantVal) {
 		t.Fatalf("expected copied replay, got key=%q value=%q", replayed.Key, replayed.Value)
 	}
+}
+
+func cleanupCloser(t *testing.T, name string, c interface{ Close() error }) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close %s: %v", name, err)
+		}
+	})
 }

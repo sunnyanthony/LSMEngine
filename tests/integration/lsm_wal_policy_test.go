@@ -35,7 +35,11 @@ func TestLSMWALMissingSegmentPolicyIgnore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if got, ok := store.Get([]byte("alpha")); !ok || string(got.Value) != "one" {
 		t.Fatalf("expected replayed alpha=one, ok=%v val=%q", ok, got.Value)
@@ -67,7 +71,11 @@ func TestLSMWALCorruptSegmentPolicyAutoRepair(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("put after repair: %v", err)
@@ -125,7 +133,9 @@ func createCorruptWAL(t *testing.T, dir string) {
 		t.Fatalf("open wal: %v", err)
 	}
 	if _, err := f.WriteAt([]byte{0x00, 0x00, 0x00, 0x00}, 0); err != nil {
-		_ = f.Close()
+		if cerr := f.Close(); cerr != nil {
+			t.Errorf("close wal: %v", cerr)
+		}
 		t.Fatalf("corrupt wal: %v", err)
 	}
 	if err := f.Close(); err != nil {

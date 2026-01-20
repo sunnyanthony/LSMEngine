@@ -5,6 +5,7 @@ package sstable
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -55,16 +56,15 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("open sstable: %w", err)
 	}
+	var source storage.BlockSource
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
-		return nil, 0, fmt.Errorf("stat sstable: %w", err)
+		return nil, 0, closeReaderResources(fmt.Errorf("stat sstable: %w", err), f, source)
 	}
 	if info.Size() < format.FooterSizeBytes {
-		f.Close()
-		return nil, 0, errs.ErrSSTableBadFooter
+		return nil, 0, closeReaderResources(errs.ErrSSTableBadFooter, f, source)
 	}
-	source := storage.NewBlockSource(f, info.Size(), opts)
+	source = storage.NewBlockSource(f, info.Size(), opts)
 	footerDesc := storage.BlockDescriptor{
 		ID:     uint64(info.Size() - format.FooterSizeBytes),
 		Type:   format.BlockTypeMeta,
@@ -73,18 +73,14 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 	}
 	footerBuf, err := source.Read(context.Background(), footerDesc, storage.ReadHint{})
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, fmt.Errorf("read footer: %w", err)
+		return nil, 0, closeReaderResources(fmt.Errorf("read footer: %w", err), f, source)
 	}
 	if footerBuf.Release != nil {
 		defer footerBuf.Release()
 	}
 	ft, err := format.DecodeFooter(footerBuf.Data)
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, err
+		return nil, 0, closeReaderResources(err, f, source)
 	}
 	metaDesc := storage.BlockDescriptor{
 		ID:     ft.MetaOffset,
@@ -94,15 +90,11 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 	}
 	metaPayload, err := ReadBlockPayload(context.Background(), source, metaDesc, errs.ErrSSTableBadMeta)
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, err
+		return nil, 0, closeReaderResources(err, f, source)
 	}
 	m, err := format.DecodeMeta(metaPayload)
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, err
+		return nil, 0, closeReaderResources(err, f, source)
 	}
 	indexDesc := storage.BlockDescriptor{
 		ID:     ft.IndexOffset,
@@ -112,15 +104,11 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 	}
 	indexPayload, err := ReadBlockPayload(context.Background(), source, indexDesc, errs.ErrSSTableBadIndex)
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, err
+		return nil, 0, closeReaderResources(err, f, source)
 	}
 	indexEntries, err := format.DecodeIndex(indexPayload)
 	if err != nil {
-		_ = source.Close()
-		f.Close()
-		return nil, 0, err
+		return nil, 0, closeReaderResources(err, f, source)
 	}
 	var filter *bloom.Filter
 	var filterIndex []format.IndexEntry
@@ -134,23 +122,17 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 		}
 		filterPayload, err := ReadBlockPayload(context.Background(), source, filterDesc, errs.ErrSSTableBadMeta)
 		if err != nil {
-			_ = source.Close()
-			f.Close()
-			return nil, 0, err
+			return nil, 0, closeReaderResources(err, f, source)
 		}
 		if filterPartitioned {
 			filterIndex, err = format.DecodeIndex(filterPayload)
 			if err != nil {
-				_ = source.Close()
-				f.Close()
-				return nil, 0, err
+				return nil, 0, closeReaderResources(err, f, source)
 			}
 		} else {
 			filter = bloom.Decode(filterPayload)
 			if filter == nil {
-				_ = source.Close()
-				f.Close()
-				return nil, 0, errs.ErrSSTableBadMeta
+				return nil, 0, closeReaderResources(errs.ErrSSTableBadMeta, f, source)
 			}
 		}
 	}
@@ -190,6 +172,26 @@ func openReader(path string, opts config.Options) (*Reader, uint64, error) {
 		pipe:   pipe,
 	}
 	return reader, m.SeqMax, nil
+}
+
+func closeReaderResources(base error, f iofs.File, source storage.BlockSource) error {
+	var err error
+	if source != nil {
+		if closer, ok := source.(interface{ Close() error }); ok {
+			if cerr := closer.Close(); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("close sstable source: %w", cerr))
+			}
+		}
+	}
+	if f != nil {
+		if cerr := f.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close sstable file: %w", cerr))
+		}
+	}
+	if base == nil {
+		return err
+	}
+	return errors.Join(base, err)
 }
 
 func (s SSTable) Get(key []byte) (types.Entry, bool) {
@@ -258,12 +260,18 @@ func (r *Reader) Close() error {
 	if r.pipe != nil {
 		r.pipe.StopPrefetcher()
 	}
+	var err error
 	if r.source != nil {
 		if closer, ok := r.source.(interface{ Close() error }); ok {
-			_ = closer.Close()
+			if cerr := closer.Close(); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("close sstable source: %w", cerr))
+			}
 		}
 	}
-	return r.file.Close()
+	if cerr := r.file.Close(); cerr != nil {
+		err = errors.Join(err, fmt.Errorf("close sstable file: %w", cerr))
+	}
+	return err
 }
 
 type RangeIterator struct {

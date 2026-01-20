@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 
@@ -32,7 +33,7 @@ func TestSSTableWriterReaderGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	got, ok := table.Get([]byte("a"))
 	if !ok || string(got.Value) != "1" {
@@ -65,7 +66,7 @@ func TestSSTableGetView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	view, ok := table.GetView([]byte("a"))
 	if !ok || string(view.Value) != "1" || view.Tombstone {
@@ -93,7 +94,7 @@ func TestSSTableAdaptiveRestartInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	got, ok := table.Get([]byte("k050"))
 	if !ok || string(got.Value) != "v050" {
@@ -117,7 +118,7 @@ func TestSSTableRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range([]byte("k010"), []byte("k020"))
 	var got []string
@@ -149,7 +150,7 @@ func TestSSTableRangePrefetchBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range([]byte("k005"), []byte("k015"))
 	for it.Next() {
@@ -175,7 +176,7 @@ func TestSSTableUseMmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	got, ok := table.Get([]byte("k010"))
 	if !ok || string(got.Value) != "v010" {
@@ -198,7 +199,7 @@ func TestSSTableOptionsDisableFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	if table.reader.meta.BloomLen != 0 || table.reader.meta.BloomOffset != 0 {
 		t.Fatalf("expected bloom filter disabled")
@@ -227,7 +228,7 @@ func TestSSTableGetPrefersHighestSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	got, ok := table.Get([]byte("k"))
 	if !ok {
@@ -252,6 +253,15 @@ func makeEntries(n int) []types.Entry {
 	return entries
 }
 
+func cleanupCloser(t *testing.T, name string, c io.Closer) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close %s: %v", name, err)
+		}
+	})
+}
+
 func TestSSTableCorruptDataBlockFailFast(t *testing.T) {
 	dir := t.TempDir()
 	opts := sstableconfig.DefaultOptions(dir)
@@ -266,7 +276,9 @@ func TestSSTableCorruptDataBlockFailFast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	index := readIndexForTest(t, table.Path, ft)
@@ -279,7 +291,7 @@ func TestSSTableCorruptDataBlockFailFast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range(nil, nil)
 	if it.Next() {
@@ -304,7 +316,9 @@ func TestSSTableCorruptDataBlockSkipBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	index := readIndexForTest(t, table.Path, ft)
@@ -318,7 +332,7 @@ func TestSSTableCorruptDataBlockSkipBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range(nil, nil)
 	if !it.Next() {
@@ -348,7 +362,9 @@ func TestSSTableCorruptDataBlockDropTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	index := readIndexForTest(t, table.Path, ft)
@@ -362,7 +378,7 @@ func TestSSTableCorruptDataBlockDropTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range(nil, nil)
 	if it.Next() {
@@ -390,7 +406,9 @@ func TestSSTableCorruptCompressionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	index := readIndexForTest(t, table.Path, ft)
@@ -403,7 +421,7 @@ func TestSSTableCorruptCompressionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	it := table.Range(nil, nil)
 	if it.Next() {
@@ -426,7 +444,9 @@ func TestSSTableCorruptMetaBlockFailsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	corruptByte(t, table.Path, int64(ft.MetaOffset)+int64(ft.MetaLen)-1)
@@ -448,7 +468,9 @@ func TestSSTableCorruptIndexBlockFailsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	corruptByte(t, table.Path, int64(ft.IndexOffset)+int64(ft.IndexLen)-1)
@@ -470,7 +492,9 @@ func TestSSTableCorruptBloomBlockFailsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	table.Close()
+	if err := table.Close(); err != nil {
+		t.Fatalf("close table: %v", err)
+	}
 
 	ft := readFooterForTest(t, table.Path)
 	meta := readMetaForTest(t, table.Path, ft)
@@ -499,7 +523,7 @@ func TestSSTablePartitionedIndexGetRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	defer table.Close()
+	cleanupCloser(t, "table", table)
 
 	ft := readFooterForTest(t, table.Path)
 	if ft.Flags&format.FooterFlagIndexPartitioned == 0 {
@@ -535,7 +559,7 @@ func readFooterForTest(t *testing.T, path string) format.Footer {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer f.Close()
+	cleanupCloser(t, "file", f)
 	info, err := f.Stat()
 	if err != nil {
 		t.Fatalf("stat: %v", err)
@@ -585,7 +609,7 @@ func readBlockForTest(t *testing.T, path string, offset int64, length uint32) []
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer f.Close()
+	cleanupCloser(t, "file", f)
 	buf := make([]byte, length)
 	if _, err := f.ReadAt(buf, offset); err != nil {
 		t.Fatalf("read: %v", err)
@@ -599,7 +623,7 @@ func corruptByte(t *testing.T, path string, offset int64) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer f.Close()
+	cleanupCloser(t, "file", f)
 	var b [1]byte
 	if _, err := f.ReadAt(b[:], offset); err != nil {
 		t.Fatalf("read: %v", err)
@@ -617,7 +641,7 @@ func corruptCompressionID(t *testing.T, path string, entry format.IndexEntry) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer f.Close()
+	cleanupCloser(t, "file", f)
 
 	data := make([]byte, entry.Length)
 	if _, err := f.ReadAt(data, int64(entry.Offset)); err != nil {

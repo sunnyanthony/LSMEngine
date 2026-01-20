@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 
 	"lsmengine/internal/lsm/manifest"
@@ -64,7 +66,9 @@ func LoadManifestTables(store manifest.Store, opts sstableconfig.Options) (manif
 		hook.AfterManifestSave(rebuilt, saveErr)
 	}
 	if saveErr != nil {
-		closeTables(tables)
+		if cerr := closeTables(tables); cerr != nil {
+			return manifest.Manifest{}, nil, errors.Join(saveErr, cerr)
+		}
 		return manifest.Manifest{}, nil, saveErr
 	}
 	return rebuilt, tables, nil
@@ -75,7 +79,9 @@ func loadTablesFromManifest(m manifest.Manifest, opts sstableconfig.Options) ([]
 	for _, t := range m.Tables {
 		table, err := sstable.LoadSSTable(t.Path, opts)
 		if err != nil {
-			closeTables(tables)
+			if cerr := closeTables(tables); cerr != nil {
+				return nil, errors.Join(err, cerr)
+			}
 			return nil, err
 		}
 		meta := metadata.TableMeta{
@@ -125,7 +131,9 @@ func scanSSTablePaths(paths []string, opts sstableconfig.Options) (manifest.Mani
 	for _, path := range paths {
 		table, err := sstable.LoadSSTable(path, opts)
 		if err != nil {
-			closeTables(tables)
+			if cerr := closeTables(tables); cerr != nil {
+				return manifest.Manifest{}, nil, errors.Join(err, cerr)
+			}
 			return manifest.Manifest{}, nil, err
 		}
 		meta := tableedit.TableMetaFromSSTable(table, 0)
@@ -146,8 +154,12 @@ func scanSSTablePaths(paths []string, opts sstableconfig.Options) (manifest.Mani
 	return manifest.Manifest{WALSeq: maxSeq, Tables: entries}, tables, nil
 }
 
-func closeTables(tables []tableset.Table) {
+func closeTables(tables []tableset.Table) error {
+	var errOut error
 	for _, t := range tables {
-		_ = t.Handle.Close()
+		if err := t.Handle.Close(); err != nil {
+			errOut = errors.Join(errOut, fmt.Errorf("close table %s: %w", t.Meta.Path, err))
+		}
 	}
+	return errOut
 }

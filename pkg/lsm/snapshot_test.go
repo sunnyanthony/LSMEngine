@@ -46,7 +46,7 @@ func TestSnapshotGetSeesFrozenValue(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	_ = snap.Close()
+	closeSnap(t, snap)
 }
 
 func TestSnapshotRangeStable(t *testing.T) {
@@ -94,7 +94,7 @@ func TestSnapshotRangeStable(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	_ = snap.Close()
+	closeSnap(t, snap)
 }
 
 func TestSnapshotRangeDedupPrefersNewest(t *testing.T) {
@@ -140,8 +140,8 @@ func TestSnapshotRangeDedupPrefersNewest(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	_ = snap2.Close()
-	_ = snap1.Close()
+	closeSnap(t, snap2)
+	closeSnap(t, snap1)
 }
 
 func TestSnapshotRangeSkipsTombstone(t *testing.T) {
@@ -182,8 +182,8 @@ func TestSnapshotRangeSkipsTombstone(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	_ = snap2.Close()
-	_ = snap1.Close()
+	closeSnap(t, snap2)
+	closeSnap(t, snap1)
 }
 
 func TestSnapshotRangeIncludesSSTable(t *testing.T) {
@@ -198,7 +198,11 @@ func TestSnapshotRangeIncludesSSTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("a"), []byte("1")); err != nil {
 		t.Fatalf("put: %v", err)
@@ -212,7 +216,11 @@ func TestSnapshotRangeIncludesSSTable(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	snap := store.Snapshot()
-	defer snap.Close()
+	t.Cleanup(func() {
+		if err := snap.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	it := snap.Range(nil, nil)
 	var keys [][]byte
@@ -251,7 +259,11 @@ func TestSnapshotRangeMemtableOverridesSSTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	if err := store.Put([]byte("a"), []byte("1")); err != nil {
 		t.Fatalf("put: %v", err)
@@ -268,7 +280,11 @@ func TestSnapshotRangeMemtableOverridesSSTable(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	snap := store.Snapshot()
-	defer snap.Close()
+	t.Cleanup(func() {
+		if err := snap.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	it := snap.Range(nil, nil)
 	var keys [][]byte
@@ -307,4 +323,11 @@ func waitForSSTables(t *testing.T, dir string, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("expected %d sstable files within timeout", want)
+}
+
+func closeSnap(t *testing.T, snap interface{ Close() error }) {
+	t.Helper()
+	if err := snap.Close(); err != nil {
+		t.Errorf("close snapshot: %v", err)
+	}
 }

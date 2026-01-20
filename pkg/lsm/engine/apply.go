@@ -16,10 +16,6 @@ func (l *LSM) applyEntriesOwned(table memtable.Table, entries []types.Entry) {
 	table.ApplyBatchOwned(entries)
 }
 
-func (l *LSM) prepareEntry(table memtable.Table, entry types.Entry) types.Entry {
-	return l.entryBuilder(table).FromEntry(entry)
-}
-
 func (l *LSM) entryBuilder(table memtable.Table) memory.EntryBuilder {
 	return memory.NewEntryBuilder(table.CopyEntry)
 }

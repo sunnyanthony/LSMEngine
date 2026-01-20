@@ -51,7 +51,9 @@ func TestLSMComplexFlushCompactionRestartSnapshot(t *testing.T) {
 		vals = append(vals, entry.Value)
 	}
 	if err := it.Err(); err != nil {
-		_ = snap.Close()
+		if cerr := snap.Close(); cerr != nil {
+			t.Errorf("close snapshot: %v", cerr)
+		}
 		t.Fatalf("range err: %v", err)
 	}
 	if err := snap.Close(); err != nil {
@@ -79,7 +81,11 @@ func TestLSMComplexFlushCompactionRestartSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 
 	if got, ok := reopened.Get([]byte("a")); !ok || !bytes.Equal(got.Value, []byte("3")) {
 		t.Fatalf("expected a=3 after reopen, ok=%v val=%q", ok, got.Value)

@@ -49,7 +49,11 @@ func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened: %v", err)
+		}
+	})
 
 	waitForSSTableFiles(t, dir, 1)
 

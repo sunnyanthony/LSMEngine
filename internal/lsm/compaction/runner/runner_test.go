@@ -26,7 +26,11 @@ func TestSimpleRunnerMergesNewest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush table1: %v", err)
 	}
-	defer table1.Close()
+	t.Cleanup(func() {
+		if err := table1.Close(); err != nil {
+			t.Errorf("close table1: %v", err)
+		}
+	})
 	table2, err := writer.Flush([]types.Entry{
 		{Key: []byte("a"), Value: []byte("new"), Seq: 3},
 		{Key: []byte("c"), Value: []byte("two"), Seq: 2},
@@ -34,7 +38,11 @@ func TestSimpleRunnerMergesNewest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush table2: %v", err)
 	}
-	defer table2.Close()
+	t.Cleanup(func() {
+		if err := table2.Close(); err != nil {
+			t.Errorf("close table2: %v", err)
+		}
+	})
 
 	runner := &SimpleRunner{Flusher: writer}
 	result, err := runner.Run(compaction.Plan{
@@ -48,7 +56,11 @@ func TestSimpleRunnerMergesNewest(t *testing.T) {
 		t.Fatalf("expected 1 output, got %d", len(result.Output))
 	}
 	out := result.Output[0]
-	defer out.Close()
+	t.Cleanup(func() {
+		if err := out.Close(); err != nil {
+			t.Errorf("close output: %v", err)
+		}
+	})
 
 	got, ok := out.Get([]byte("a"))
 	if !ok || string(got.Value) != "new" {
@@ -79,14 +91,22 @@ func TestSimpleRunnerDropsTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush table1: %v", err)
 	}
-	defer table1.Close()
+	t.Cleanup(func() {
+		if err := table1.Close(); err != nil {
+			t.Errorf("close table1: %v", err)
+		}
+	})
 	table2, err := writer.Flush([]types.Entry{
 		{Key: []byte("a"), Tombstone: true, Seq: 2},
 	})
 	if err != nil {
 		t.Fatalf("flush table2: %v", err)
 	}
-	defer table2.Close()
+	t.Cleanup(func() {
+		if err := table2.Close(); err != nil {
+			t.Errorf("close table2: %v", err)
+		}
+	})
 
 	runner := &SimpleRunner{Flusher: writer, DropTombstones: true}
 	result, err := runner.Run(compaction.Plan{
