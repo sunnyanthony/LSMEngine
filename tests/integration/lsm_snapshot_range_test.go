@@ -34,6 +34,16 @@ func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	snap := store.Snapshot()
 	defer snap.Close()
 
+	if err := store.Put([]byte("d"), []byte("4")); err != nil {
+		t.Fatalf("put d: %v", err)
+	}
+	if err := store.Delete([]byte("b")); err != nil {
+		t.Fatalf("delete b: %v", err)
+	}
+	if err := store.Put([]byte("a"), []byte("9")); err != nil {
+		t.Fatalf("put a: %v", err)
+	}
+
 	it := snap.Range(nil, nil)
 	var keys [][]byte
 	var vals [][]byte
@@ -56,5 +66,17 @@ func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	}
 	if !bytes.Equal(keys[2], []byte("c")) || !bytes.Equal(vals[2], []byte("3")) {
 		t.Fatalf("expected c=3, got %q=%q", keys[2], vals[2])
+	}
+	if got, ok := snap.Get([]byte("a")); !ok || !bytes.Equal(got.Value, []byte("1")) {
+		t.Fatalf("expected snapshot a=1, ok=%v val=%q", ok, got.Value)
+	}
+	if got, ok := snap.Get([]byte("b")); !ok || !bytes.Equal(got.Value, []byte("2")) {
+		t.Fatalf("expected snapshot b=2, ok=%v val=%q", ok, got.Value)
+	}
+	if got, ok := snap.Get([]byte("c")); !ok || !bytes.Equal(got.Value, []byte("3")) {
+		t.Fatalf("expected snapshot c=3, ok=%v val=%q", ok, got.Value)
+	}
+	if got, ok := snap.Get([]byte("d")); ok || got.Tombstone {
+		t.Fatalf("expected snapshot d missing, ok=%v entry=%+v", ok, got)
 	}
 }

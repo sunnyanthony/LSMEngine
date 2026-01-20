@@ -53,8 +53,22 @@ func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 	if !ok || !bytes.Equal(gotSnapX.Value, []byte("x1")) {
 		t.Fatalf("snapshot expected x=x1, ok=%v val=%q", ok, gotSnapX.Value)
 	}
-	if got, ok := snap.Get([]byte("y")); ok || !got.Tombstone {
+	if got, ok := snap.Get([]byte("y")); ok || got.Tombstone {
 		t.Fatalf("snapshot expected y missing, ok=%v entry=%+v", ok, got)
+	}
+	it := snap.Range(nil, nil)
+	var keys [][]byte
+	for it.Next() {
+		keys = append(keys, it.Entry().Key)
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("snapshot range err: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("snapshot expected 2 keys, got %d", len(keys))
+	}
+	if !bytes.Equal(keys[0], []byte("k")) || !bytes.Equal(keys[1], []byte("x")) {
+		t.Fatalf("snapshot expected keys k,x got %q %q", keys[0], keys[1])
 	}
 
 	curK, ok := store.Get([]byte("k"))

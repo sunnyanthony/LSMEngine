@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 
 	"lsmengine/internal/lsm/bootstrap"
+	"lsmengine/internal/lsm/cleanup"
 	"lsmengine/internal/lsm/dispatch"
 	"lsmengine/internal/lsm/logging"
 	"lsmengine/internal/lsm/manifest"
 	"lsmengine/internal/lsm/sstable"
+	"lsmengine/internal/lsm/tableedit"
 	"lsmengine/internal/lsm/tableset"
 	wal "lsmengine/internal/lsm/wal"
 	"lsmengine/pkg/lsm/bus"
@@ -73,6 +75,14 @@ func New(opts Options) (*LSM, error) {
 
 	eventBus := bus.NewBus(opts.BusBuffer)
 	ctx, cancel := context.WithCancel(context.Background())
+	var remover tableedit.Remover
+	if opts.TrashDir != "" && (opts.TrashMaxBytes > 0 || opts.TrashMaxFiles > 0) {
+		trash, err := cleanup.NewTrash(opts.TrashDir, opts.TrashMaxBytes, opts.TrashMaxFiles)
+		if err != nil {
+			return nil, err
+		}
+		remover = trash
+	}
 	lsm := &LSM{
 		mem:                  mtFactory(),
 		mtFactory:            mtFactory,
@@ -92,6 +102,7 @@ func New(opts Options) (*LSM, error) {
 		replayBatchSize:      opts.ReplayBatchSize,
 		ctx:                  ctx,
 		cancel:               cancel,
+		remover:              remover,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)

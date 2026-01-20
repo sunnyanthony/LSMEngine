@@ -74,7 +74,7 @@ func TestServiceApplyUpdatesState(t *testing.T) {
 		}},
 	}}
 
-	svc := New(tables, store, nil)
+	svc := New(tables, store, nil, nil)
 	addTable := tableset.Table{Meta: addMeta, Handle: sstable.SSTable{Path: addPath, Seq: addMeta.SeqMax}}
 
 	if err := svc.Apply([]tableset.Table{addTable}, []metadata.TableMeta{removeMeta}, 42); err != nil {

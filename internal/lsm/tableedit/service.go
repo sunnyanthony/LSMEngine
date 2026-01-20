@@ -9,7 +9,6 @@ import (
 	"lsmengine/internal/lsm/logging"
 	"lsmengine/internal/lsm/manifest"
 	"lsmengine/internal/lsm/metadata"
-	"lsmengine/internal/lsm/sstable"
 	"lsmengine/internal/lsm/tableset"
 )
 
@@ -18,16 +17,22 @@ type Editor interface {
 	Apply(add []tableset.Table, remove []metadata.TableMeta, walSeq uint64) error
 }
 
+// Remover abstracts file cleanup for obsolete tables.
+type Remover interface {
+	Remove(path string) error
+}
+
 // Service is the default table-edit implementation.
 type Service struct {
 	Tables   *tableset.Set
 	Manifest manifest.Store
 	Logger   logging.Logger
+	Remover  Remover
 }
 
 // New builds a table edit service.
-func New(tables *tableset.Set, store manifest.Store, logger logging.Logger) *Service {
-	return &Service{Tables: tables, Manifest: store, Logger: logger}
+func New(tables *tableset.Set, store manifest.Store, logger logging.Logger, remover Remover) *Service {
+	return &Service{Tables: tables, Manifest: store, Logger: logger, Remover: remover}
 }
 
 // Apply installs new tables, removes obsolete ones, and updates the manifest.
@@ -35,20 +40,13 @@ func (s *Service) Apply(add []tableset.Table, remove []metadata.TableMeta, walSe
 	if s == nil {
 		return nil
 	}
-	var obsoleteHandles []sstable.SSTable
-	if len(remove) > 0 && s.Tables != nil {
-		handles, err := s.Tables.Resolve(remove)
-		if err == nil {
-			obsoleteHandles = handles
-		}
-	}
-
 	removePaths := make([]string, 0, len(remove))
 	for _, meta := range remove {
 		removePaths = append(removePaths, meta.Path)
 	}
+	var removedTables []tableset.Table
 	if s.Tables != nil {
-		s.Tables.Apply(tableset.Edit{Add: add, RemovePath: removePaths})
+		removedTables = s.Tables.Apply(tableset.Edit{Add: add, RemovePath: removePaths})
 	}
 
 	addEntries := make([]manifest.Entry, 0, len(add))
@@ -69,15 +67,30 @@ func (s *Service) Apply(add []tableset.Table, remove []metadata.TableMeta, walSe
 		return err
 	}
 
-	for _, table := range obsoleteHandles {
-		_ = table.Close()
-	}
-	for _, meta := range remove {
-		if err := os.Remove(meta.Path); err != nil && !os.IsNotExist(err) {
-			if s.Logger != nil {
-				s.Logger.Printf("table edit: remove obsolete %s: %v", meta.Path, err)
+	if len(removedTables) > 0 {
+		for _, table := range removedTables {
+			_ = table.Handle.Close()
+		}
+		for _, table := range removedTables {
+			if err := s.removeFile(table.Meta.Path); err != nil {
+				if s.Logger != nil {
+					s.Logger.Printf("table edit: remove obsolete %s: %v", table.Meta.Path, err)
+				}
 			}
 		}
+	}
+	return nil
+}
+
+func (s *Service) removeFile(path string) error {
+	if s == nil {
+		return nil
+	}
+	if s.Remover != nil {
+		return s.Remover.Remove(path)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

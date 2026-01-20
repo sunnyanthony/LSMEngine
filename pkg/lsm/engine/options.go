@@ -44,6 +44,15 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.ReplayBatchSize == 0 {
 		opts.ReplayBatchSize = 256
 	}
+	if opts.TrashDir == "" {
+		opts.TrashDir = filepath.Join(opts.DataDir, "trash")
+	}
+	if opts.TrashMaxBytes == 0 {
+		opts.TrashMaxBytes = 512 << 20
+	}
+	if opts.TrashMaxFiles == 0 {
+		opts.TrashMaxFiles = 1024
+	}
 	return opts, nil
 }
 
