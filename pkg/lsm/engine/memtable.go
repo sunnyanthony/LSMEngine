@@ -1,12 +1,28 @@
+// Memtable swap, pin/unpin, and flush queue helpers.
+
 package engine
 
-import "lsmengine/internal/lsm/memtable"
+import memtable "lsmengine/internal/lsm/memtable"
 
 func (l *LSM) activeMem() memtable.Table {
 	l.memMu.RLock()
 	mem := l.mem
 	l.memMu.RUnlock()
 	return mem
+}
+
+func (l *LSM) memSnapshot() (memtable.Table, []memtable.Table) {
+	l.memMu.RLock()
+	mem := l.mem
+	var immutables []memtable.Table
+	if len(l.immutables) > 0 {
+		immutables = make([]memtable.Table, len(l.immutables))
+		for i := range l.immutables {
+			immutables[i] = l.immutables[len(l.immutables)-1-i]
+		}
+	}
+	l.memMu.RUnlock()
+	return mem, immutables
 }
 
 func (l *LSM) immutableMems() []memtable.Table {
@@ -22,9 +38,15 @@ func (l *LSM) immutableMems() []memtable.Table {
 	return out
 }
 
-func (l *LSM) swapMemtable() memtable.Table {
+func (l *LSM) freezeMemtableIfCurrent(current memtable.Table) memtable.Table {
+	if current == nil {
+		return nil
+	}
 	l.memMu.Lock()
 	defer l.memMu.Unlock()
+	if l.mem != current {
+		return nil
+	}
 	return l.freezeMemtableLocked(false)
 }
 
@@ -76,7 +98,10 @@ func (l *LSM) releasePinned(table memtable.Table) {
 			default:
 			}
 		}
-		l.enqueueFlush(table)
+		if l.flushSvc == nil {
+			l.flushSvc = newFlushService(l)
+		}
+		l.flushSvc.enqueue(table)
 	}
 }
 

@@ -1,7 +1,10 @@
+// Helpers to build and apply entries to memtables.
+
 package engine
 
 import (
-	"lsmengine/internal/lsm/memtable"
+	"lsmengine/internal/lsm/memory"
+	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/types"
 )
 
@@ -14,7 +17,11 @@ func (l *LSM) applyEntriesOwned(table memtable.Table, entries []types.Entry) {
 }
 
 func (l *LSM) prepareEntry(table memtable.Table, entry types.Entry) types.Entry {
-	return table.CopyEntry(entry)
+	return l.entryBuilder(table).FromEntry(entry)
+}
+
+func (l *LSM) entryBuilder(table memtable.Table) memory.EntryBuilder {
+	return memory.NewEntryBuilder(table.CopyEntry)
 }
 
 func entriesFromTable(table memtable.Table) []types.Entry {

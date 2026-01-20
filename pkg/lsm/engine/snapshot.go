@@ -1,9 +1,11 @@
+// Snapshot creation and range scan entry points.
+
 package engine
 
 import (
 	"sync/atomic"
 
-	"lsmengine/internal/lsm/memtable"
+	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
 	"lsmengine/pkg/lsm/types"
 )
@@ -59,8 +61,14 @@ func (s *Snapshot) Get(key []byte) (types.Entry, bool) {
 		}
 	}
 	for _, table := range s.tables {
-		if e, ok := table.Get(key); ok {
-			return copyEntry(e), !e.Tombstone
+		if view, ok := table.GetView(key); ok {
+			entry := types.Entry{
+				Key:       view.Key,
+				Value:     view.Value,
+				Tombstone: view.Tombstone,
+				Seq:       view.Seq,
+			}
+			return copyEntry(entry), !view.Tombstone
 		}
 	}
 	return types.Entry{}, false
@@ -71,34 +79,12 @@ func (s *Snapshot) Range(start, end []byte) Iterator {
 	if len(s.mems) == 0 && len(s.tables) == 0 {
 		return newEmptyIterator()
 	}
-	iters := make([]Iterator, 0, len(s.mems)+len(s.tables))
+	iters := make([]viewIterator, 0, len(s.mems)+len(s.tables))
 	for _, table := range s.mems {
-		iters = append(iters, memtableIterAdapter{iter: table.Range(start, end)})
+		iters = append(iters, &memtableViewIter{iter: table.Range(start, end)})
 	}
 	for _, table := range s.tables {
-		iters = append(iters, table.Range(start, end))
+		iters = append(iters, &sstableViewIter{iter: table.Range(start, end)})
 	}
-	return newCopyIterator(newMergeIterator(iters))
-}
-
-type memtableIterAdapter struct {
-	iter memtable.Iterator
-}
-
-func (it memtableIterAdapter) Next() bool {
-	if it.iter == nil {
-		return false
-	}
-	return it.iter.Next()
-}
-
-func (it memtableIterAdapter) Entry() types.Entry {
-	if it.iter == nil {
-		return types.Entry{}
-	}
-	return it.iter.Entry()
-}
-
-func (it memtableIterAdapter) Err() error {
-	return nil
+	return newViewToEntryIterator(newViewMergeIterator(iters))
 }

@@ -1,41 +1,29 @@
+// WAL replay into memtables during startup.
+
 package engine
 
 import (
 	"errors"
 
+	"lsmengine/internal/lsm/bootstrap"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
 
 // replayWAL loads entries above the checkpoint sequence into the memtable.
 func (l *LSM) replayWAL(checkpoint uint64) error {
-	const defaultReplayBatchSize = 256
-	batchSize := l.replayBatchSize
-	if batchSize <= 0 {
-		batchSize = defaultReplayBatchSize
-	}
-	var batch []types.Entry
-	flushBatch := func() {
-		if len(batch) == 0 {
-			return
-		}
-		l.applyEntriesOwned(l.activeMem(), batch)
-		for i := range batch {
-			l.bumpSeq(batch[i].Seq)
-		}
-		batch = batch[:0]
-	}
-	err := l.wal.Replay(func(e types.Entry) error {
-		if e.Seq <= checkpoint {
-			return nil
-		}
-		batch = append(batch, e)
-		if len(batch) >= batchSize {
-			flushBatch()
-		}
-		return nil
+	mem := l.activeMem()
+	builder := l.entryBuilder(mem)
+	err := bootstrap.ReplayWAL(bootstrap.ReplayConfig{
+		WAL:        l.wal,
+		Checkpoint: checkpoint,
+		BatchSize:  l.replayBatchSize,
+		Build:      builder.FromView,
+		Apply: func(entries []types.Entry) {
+			l.applyEntriesOwned(mem, entries)
+		},
+		BumpSeq: l.bumpSeq,
 	})
-	flushBatch()
 	if err == nil {
 		return nil
 	}

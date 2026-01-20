@@ -1,3 +1,5 @@
+// Sequence generator and HLC bump logic.
+
 package engine
 
 import (

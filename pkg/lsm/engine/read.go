@@ -1,21 +1,15 @@
+// Point read API entry point.
+
 package engine
 
 import "lsmengine/pkg/lsm/types"
 
 func (l *LSM) Get(key []byte) (types.Entry, bool) {
-	mem := l.activeMem()
-	if e, ok := mem.Get(key); ok {
-		return copyEntry(e), !e.Tombstone
+	if l == nil {
+		return types.Entry{}, false
 	}
-	for _, table := range l.immutableMems() {
-		if e, ok := table.Get(key); ok {
-			return copyEntry(e), !e.Tombstone
-		}
+	if l.reader == nil {
+		l.reader = newReadService(l)
 	}
-	for _, table := range l.tables.Tables() {
-		if e, ok := table.Get(key); ok {
-			return copyEntry(e), !e.Tombstone
-		}
-	}
-	return types.Entry{}, false
+	return l.reader.Get(key)
 }
