@@ -1,3 +1,5 @@
+// Table metadata snapshot type used by planners.
+
 package metadata
 
 // TableMeta describes immutable table metadata used by planners and controllers.

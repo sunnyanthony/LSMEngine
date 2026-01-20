@@ -1,3 +1,5 @@
+// In-memory table registry and resolve logic.
+
 package tableset
 
 import (
