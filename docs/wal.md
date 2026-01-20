@@ -76,3 +76,11 @@ On decode failure:
   whether to ignore missing segments (policy) and whether to auto-repair corrupt tails.
 - Empty key/value: rejected at WAL append; tombstones allowed with empty value.
   LSM validates empty key/value before WAL append for fast fail.
+
+## Durability notes
+- `WALSync=true`: append returns only after the WAL block is flushed and `fsync` completes.
+- `WALSync=false`: append still flushes the WAL block but does **not** call `fsync`.
+  This survives process crashes but may lose data on power loss or OS crash.
+
+## Replay behavior
+- WAL replay rehydrates memtables and flushes to SSTables once the memtable limit is reached.

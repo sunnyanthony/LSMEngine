@@ -60,6 +60,11 @@ Data plane (TableSet) -> metadata snapshot -> Planner (control)
 - Backpressure: when flush queue is full, writes return `ErrBackpressure` and a background goroutine
   blocks until the flush queue has capacity; WAL lag tracking is planned.
 - Snapshots: freezing the active memtable pins it until closed; release enqueues flush.
+- Snapshots also pin SSTables to prevent compaction from deleting files still visible to readers.
+
+## Recovery behavior
+- WAL replay rehydrates memtables and will flush to SSTables when the memtable limit is reached.
+- Manifest load favors checkpoints but can fall back to log replay or SSTable scanning when needed.
 
 ### Ownership model (single copy)
 LSM performs a single copy of key/value into memtable-owned memory and passes the
@@ -127,11 +132,16 @@ and obsolete SSTable cleanup. This improves throughput but adds crash-recovery c
 - `<data>/wal.log`: current WAL.
 - `<data>/sstables/` for immutable runs (e.g., `sstable-<seq>-<id>.sst`).
 - `<data>/manifest.json`: active table set + WAL checkpoints.
+  - If the checkpoint is corrupt, the log is replayed from scratch.
+  - If the manifest is missing/invalid but SSTables exist, the engine rebuilds the manifest by scanning the SSTable directory.
+  - If there are no SSTables, startup proceeds and WAL replay reconstructs memtables.
+- `<data>/trash/`: cyclic trash for obsolete files (SSTables, temp files), pruned by size/count.
 
 ## Configuration knobs
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.
 - WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
+- Cleanup: `TrashDir`, `TrashMaxBytes`, `TrashMaxFiles`.
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
 
