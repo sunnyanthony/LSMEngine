@@ -29,8 +29,13 @@ Other implementations (select via `MemtableKind`):
 - `skiplist`: single skiplist, no sharding.
 - `map`: hash-based table with sorted snapshots for iteration.
 
+## Package layout
+- `internal/lsm/memtable`: table interfaces, stats types, and shared contracts.
+- `internal/lsm/memory/arena`: arena allocator for key/value storage.
+- `internal/lsm/memtable/table`: map/skiplist/sharded table implementations.
+- `internal/lsm/memtable/skiplist`: skiplist node/search logic.
+
 ## Skiplist structure (per shard)
-Implementation lives in `internal/lsm/memtable/skiplist`.
 ```
 level N:  head -> node -> node -> ...
 level 1:  head -> node -> node -> ...
@@ -75,6 +80,8 @@ merge:
 - Keys/values are copied into a per-memtable arena to reduce GC pressure.
 - Sharded tables use one arena per shard to keep allocations local to the lock.
 - Arena block size is configurable via `MemtableArenaBlockSize` (default 256KB).
+- Arena usage (bytes + block count) is surfaced via `TableStats` for observability.
+- Optional arena soft/hard limits can cap arena growth and signal early flush.
 - After a memtable flush completes, the table is reset and returned to a pool for reuse.
 
 LSM uses `CopyEntry` to create an owned entry once, then feeds that entry to
@@ -84,9 +91,7 @@ WAL and memtable without further copies.
 
 Snapshots capture a point-in-time view by freezing the active memtable and
 pinning it until the snapshot is closed. Range scans merge immutable memtables
-from newest to oldest, de-duplicate keys, and hide tombstones. SSTable range
-scans are not yet supported, so snapshot range iterators will return an error
-once SSTables are involved.
+and SSTables from newest to oldest, de-duplicate keys, and hide tombstones.
 
 ## Data flow (write + flush)
 ```

@@ -2,33 +2,72 @@
 
 Goals:
 - Cloud-native: deterministic layout for container mounts, observable background work, safe restarts.
-- Async-first: WAL append can be async with group commit; flush/compaction/replication run in background workers with backpressure.
-- Pluggable sync: replication transport interface so different distributed protocols can be swapped in.
+- Async-first: WAL append can be async with group commit; flush/compaction run in background workers with backpressure.
+- Pluggable policies: compaction and read behavior can be swapped without rewriting the core.
 
 ## Components
-- **LSM facade**: orchestrates memtable, WAL, flush/compaction, and manifest.
+- **LSM facade**: `pkg/lsm` re-exports the public API, while `pkg/lsm/engine` holds orchestration logic.
 - **Memtable**: in-memory ordered index for recent writes; drained to SSTables. See `docs/memtable.md`.
 - **Snapshot**: point-in-time view that freezes the active memtable for range scans.
 - **WAL**: append-only, fsync-configurable; replay on startup. See `docs/wal.md`.
 - **Flush/compaction**: background flush worker turns drained memtables into SSTables; compaction is planned.
+- **TableSet/Metadata**: central in-memory registry of tables with `TableMeta` (level, key range, seq bounds).
 - **Compaction engine**: strict levelled policy by default, pluggable for future variants. See `docs/compaction.md`.
 - **SSTable**: immutable runs with block index + meta; compression, bloom filter, cache/prefetch are configurable.
 - **Manifest**: durable metadata describing current table set and WAL checkpoints.
-- **Transport (replication)**: planned publish/subscribe interface fed by WAL tail; current event bus offers local hooks.
-- **Observability**: event bus hooks; metrics for size/latency/backlog are planned.
+- **Table edits**: single apply path updates TableSet + manifest (flush + compaction).
+- **Observability**: event bus hooks; SSTable FlowMetrics available (cache/filter/err), deeper metrics planned.
+
+## Current Design Snapshot
+- Data plane: WAL + memtable + tableset + SSTable read pipeline; emits metadata snapshots.
+- Control plane: flush + compaction scheduling; works off metadata only and never mutates data-plane state directly.
+- Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
+- IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
+- Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
+- Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
+- Distributed replication: deferred and removed from the engine surface until a later phase.
+
+## Boundary Audit (current focus)
+- `pkg/lsm/engine` is still broad; future work splits responsibilities without widening the public API.
+- `internal/lsm/sstable` consolidated format logic; remaining depth is intentional (cache/bloom/config/storage).
+- `internal/lsm/compaction` is centralized; planners/runners live under it.
+- `internal/lsm/memtable` holds interfaces with implementations under subpackages.
+- `internal/lsm/wal` exposes a root facade; codec/segment remain as leaf helpers.
+
+## Control vs Data
+- Control plane: consumes metadata snapshots and decides flush/compaction policy.
+- Data plane: owns WAL, memtables, SSTable IO, and the `TableSet` registry.
+- Control plane submits **table edits** (add/remove) and does not mutate data-plane structures directly.
+- Cache only covers on-disk data/index/filter blocks; memtable is managed separately.
+- Metrics: FlowObserver is injectable; FlowMetrics can be sampled via LSM.
+
+### Metadata flow (Phase 0/1)
+```
+Data plane (TableSet) -> metadata snapshot -> Planner (control)
+                                              |
+                                              v
+                                    Compaction plan (TableMeta IDs)
+                                              |
+                                              v
+                                 Data plane resolves handles + runs
+```
 
 ## Async model
 - Write path: WAL append (batch + fsync as configured) -> memtable apply -> return.
 - Sequence assignment: LSM assigns a monotonic `Seq` before WAL append to keep ordering consistent.
 - Background flush: channel of drained memtables; workers write SSTables and update manifest.
 - Compaction: scheduled by size/level thresholds; merges SSTables asynchronously.
-- Backpressure: when flush queue is full, LSM triggers synchronous flush; WAL lag tracking is planned.
+- Backpressure: when flush queue is full, writes return `ErrBackpressure` and a background goroutine
+  blocks until the flush queue has capacity; WAL lag tracking is planned.
 - Snapshots: freezing the active memtable pins it until closed; release enqueues flush.
 
 ### Ownership model (single copy)
 LSM performs a single copy of key/value into memtable-owned memory and passes the
 owned entry to both WAL and memtable. This avoids double-copy while keeping the
 public API safe (callers can reuse their buffers after `Put/Delete`).
+
+Public reads (`Get`, snapshot `Range`) return owned copies; zero-copy views are
+internal only (SSTable `GetView`).
 
 ```
 client []byte
@@ -76,23 +115,26 @@ Snapshot range scan:
       -> SSTable range (newest -> oldest)
 ```
 
-## Planned replication
-- Define `Transport` with `Publish` and `Subscribe` to abstract protocol (gRPC, NATS, Kafka, Raft-like RPCs).
-- WAL tailer batches entries to `Publish`; subscriber feeds apply queue that replays mutations in order.
-- Future: epoch/term for multi-writer safety; idempotent apply keyed by sequence + node ID.
+## Deferred: distributed/replication
+Distributed replication is intentionally out of scope until core LSM work is finished.
+See `docs/design.md` for the deferred backlog and sequencing.
+
+## Deferred: manifest performance
+Future optimization: async table-edit apply (runtime-first) with deferred WAL checkpoint
+and obsolete SSTable cleanup. This improves throughput but adds crash-recovery complexity.
 
 ## Data layout (local FS)
 - `<data>/wal.log`: current WAL.
-- `<data>/sstables/` for immutable runs (e.g., `sstable-<seq>.sst`).
+- `<data>/sstables/` for immutable runs (e.g., `sstable-<seq>-<id>.sst`).
 - `<data>/manifest.json`: active table set + WAL checkpoints.
 
 ## Configuration knobs
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.
 - WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
-- SSTable: `SSTable` options (block sizing, compression, bloom bits per key, block cache bytes, prefetch blocks, checksum).
+- SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
+- SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
 
 ## Next steps (implementation order)
 1) Snapshot range iterator over SSTables (merge + tombstone filtering).
-2) Transport interface + loopback implementation to validate replication plumbing.
-3) Metrics/health endpoints and basic benchmarks.
+2) Metrics/health endpoints and basic benchmarks.

@@ -20,7 +20,8 @@ Record (inside block payload):
 
 ## Code layout
 - Format framing and encode/decode helpers live in `internal/lsm/wal/codec`.
-- `internal/lsm/wal` owns append/replay behavior and policy decisions.
+- Segment discovery helpers live in `internal/lsm/wal/segment`.
+- Append/replay logic lives in `internal/lsm/wal`.
 ```
 
 ## Segment header

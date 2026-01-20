@@ -14,33 +14,50 @@ comes from TTL/GC policy.
 
 ## Components
 ```
-CompactionPlanner -> CompactionRunner -> CompactionApplier
-         |                    |                |
-         |                    v                v
-      Policy            SSTable Writer     Manifest update
+Coordinator (optional)
+   |
+   v
+Planner -> Runner -> Applier
+   |         |         |
+   |         v         v
+Policy   SSTable IO  TableSet/Manifest
 ```
 
+## Current implementation
+- `StrictLevelledPlanner`: L0 file-count threshold only (metadata-driven).
+- `SimpleRunner`: k-way merge across input SSTables, newest version per key,
+  optional tombstone drop.
+- `Applier`: implemented by the LSM engine; applies table edits (TableSet + manifest) and removes obsolete files.
+- `Coordinator` (optional): orchestrates planner/runner/applier and collects metrics.
+
 ## Interfaces (conceptual)
-- Planner: selects input tables and output level based on policy.
-- Runner: performs k-way merge and writes new SSTables.
+- Planner: selects input tables and output level based on metadata only.
+- Runner: performs k-way merge over resolved table handles and writes outputs.
 - Scheduler: enqueues plans based on pressure/backlog signals.
-- Applier: atomically swaps manifest and deletes obsolete tables.
+- Applier: applies table edits (add/remove) to TableSet + manifest.
 
 ## Strict levelled policy (default)
 Invariants:
-- L0 may overlap; levels L1+ are non-overlapping by key range.
-- Each level has a size limit; when exceeded, compact into next level.
-- Output tables are sorted, non-overlapping within their target level.
+- L0 may overlap; L1+ non-overlap is planned.
+- Level size targets and L1+ selection are planned.
+- Output tables are sorted; single-level (L0->L1) is currently implemented.
 
 Selection:
 - L0: compact when file count exceeds threshold.
-- L1+: compact when level size exceeds limit; pick overlapping ranges.
+- L1+: planned (size-based selection and overlapping ranges).
+
+## Metadata inputs
+Compaction decisions are made on `TableMeta` only (level, key range, seq bounds,
+size). The data plane resolves table handles at execution time to keep the
+control plane decoupled from IO.
 
 ## Configuration (all user-configurable)
 - L0 file count threshold.
 - Per-level size targets.
 - Max output table size.
 - Optional TTL policy for tombstone acceleration.
+- `CompactionL0Threshold` (LSM option; enables background compaction when > 0).
+- `CompactionDropTombstones` (drop tombstones during compaction when safe).
 
 ## Tombstone handling
 - Tombstones are kept until we can prove no older versions exist in lower
@@ -55,10 +72,5 @@ Selection:
 - Retry is safe because inputs are immutable.
 
 ## Async scheduling and backpressure
-- Scheduler runs in background.
-- Backpressure triggers when flush queue is saturated or compaction backlog grows.
-- Metrics should surface pending compactions and bytes-per-level.
-
-## Distributed considerations
-- Compaction is local; replication relies on WAL/apply order.
-- SSTables are immutable and transferable for catch-up or bulk sync.
+- Compaction is triggered on flush events and runs in the background.
+- Scheduler/backpressure policies are planned.

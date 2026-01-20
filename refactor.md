@@ -1,29 +1,25 @@
 # LSMEngine Refactor Design Doc
 
 ## Purpose
-This document defines a refactor direction that preserves existing capabilities while restoring
-low coupling, low latency, and a clean control/data separation. It avoids implementation details
-and focuses on design decisions, tradeoffs, and a phased plan.
+This document tracks the current refactor plan and active decisions. For end-to-end architecture,
+see `docs/architecture.md` and `docs/modules.md`. History lives in git; this file stays current.
 
 ## What The Project Provides (Core Value)
 - Low-latency key/value reads and writes with WAL durability.
 - Ordered iteration and range scans via memtable and SSTables.
 - Background flush and compaction for storage efficiency.
 - Snapshot isolation for consistent reads.
-- Optional replication and observability.
+- Optional observability; distributed replication is deferred.
 - Zero-copy internal data flow backed by memory arenas and pools.
 
 ## Current Pain Points
-- Control logic and data logic are interleaved, increasing coupling and change risk.
-- I/O pathways are bound to OS files, blocking future io_uring adoption.
-- Manifest updates are spread across multiple paths, increasing state drift risk.
-- Backpressure paths can introduce tail-latency spikes when synchronous flushes occur.
-- Compaction policy is pluggable in name, but the metadata model is not yet multi-level.
+- `pkg/lsm/engine` still centralizes too many responsibilities, so changes ripple.
+- Manifest edits are synchronous; async/queued apply is deferred for performance work.
 
 ## Design Goals
 - Low-latency read/write on the hot path.
 - Control/data separation with clean boundaries.
-- High replaceability of compaction policy and replication strategy.
+- High replaceability of compaction policy; replication strategy is deferred.
 - Zero-copy internal flow and explicit memory ownership.
 - Minimal public surface area in `pkg/lsm`.
 - IO abstraction to enable io_uring without rewriting higher layers.
@@ -35,101 +31,91 @@ and focuses on design decisions, tradeoffs, and a phased plan.
 - Ownership is explicit; no implicit copies on hot paths.
 - Metadata is the single source of truth for system state.
 
-## Proposed Architecture Direction
+## Maintainability & Extensibility Guidelines
+- Hot path depends on shallow interfaces only (`WAL.AppendOwned`, `Memtable.ApplyOwned`, `SSTable.GetView/Range`).
+- External API copies once via `EntryBuilder`; internal layers use views/arena only.
+- Background work consolidated into 2 services: flush worker, compaction service. Replication loop deferred.
+- Feature insertion points via interfaces (compaction planner/runner, SSTable read policy). Transport is deferred.
+- Options normalization happens once in a single layer to avoid conflicting defaults.
 
-### Data Plane (Internal Only)
-- Responsibilities: WAL, memtable, tableset, read path, snapshots.
-- Guarantees: correct ordering, atomic table set updates, stable read semantics.
-- Emits events and exposes snapshots of table metadata.
+## System Flows (End-to-End)
 
-### Control Plane (Internal Only)
-- Responsibilities: flush scheduling, compaction planning, replication workflows, backpressure policy.
-- Consumes data-plane events and metadata snapshots.
-- Never mutates data-plane state directly; it submits edits and plans.
+### Write Path
+1. Public API validates input and builds an owned Entry.
+2. Acquire a memtable snapshot and increment writer tracking.
+3. Append to WAL (async batch); return error if WAL fails.
+4. Apply Entry to memtable.
+5. If memtable crosses threshold, swap to immutable and enqueue flush.
+6. Decrement writer count; return success to caller.
 
-### Metadata Model
-- Tables are described by minimal metadata: level, key range, size, sequence bounds.
-- Table metadata is persisted and replayed at startup.
-- Control plane operates on metadata, not raw data structures.
+### Read Path (Get)
+1. Capture memtable snapshot (active + immutables).
+2. Probe active, then immutables (view-based to avoid copies).
+3. Probe SSTables via reader pipeline (index/filter/cache).
+4. Return owned data to caller or not found.
 
-### IO Abstraction
-- WAL and SSTable use a shared IO layer.
-- The IO layer defines minimal read/write/flush interfaces and owns OS-specific details.
-- io_uring support can be added by swapping the IO implementation.
+### Range Scan
+1. Snapshot memtables and tableset at a point-in-time.
+2. Build iterators for memtables and SSTables.
+3. Merge iterators by internal key order (userKey asc, seq desc).
+4. Return owned entries to the caller.
 
-## Backpressure Strategy
-- The write path should not perform synchronous flushes.
-- On pressure, return a throttle-style error to the caller.
-- Throttling can be policy-driven (retry guidance and optional delay), but no implicit blocking.
+### Flush Path
+1. Dispatcher receives immutable memtable.
+2. Wait for writers to finish before draining entries.
+3. Build SSTable and write via IO layer.
+4. Update manifest + tableset atomically.
+5. Release memtable/arena and notify compaction.
 
-## Zero-Copy Policy
-- External API always returns owned data.
-- Internal iteration and read paths use borrowed views with strict lifetime rules.
-- Memory pools are used for short-lived buffers only; long-lived data is arena-owned.
+### WAL Replay
+1. Discover WAL segments and read sequentially.
+2. Decode records; resync on corruption per policy.
+3. Apply entries to memtable; rotate when full.
+4. Persist resulting tables via flush.
 
-## Design Options And Tradeoffs
+### Compaction
+1. Controller builds plan from metadata snapshot.
+2. Runner merges input tables into new outputs.
+3. Apply plan via manifest + tableset edits.
+4. Delete obsolete tables and update metrics.
 
-### Option A: Internal Engine/Control Split
-- Pros: cleanest separation, easiest long-term evolution.
-- Cons: larger refactor, more internal interfaces.
+### Distributed/Replication (Deferred)
+- Distributed replication is deferred until core LSM is complete.
+- Planned reintroduction: transport + term gating as a separate package with manifest state for dedupe.
 
-### Option B: Keep Single LSM Type, Enforce Internal Boundaries
-- Pros: minimal public changes, smaller refactor.
-- Cons: requires discipline to avoid boundary leakage.
+### Startup / Shutdown
+- Startup: load manifest, open WAL, replay, rebuild tableset, start workers.
+- Shutdown: stop background workers, drain queues, close WAL/manifest/IO.
 
-### Option C: Manifest Snapshot Only
-- Pros: simple recovery logic.
-- Cons: more write amplification, higher latency during frequent updates.
+## Package Responsibilities & Import Rules (Agreed)
+- `pkg/lsm`: public API facade; depends on `pkg/lsm/engine` and `pkg/lsm/errs` only.
+- `pkg/lsm/engine`: orchestration + lifecycle; wires WAL/memtable/sstable/manifest/compaction.
+- `internal/lsm/wal`: durability (append/replay/segment); depends on `internal/lsm/iofs` and `internal/lsm/memory`.
+- `internal/lsm/memtable`: in-memory ordered index + arena ownership; depends on `internal/lsm/memory`.
+- `internal/lsm/sstable`: immutable run + read pipeline + block/index/filter/cache; depends on `internal/lsm/iofs`, `internal/lsm/memory`, `internal/lsm/metadata`.
+- `internal/lsm/tableset` + `internal/lsm/metadata`: table registry + metadata snapshot for planners; leaf packages.
+- `internal/lsm/manifest`: durable metadata log/checkpoint; depends on `internal/lsm/iofs` and `internal/lsm/metadata`.
+- `internal/lsm/compaction`: planner/runner/applier + scheduler; depends on `internal/lsm/metadata`, `internal/lsm/tableset`, `internal/lsm/sstable`.
+- `internal/lsm/dispatch`: flush queue to flusher.
+- `internal/lsm/memory`: entry ownership + pools (GC reduction); leaf package.
+- `internal/lsm/iofs`: IO abstraction (FS + async read); leaf package.
+- Alias packages should be limited to `pkg/lsm` (public surface); avoid alias-only packages inside `internal`.
 
-### Option D: Manifest Log + Checkpoint
-- Pros: low-latency updates, bounded recovery time.
-- Cons: more moving parts, requires checkpoint policy.
-
-## Recommended Direction
-- Use Option B as a near-term step and evolve toward Option A internally.
-- Use Option D for metadata durability with periodic checkpoints.
-- Keep public API stable; refactor internally only.
+## Alias-Only Packages (Reduce/Remove)
+- Keep: `pkg/lsm/aliases.go` (public surface stability).
 
 ## Multi-Level Compaction Direction
 - Default policy: strict levelled compaction.
 - Pluggable policy allows tiered/L0-only variants.
 - Metadata must support level-aware planning before introducing multi-L compaction.
 
-## Roadmap (Phased)
-
-### Phase 0: Design Alignment
-- [x] Finalize data/control boundary and metadata schema.
-- [x] Document ownership rules and zero-copy contract.
-- [x] Backpressure is a caller-visible error; no sync flush in the write path.
-- [x] Drain is not used on the hot path; only safe when there are no readers.
-
-### Phase 1: Internal Boundaries
-- [x] Split public API from engine internals (`pkg/lsm` -> `pkg/lsm/engine`).
-- [x] Split compaction into model/data/controller with a single-worker service.
-- [x] Consolidate table metadata + tableset into dedicated modules.
-- [x] Centralize manifest updates with a single entry point + locking.
-- [x] Split memtable into core/table/arena packages.
-- [x] Split WAL into core/segment packages.
-- [x] Split SSTable into block/bloom/cache/flow/format/index/meta/storage/config.
-- [x] Route compaction triggers via flush events (no inline loop in LSM).
-- [x] Public API returns owned data; internal flows remain zero-copy.
-- [x] Integration: verify SSTable reads work without WAL (reopen after WAL removal).
-
-### Phase 1.5: Process Boundaries (Optional)
-- [x] Define a compaction service boundary suitable for external process/RPC.
-- [x] Add a compaction scheduler interface (policy + trigger).
-
-### Phase 2: Metadata Durability
-- [x] Implement append-only manifest log.
-- [x] Add periodic checkpoints and bounded replay time.
-
-### Phase 3: Multi-Level Compaction
-- [x] Expand metadata to include level and key ranges.
-- [x] Add strict levelled compaction policy and validation.
-
-### Phase 4: IO Abstraction
-- [ ] Extract shared IO layer for WAL and SSTable.
-- [ ] Provide a path for io_uring-backed implementation.
+## Identified Technical Issues & Mitigation
+- **Swap Race**: Current `Put/Delete` fetches the `activeMem` pointer and then releases the lock. A `swapMemtable` can occur before `ApplyOwned` completes, leading to data being written to a table that is already being flushed or recycled.
+  - *Mitigation*: Introduce `IncWriter/DecWriter` on the memtable. Flusher waits for count to hit zero.
+- **Visibility Gap**: `Get` reads `activeMem` then `immutables`. If swap happens between these two reads, the data in the old-active-now-immutable table might be missed.
+  - *Mitigation*: The `swapMemtable` must ensure the old table is appended to `immutables` before it is no longer the `activeMem`, or `Get` must hold `memMu` for the entire pointer-acquisition phase.
+- **Throttling Consistency**: `shouldThrottleWrite` checks size but doesn't reserve space or hold the pointer, leading to potential over-limit writes.
+  - *Mitigation*: Move throttling check inside the same lock that acquires the `mem` pointer, or use a reservation system.
 
 ## Compatibility Constraints
 - External API remains stable and minimal.
@@ -145,3 +131,44 @@ and focuses on design decisions, tradeoffs, and a phased plan.
 - Preferred boundary between metadata module and compaction policy.
 - Exact checkpoint policy thresholds for different deployment profiles.
 - How aggressive throttling should be under sustained overload.
+
+## Roadmap (Current)
+- [ ] Execute consolidation pass across internal and `pkg/lsm` (one module at a time).
+- [ ] Prepare the deferred distributed/replication reintroduction as a separate package after core LSM is stable.
+
+## Backlog (Non-blocking)
+
+WAL:
+- Tail/truncate policy and payload cap refinements.
+- Faster resync scanning for corrupted blocks.
+- Async writer metrics/backpressure observability.
+- Codec version negotiation for future formats.
+- Large replay + mixed corrupt/missing segment stress tests.
+
+Memtable:
+- Streaming iterators to avoid snapshot copying.
+- Shard count auto-tuning based on workload.
+- Lock contention and tail-latency benchmarks.
+- Tighter immutable/flush state machine if stronger consistency is needed.
+
+Skiplist:
+- Node allocation via arena to reduce GC.
+- Comparator coverage tests for varied key distributions.
+- Level distribution/iterator performance benchmarks.
+
+Read path:
+- Snapshot observability (replay counts, pinned memtable metrics).
+
+Compaction:
+- Optional flush coalescing (merge multiple immutables into a single L0 SSTable to reduce file count).
+- Pluggable storage interface (local FS vs object store for SSTables).
+- Output size caps + multi-output split for compaction results (max table size enforcement).
+- Scheduler/backpressure/priority policy for compaction runs.
+
+Observability/ops:
+- Metrics/health endpoints for runtime visibility (flush/compaction/WAL/memtable).
+
+Distributed/Replication (deferred):
+- Reintroduce transport + term/epoch gating as a separate package after core LSM.
+- External term/epoch manager integration (e.g., Raft lease) with dynamic term updates.
+- Replay checkpoints to avoid re-sending large histories.
