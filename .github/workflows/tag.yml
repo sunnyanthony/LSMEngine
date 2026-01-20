@@ -1,0 +1,64 @@
+name: tag
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (vMAJOR.MINOR.0)"
+        required: true
+
+concurrency:
+  group: tag-main
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compute next tag
+        id: next
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            input="${{ github.event.inputs.version }}"
+            if [[ ! "${input}" =~ ^v[0-9]+\.[0-9]+\.0$ ]]; then
+              echo "invalid release version: ${input}" >&2
+              exit 1
+            fi
+            next="${input}"
+          else
+            latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            if [[ -z "${latest}" ]]; then
+              next="v0.1.0"
+            elif [[ "${latest}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              patch=$((patch + 1))
+              next="v${major}.${minor}.${patch}"
+            else
+              echo "latest tag is not semver: ${latest}" >&2
+              exit 1
+            fi
+          fi
+          echo "next=${next}" >> "${GITHUB_OUTPUT}"
+      - name: Create and push tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.next.outputs.next }}"
+          if git rev-parse "${tag}" >/dev/null 2>&1; then
+            echo "tag ${tag} already exists; skipping"
+            exit 0
+          fi
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
