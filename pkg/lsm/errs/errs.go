@@ -1,3 +1,5 @@
+// Public error definitions for the LSM engine.
+
 package errs
 
 import "errors"

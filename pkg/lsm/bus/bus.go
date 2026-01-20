@@ -1,3 +1,5 @@
+// Event bus implementation for engine notifications.
+
 package bus
 
 import "sync"

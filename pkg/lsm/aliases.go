@@ -1,3 +1,5 @@
+// Public aliases for engine types and options.
+
 package lsm
 
 import "lsmengine/pkg/lsm/engine"
@@ -8,8 +10,6 @@ type SSTableOptions = engine.SSTableOptions
 type MissingSegmentPolicy = engine.MissingSegmentPolicy
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
-type TermProvider = engine.TermProvider
-type LeaderProvider = engine.LeaderProvider
 
 const (
 	SSTableCompressionNone   = engine.SSTableCompressionNone
