@@ -11,6 +11,7 @@ import (
 	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/internal/lsm/tableedit"
 	"lsmengine/internal/lsm/tableset"
+	"lsmengine/pkg/lsm/errs"
 )
 
 // LoadManifestTables loads the manifest and returns the resolved table handles.
@@ -19,12 +20,17 @@ func LoadManifestTables(store manifest.Store, opts sstableconfig.Options) (manif
 		return manifest.Manifest{}, nil, nil
 	}
 	m, err := store.Load()
+	dropCorrupt := shouldDropCorrupt(opts)
 	if err == nil && len(m.Tables) > 0 {
 		tables, loadErr := loadTablesFromManifest(m, opts)
 		if loadErr == nil {
 			return m, tables, nil
 		}
-		err = loadErr
+		if dropCorrupt && isCorruptionErr(loadErr) {
+			err = nil
+		} else {
+			err = loadErr
+		}
 	}
 
 	paths, listErr := listSSTablePaths(opts.Dir)
@@ -50,10 +56,16 @@ func LoadManifestTables(store manifest.Store, opts sstableconfig.Options) (manif
 		hook.AfterFallbackScan(rebuilt, scanErr)
 	}
 	if scanErr != nil {
+		if dropCorrupt && isCorruptionErr(scanErr) {
+			return m, nil, nil
+		}
 		return manifest.Manifest{}, nil, scanErr
 	}
 	if len(tables) == 0 {
 		if err != nil {
+			if dropCorrupt && isCorruptionErr(err) {
+				return m, nil, nil
+			}
 			return manifest.Manifest{}, nil, err
 		}
 		return m, nil, nil
@@ -75,10 +87,14 @@ func LoadManifestTables(store manifest.Store, opts sstableconfig.Options) (manif
 }
 
 func loadTablesFromManifest(m manifest.Manifest, opts sstableconfig.Options) ([]tableset.Table, error) {
+	dropCorrupt := shouldDropCorrupt(opts)
 	tables := make([]tableset.Table, 0, len(m.Tables))
 	for _, t := range m.Tables {
 		table, err := sstable.LoadSSTable(t.Path, opts)
 		if err != nil {
+			if dropCorrupt && isCorruptionErr(err) {
+				continue
+			}
 			if cerr := closeTables(tables); cerr != nil {
 				return nil, errors.Join(err, cerr)
 			}
@@ -125,12 +141,16 @@ func scanSSTablePaths(paths []string, opts sstableconfig.Options) (manifest.Mani
 	if len(paths) == 0 {
 		return manifest.Manifest{}, nil, nil
 	}
+	dropCorrupt := shouldDropCorrupt(opts)
 	tables := make([]tableset.Table, 0, len(paths))
 	entries := make([]manifest.Entry, 0, len(paths))
 	var maxSeq uint64
 	for _, path := range paths {
 		table, err := sstable.LoadSSTable(path, opts)
 		if err != nil {
+			if dropCorrupt && isCorruptionErr(err) {
+				continue
+			}
 			if cerr := closeTables(tables); cerr != nil {
 				return manifest.Manifest{}, nil, errors.Join(err, cerr)
 			}
@@ -162,4 +182,26 @@ func closeTables(tables []tableset.Table) error {
 		}
 	}
 	return errOut
+}
+
+func shouldDropCorrupt(opts sstableconfig.Options) bool {
+	if opts.CorruptionPolicy == sstableconfig.CorruptionDropTable {
+		return true
+	}
+	if opts.PolicyOverride != nil && opts.PolicyOverride.CorruptionPolicy == sstableconfig.CorruptionDropTable {
+		return true
+	}
+	return false
+}
+
+func isCorruptionErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, errs.ErrSSTableBadMagic) ||
+		errors.Is(err, errs.ErrSSTableBadFooter) ||
+		errors.Is(err, errs.ErrSSTableBadBlock) ||
+		errors.Is(err, errs.ErrSSTableBadMeta) ||
+		errors.Is(err, errs.ErrSSTableBadIndex) ||
+		errors.Is(err, errs.ErrSSTableUnknownCompression)
 }

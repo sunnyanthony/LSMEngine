@@ -1,4 +1,6 @@
-package integration_test
+//go:build test
+
+package helpers
 
 import (
 	"encoding/json"
@@ -16,7 +18,7 @@ type manifestView struct {
 	} `json:"tables"`
 }
 
-func waitForManifest(t *testing.T, dir string, minTables int, minWALSeq uint64) {
+func WaitForManifest(t *testing.T, dir string, minTables int, minWALSeq uint64) {
 	t.Helper()
 	path := filepath.Join(dir, "manifest.json")
 	deadline := time.Now().Add(5 * time.Second)
