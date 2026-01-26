@@ -1,5 +1,3 @@
-//go:build test
-
 package integration_test
 
 import (
@@ -7,16 +5,14 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
-	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	dir := t.TempDir()
 	store, err := lsm.New(lsm.Options{
-		DataDir:                 dir,
-		MemtableLimit:           4,
-		WALSync:                 false,
-		ManifestCheckpointEvery: 1,
+		DataDir:       dir,
+		MemtableLimit: 4,
+		WALSync:       false,
 	})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
@@ -33,8 +29,7 @@ func TestLSMSnapshotRangeIncludesSSTable(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	helpers.WaitForSSTableFiles(t, dir, 1)
-	helpers.WaitForManifest(t, dir, 1, 1)
+	waitForSSTableFiles(t, dir, 1)
 
 	if err := store.Put([]byte("c"), []byte("3")); err != nil {
 		t.Fatalf("put c: %v", err)

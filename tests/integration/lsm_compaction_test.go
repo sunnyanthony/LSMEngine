@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
-	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMCompactionMergesTables(t *testing.T) {
@@ -28,7 +27,7 @@ func TestLSMCompactionMergesTables(t *testing.T) {
 	})
 
 	// Enough writes to trigger multiple flushes.
-	waiter := helpers.StartCompactionWait(t)
+	waiter := startCompactionWait(t)
 	for _, kv := range [][2]string{
 		{"a", "1"},
 		{"b", "2"},

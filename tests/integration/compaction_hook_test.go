@@ -1,6 +1,6 @@
 //go:build test
 
-package helpers
+package integration_test
 
 import (
 	"testing"
@@ -10,14 +10,14 @@ import (
 	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 )
 
-type CompactionWaiter struct {
+type compactionWaiter struct {
 	ch chan compaction.Result
 }
 
-func StartCompactionWait(t *testing.T) *CompactionWaiter {
+func startCompactionWait(t *testing.T) *compactionWaiter {
 	t.Helper()
 
-	waiter := &CompactionWaiter{ch: make(chan compaction.Result, 1)}
+	waiter := &compactionWaiter{ch: make(chan compaction.Result, 1)}
 	compactionruntime.SetTestHooks(&compactionruntime.TestHooks{
 		AfterApply: func(result compaction.Result, err error) {
 			if err != nil {
@@ -29,14 +29,12 @@ func StartCompactionWait(t *testing.T) *CompactionWaiter {
 			}
 		},
 	})
-	t.Cleanup(func() {
-		compactionruntime.SetTestHooks(nil)
-	})
 	return waiter
 }
 
-func (w *CompactionWaiter) Wait(t *testing.T) compaction.Result {
+func (w *compactionWaiter) Wait(t *testing.T) compaction.Result {
 	t.Helper()
+	defer compactionruntime.SetTestHooks(nil)
 
 	select {
 	case result := <-w.ch:

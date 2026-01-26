@@ -128,29 +128,6 @@ See `docs/design.md` for the deferred backlog and sequencing.
 Future optimization: async table-edit apply (runtime-first) with deferred WAL checkpoint
 and obsolete SSTable cleanup. This improves throughput but adds crash-recovery complexity.
 
-## Deferred: async I/O
-Future optimization: async I/O/worker pools for WAL/flush/compaction to reduce blocking.
-Evaluate io_uring integration paths and define fallbacks for non-Linux platforms.
-Tune batching/backpressure to minimize context switches under sustained write load.
-
-## Deferred: refactor backlog
-Technical issues:
-- Swap Race: write path can target a memtable that is already flushing.
-  Mitigation: writer counting on memtables; flush waits for writers to drain.
-- Visibility Gap: Get may miss an entry if memtable swaps between reads.
-  Mitigation: append old-active to immutables before pointer swap or hold memMu while capturing pointers.
-- Throttling Consistency: write throttling lacks reservation, risks over-limit.
-  Mitigation: check under the same lock as pointer acquisition or implement reservation.
-
-Backlog:
-- WAL: tail/truncate policy and payload caps; faster resync scanning for corrupted blocks; async writer metrics/backpressure; codec versioning; large replay + mixed corrupt/missing segment tests.
-- Memtable: streaming iterators to avoid snapshot copying; shard auto-tuning; lock contention and tail-latency benchmarks; tighter immutable/flush state machine.
-- Skiplist: arena node allocation; comparator coverage tests; iterator performance benchmarks.
-- Read path: snapshot observability (replay counts, pinned memtable metrics).
-- Compaction: optional flush coalescing; pluggable storage (local vs object store); output size caps + multi-output split; scheduler/backpressure/priority policy.
-- Observability/ops: metrics and health endpoints.
-- Distributed/Replication: transport + term gating; external term manager integration; replay checkpoints to avoid resending histories.
-
 ## Data layout (local FS)
 - `<data>/wal.log`: current WAL.
 - `<data>/sstables/` for immutable runs (e.g., `sstable-<seq>-<id>.sst`).

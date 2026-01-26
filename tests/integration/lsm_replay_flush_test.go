@@ -1,5 +1,3 @@
-//go:build test
-
 package integration_test
 
 import (
@@ -9,7 +7,6 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
-	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
@@ -58,7 +55,7 @@ func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
 		}
 	})
 
-	helpers.WaitForSSTableFiles(t, dir, 1)
+	waitForSSTableFiles(t, dir, 1)
 
 	if got, ok := reopened.Get([]byte("k000")); !ok || !bytes.Equal(got.Value, val) {
 		t.Fatalf("expected k000 replayed, ok=%v val=%q", ok, got.Value)

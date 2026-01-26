@@ -1,12 +1,9 @@
-//go:build test
-
 package integration_test
 
 import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
-	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMReplayWithoutFlush(t *testing.T) {
@@ -64,8 +61,8 @@ func TestLSMFlowMetricsNonZero(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	helpers.WaitForSSTableFiles(t, dir, 1)
-	helpers.WaitForManifest(t, dir, 1, 1)
+	waitForSSTableFiles(t, dir, 1)
+	waitForManifest(t, dir, 1, 1)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
