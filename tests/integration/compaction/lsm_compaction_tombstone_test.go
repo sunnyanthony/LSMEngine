@@ -9,6 +9,7 @@ import (
 	"lsmengine/internal/lsm/sstable"
 	sstableconfig "lsmengine/internal/lsm/sstable/config"
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMCompactionDropsTombstone(t *testing.T) {
@@ -29,14 +30,14 @@ func TestLSMCompactionDropsTombstone(t *testing.T) {
 		}
 	})
 
-	waiter := startCompactionWait(t)
+	waiter := helpers.StartCompactionWait(t)
 	if err := store.Put([]byte("k"), []byte("v1")); err != nil {
 		t.Fatalf("put k: %v", err)
 	}
 	if err := store.Put([]byte("x"), []byte("x1")); err != nil {
 		t.Fatalf("put x: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 
 	if err := store.Delete([]byte("k")); err != nil {
 		t.Fatalf("delete k: %v", err)

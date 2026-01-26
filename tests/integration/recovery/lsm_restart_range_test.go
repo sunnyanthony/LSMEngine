@@ -1,3 +1,5 @@
+//go:build test
+
 package integration_test
 
 import (
@@ -5,6 +7,7 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMRangeAfterRestartSeesMemtableAndSSTable(t *testing.T) {
@@ -24,7 +27,7 @@ func TestLSMRangeAfterRestartSeesMemtableAndSSTable(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)

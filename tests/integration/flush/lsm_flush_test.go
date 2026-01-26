@@ -1,12 +1,12 @@
+//go:build test
+
 package integration_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMFlushToSSTableAndReload(t *testing.T) {
@@ -27,7 +27,7 @@ func TestLSMFlushToSSTableAndReload(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("22")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -72,7 +72,7 @@ func TestLSMMultiFlushReload(t *testing.T) {
 			t.Fatalf("put %s: %v", kv[0], err)
 		}
 	}
-	waitForSSTableFiles(t, dir, 2)
+	helpers.WaitForSSTableFiles(t, dir, 2)
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -117,12 +117,12 @@ func TestLSMReadFromSSTableWithoutWAL(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("22")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	removeWALFiles(t, dir)
+	helpers.RemoveWALFiles(t, dir)
 
 	store, err = lsm.New(lsm.Options{DataDir: dir})
 	if err != nil {
@@ -143,36 +143,5 @@ func TestLSMReadFromSSTableWithoutWAL(t *testing.T) {
 	metrics := store.FlowMetrics()
 	if metrics.CacheHit+metrics.CacheMiss == 0 {
 		t.Fatalf("expected sstable read metrics, got %+v", metrics)
-	}
-}
-
-func waitForSSTableFiles(t *testing.T, dir string, want int) {
-	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		matches, err := filepath.Glob(filepath.Join(dir, "sstables", "sstable-*.sst"))
-		if err != nil {
-			t.Fatalf("glob sstables: %v", err)
-		}
-		if len(matches) >= want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("expected %d sstable files within timeout", want)
-}
-
-func removeWALFiles(t *testing.T, dir string) {
-	t.Helper()
-
-	matches, err := filepath.Glob(filepath.Join(dir, "wal.log*"))
-	if err != nil {
-		t.Fatalf("glob wal: %v", err)
-	}
-	for _, path := range matches {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("remove wal %s: %v", path, err)
-		}
 	}
 }

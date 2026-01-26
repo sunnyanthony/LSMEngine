@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMComplexFlushCompactionRestartSnapshot(t *testing.T) {
@@ -21,14 +22,14 @@ func TestLSMComplexFlushCompactionRestartSnapshot(t *testing.T) {
 		t.Fatalf("new lsm: %v", err)
 	}
 
-	waiter := startCompactionWait(t)
+	waiter := helpers.StartCompactionWait(t)
 	if err := store.Put([]byte("a"), []byte("1")); err != nil {
 		t.Fatalf("put a: %v", err)
 	}
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 
 	if err := store.Put([]byte("a"), []byte("3")); err != nil {
 		t.Fatalf("put a2: %v", err)
