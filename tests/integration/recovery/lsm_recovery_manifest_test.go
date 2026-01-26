@@ -13,6 +13,7 @@ import (
 
 	"lsmengine/internal/lsm/bootstrap"
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMRecoveryFallbackScanWhenManifestMissing(t *testing.T) {
@@ -32,7 +33,7 @@ func TestLSMRecoveryFallbackScanWhenManifestMissing(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestLSMRecoveryFallbackScanWhenManifestCorrupt(t *testing.T) {
 	if err := store.Put([]byte("y"), []byte("8")); err != nil {
 		t.Fatalf("put y: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -181,14 +182,14 @@ func TestLSMRecoveryFallbackScanWhenManifestMissingTable(t *testing.T) {
 	if err := store.Put([]byte("b"), []byte("2")); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
 	if err := store.Put([]byte("c"), []byte("3")); err != nil {
 		t.Fatalf("put c: %v", err)
 	}
 	if err := store.Put([]byte("d"), []byte("4")); err != nil {
 		t.Fatalf("put d: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 2)
+	helpers.WaitForSSTableFiles(t, dir, 2)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

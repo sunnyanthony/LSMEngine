@@ -7,15 +7,17 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
+	"lsmengine/tests/integration/helpers"
 )
 
 func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 	dir := t.TempDir()
 	store, err := lsm.New(lsm.Options{
-		DataDir:               dir,
-		MemtableLimit:         4,
-		WALSync:               false,
-		CompactionL0Threshold: 2,
+		DataDir:                 dir,
+		MemtableLimit:           4,
+		WALSync:                 false,
+		CompactionL0Threshold:   2,
+		ManifestCheckpointEvery: 1,
 	})
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
@@ -32,7 +34,8 @@ func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 	if err := store.Put([]byte("x"), []byte("x1")); err != nil {
 		t.Fatalf("put x: %v", err)
 	}
-	waitForSSTableFiles(t, dir, 1)
+	helpers.WaitForSSTableFiles(t, dir, 1)
+	helpers.WaitForManifest(t, dir, 1, 1)
 
 	snap := store.Snapshot()
 	t.Cleanup(func() {
@@ -41,7 +44,7 @@ func TestLSMSnapshotSurvivesCompaction(t *testing.T) {
 		}
 	})
 
-	waiter := startCompactionWait(t)
+	waiter := helpers.StartCompactionWait(t)
 	if err := store.Put([]byte("k"), []byte("v2")); err != nil {
 		t.Fatalf("put k2: %v", err)
 	}
