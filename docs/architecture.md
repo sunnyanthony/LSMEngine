@@ -132,6 +132,8 @@ and obsolete SSTable cleanup. This improves throughput but adds crash-recovery c
 Future optimization: async I/O/worker pools for WAL/flush/compaction to reduce blocking.
 Evaluate io_uring integration paths and define fallbacks for non-Linux platforms.
 Tune batching/backpressure to minimize context switches under sustained write load.
+Goal: share IO backend abstractions across service, WAL, SSTable, and compaction
+to reduce copies and enable kernel-assisted paths (page cache, sendfile, io_uring).
 
 ## Deferred: refactor backlog
 Technical issues:
