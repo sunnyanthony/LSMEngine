@@ -81,10 +81,21 @@ func TestLSMRecoveryFallbackScanWhenManifestCorrupt(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	sstables, err := filepath.Glob(filepath.Join(dir, "sstables", "sstable-*.sst"))
+	if err != nil {
+		t.Fatalf("glob sstables: %v", err)
+	}
+	if len(sstables) == 0 {
+		t.Fatalf("expected sstables after close flush")
+	}
 
 	manifestPath := filepath.Join(dir, "manifest.json")
 	if err := os.WriteFile(manifestPath, []byte("{corrupt"), 0o644); err != nil {
 		t.Fatalf("corrupt manifest: %v", err)
+	}
+	logPath := filepath.Join(dir, "manifest.log")
+	if err := os.WriteFile(logPath, []byte("corrupt\n"), 0o644); err != nil {
+		t.Fatalf("corrupt manifest log: %v", err)
 	}
 
 	waiter := startManifestFallbackWait(t)
@@ -125,14 +136,6 @@ func TestLSMRecoveryWALOnlyWhenManifestUnreadable(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
-	}
-
-	matches, err := filepath.Glob(filepath.Join(dir, "sstables", "sstable-*.sst"))
-	if err != nil {
-		t.Fatalf("glob sstables: %v", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no sstables, found %d", len(matches))
 	}
 
 	manifestPath := filepath.Join(dir, "manifest.json")

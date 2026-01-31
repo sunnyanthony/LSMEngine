@@ -21,6 +21,9 @@ type Snapshot struct {
 
 // Snapshot freezes the current memtable and returns a point-in-time view.
 func (l *LSM) Snapshot() *Snapshot {
+	if l == nil || l.isClosing() {
+		return nil
+	}
 	l.memMu.Lock()
 	frozen := l.freezeMemtableLocked(true)
 	immutables := append([]memtable.Table(nil), l.immutables...)

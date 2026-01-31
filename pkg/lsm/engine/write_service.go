@@ -17,6 +17,9 @@ func newWriteService(l *LSM) *writeService {
 }
 
 func (s *writeService) Put(key []byte, value []byte) error {
+	if s.l.isClosing() {
+		return errs.ErrClosed
+	}
 	if len(key) == 0 {
 		return errs.ErrWALEmptyKey
 	}
@@ -47,6 +50,9 @@ func (s *writeService) Put(key []byte, value []byte) error {
 }
 
 func (s *writeService) Delete(key []byte) error {
+	if s.l.isClosing() {
+		return errs.ErrClosed
+	}
 	if len(key) == 0 {
 		return errs.ErrWALEmptyKey
 	}
@@ -105,6 +111,9 @@ func (s *writeService) shouldThrottleWriteForMem(mem memtable.Table, delta int) 
 }
 
 func (s *writeService) acquireMemForWrite(delta int) (memtable.Table, error) {
+	if s.l.isClosing() {
+		return nil, errs.ErrClosed
+	}
 	s.l.memMu.RLock()
 	mem := s.l.mem
 	if s.shouldThrottleWriteForMem(mem, delta) {

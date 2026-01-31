@@ -8,6 +8,9 @@ func (l *LSM) Put(key []byte, value []byte) error {
 	if l == nil {
 		return errs.ErrBackpressure
 	}
+	if l.isClosing() {
+		return errs.ErrClosed
+	}
 	if l.writer == nil {
 		l.writer = newWriteService(l)
 	}
@@ -17,6 +20,9 @@ func (l *LSM) Put(key []byte, value []byte) error {
 func (l *LSM) Delete(key []byte) error {
 	if l == nil {
 		return errs.ErrBackpressure
+	}
+	if l.isClosing() {
+		return errs.ErrClosed
 	}
 	if l.writer == nil {
 		l.writer = newWriteService(l)

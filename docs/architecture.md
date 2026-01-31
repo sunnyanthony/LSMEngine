@@ -135,10 +135,6 @@ Tune batching/backpressure to minimize context switches under sustained write lo
 
 ## Deferred: refactor backlog
 Technical issues:
-- Swap Race: write path can target a memtable that is already flushing.
-  Mitigation: writer counting on memtables; flush waits for writers to drain.
-- Visibility Gap: Get may miss an entry if memtable swaps between reads.
-  Mitigation: append old-active to immutables before pointer swap or hold memMu while capturing pointers.
 - Throttling Consistency: write throttling lacks reservation, risks over-limit.
   Mitigation: check under the same lock as pointer acquisition or implement reservation.
 

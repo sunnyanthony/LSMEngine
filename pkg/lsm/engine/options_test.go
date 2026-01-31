@@ -19,6 +19,9 @@ func TestNormalizeOptionsDefaults(t *testing.T) {
 	if opts.ManifestCheckpointEvery == 0 || opts.ReplayBatchSize == 0 {
 		t.Fatalf("expected manifest/replay defaults")
 	}
+	if opts.CloseTimeout <= 0 {
+		t.Fatalf("expected close timeout default")
+	}
 }
 
 func TestNormalizeOptionsRequiresDataDir(t *testing.T) {

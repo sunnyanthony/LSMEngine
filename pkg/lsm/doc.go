@@ -3,5 +3,6 @@
 // The facade owns configuration via Options and lifecycle via New. It provides
 // Put/Delete/Get, snapshots, and range scans while keeping internal storage
 // components encapsulated. Public reads return owned data; internal zero-copy
-// views stay behind the API boundary.
+// views stay behind the API boundary. Close performs a best-effort flush within
+// CloseTimeout and rejects further writes with ErrClosed.
 package lsm
