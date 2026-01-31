@@ -37,4 +37,6 @@ var (
 	ErrSSTableBadIndex = errors.New("sstable: index checksum mismatch")
 	// ErrSSTableUnknownCompression indicates an unknown compression ID.
 	ErrSSTableUnknownCompression = errors.New("sstable: unknown compression id")
+	// ErrClosed indicates the engine has been closed and cannot accept writes.
+	ErrClosed = errors.New("lsm: closed")
 )

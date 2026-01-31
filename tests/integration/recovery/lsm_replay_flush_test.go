@@ -14,6 +14,7 @@ import (
 
 func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
 	dir := t.TempDir()
+	val := bytes.Repeat([]byte("v"), 32)
 	store, err := lsm.New(lsm.Options{
 		DataDir:               dir,
 		MemtableLimit:         1 << 20,
@@ -23,8 +24,6 @@ func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lsm: %v", err)
 	}
-
-	val := bytes.Repeat([]byte("v"), 32)
 	for i := 0; i < 120; i++ {
 		key := []byte(fmt.Sprintf("k%03d", i))
 		if err := store.Put(key, val); err != nil {
@@ -39,8 +38,8 @@ func TestLSMReplayFlushesWhenMemtableLimitReached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob sstables: %v", err)
 	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no sstables before replay, found %d", len(matches))
+	if len(matches) == 0 {
+		t.Fatalf("expected sstables after close flush")
 	}
 
 	reopened, err := lsm.New(lsm.Options{

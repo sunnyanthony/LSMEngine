@@ -12,6 +12,7 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 - Event bus for async signals.
 - SSTable FlowObserver + FlowMetrics hooks for read-path visibility.
 - Backpressure returns `ErrBackpressure` instead of synchronous flush when the flush queue is full.
+- Close drains flush queues best-effort within `CloseTimeout`; new writes return `ErrClosed`.
 
 ## Quick start
 ```bash

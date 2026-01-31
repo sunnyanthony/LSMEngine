@@ -100,6 +100,7 @@ func New(opts Options) (*LSM, error) {
 		autoRepair:           autoRepair,
 		missingSegmentPolicy: missingPolicy,
 		replayBatchSize:      opts.ReplayBatchSize,
+		closeTimeout:         opts.CloseTimeout,
 		ctx:                  ctx,
 		cancel:               cancel,
 		remover:              remover,

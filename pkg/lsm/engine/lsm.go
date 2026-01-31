@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 	"lsmengine/internal/lsm/dispatch"
@@ -55,6 +56,7 @@ type Options struct {
 	TrashDir                  string
 	TrashMaxBytes             int64
 	TrashMaxFiles             int
+	CloseTimeout              time.Duration
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
@@ -147,6 +149,11 @@ type LSM struct {
 	tableEdits           tableedit.Editor
 	remover              tableedit.Remover
 	bg                   sync.WaitGroup
+	closeOnce            sync.Once
+	closeErr             error
+	closeTimeout         time.Duration
+	closing              atomic.Bool
+	closed               atomic.Bool
 }
 
 // FlowMetrics returns a snapshot of SSTable read-path metrics if enabled.
@@ -158,36 +165,50 @@ func (l *LSM) FlowMetrics() sstableconfig.MetricsSnapshot {
 }
 
 func (l *LSM) Close() error {
-	// TODO: do we need to use ctx to make the goroutine to know?
-	//       like make sure the data flushed
-	l.cancel()
-	l.bg.Wait()
-	var errOut error
-	if l.wal != nil {
-		if err := l.wal.Close(); err != nil {
+	if l == nil {
+		return nil
+	}
+	l.closeOnce.Do(func() {
+		l.closing.Store(true)
+		if err := l.flushOnClose(); err != nil {
 			if l.logger != nil {
-				l.logger.Printf("wal close: %v", err)
+				l.logger.Printf("close flush: %v", err)
 			}
-			errOut = errors.Join(errOut, err)
+			l.closeErr = errors.Join(l.closeErr, err)
 		}
-	}
-	tables := l.tables.Tables()
-	for _, table := range tables {
-		if err := table.Close(); err != nil {
-			if l.logger != nil {
-				l.logger.Printf("table close: %v", err)
+		if l.cancel != nil {
+			l.cancel()
+		}
+		l.bg.Wait()
+		errOut := l.closeErr
+		if l.wal != nil {
+			if err := l.wal.Close(); err != nil {
+				if l.logger != nil {
+					l.logger.Printf("wal close: %v", err)
+				}
+				errOut = errors.Join(errOut, err)
 			}
-			errOut = errors.Join(errOut, err)
 		}
-	}
-	if l.tables != nil {
-		l.cleanupTables(l.tables.Pending())
-	}
-	if l.logCloser != nil {
-		if err := l.logCloser.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "lsm: log close: %v\n", err)
-			errOut = errors.Join(errOut, err)
+		if l.tables != nil {
+			tables := l.tables.Tables()
+			for _, table := range tables {
+				if err := table.Close(); err != nil {
+					if l.logger != nil {
+						l.logger.Printf("table close: %v", err)
+					}
+					errOut = errors.Join(errOut, err)
+				}
+			}
+			l.cleanupTables(l.tables.Pending())
 		}
-	}
-	return errOut
+		if l.logCloser != nil {
+			if err := l.logCloser.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "lsm: log close: %v\n", err)
+				errOut = errors.Join(errOut, err)
+			}
+		}
+		l.closeErr = errOut
+		l.closed.Store(true)
+	})
+	return l.closeErr
 }

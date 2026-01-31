@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"lsmengine/internal/lsm/memory/arena"
 	memtable "lsmengine/internal/lsm/memtable"
@@ -43,6 +44,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	}
 	if opts.ReplayBatchSize == 0 {
 		opts.ReplayBatchSize = 256
+	}
+	if opts.CloseTimeout <= 0 {
+		opts.CloseTimeout = 5 * time.Second
 	}
 	if opts.TrashDir == "" {
 		opts.TrashDir = filepath.Join(opts.DataDir, "trash")
