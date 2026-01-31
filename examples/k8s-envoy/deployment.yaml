@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lsm-server
+  namespace: lsm-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lsm-server
+  template:
+    metadata:
+      labels:
+        app: lsm-server
+    spec:
+      containers:
+      - name: lsm
+        image: lsmengine-server:dev
+        imagePullPolicy: IfNotPresent
+        args:
+          - serve
+          - --config
+          - /etc/lsm/server.yaml
+        ports:
+          - containerPort: 8080
+        volumeMounts:
+          - name: lsm-config
+            mountPath: /etc/lsm
+          - name: lsm-data
+            mountPath: /var/lib/lsm
+      - name: envoy
+        image: envoyproxy/envoy:v1.29-latest
+        args:
+          - "-c"
+          - "/etc/envoy/envoy.yaml"
+        ports:
+          - containerPort: 8443
+        volumeMounts:
+          - name: envoy-config
+            mountPath: /etc/envoy
+          - name: envoy-tls
+            mountPath: /etc/envoy/tls
+            readOnly: true
+      volumes:
+        - name: lsm-config
+          configMap:
+            name: lsm-server-config
+            items:
+              - key: server.yaml
+                path: server.yaml
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy.yaml
+                path: envoy.yaml
+        - name: envoy-tls
+          secret:
+            secretName: envoy-tls
+        - name: lsm-data
+          emptyDir: {}
