@@ -63,6 +63,8 @@ type Options struct {
 	WebhookResolver           WebhookResolver
 	WriteEventQueueDepth      int
 	WriteEventSink            WriteEventSink
+	UDSWriteEventPath         string
+	UDSWriteEventTimeout      time.Duration
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.

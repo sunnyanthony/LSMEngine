@@ -41,6 +41,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Minimal local mode (monitoring): LSM can emit a best-effort webhook on
   `Put/Delete` success or failure without blocking the write path.
 - Webhook routing can be resolved per-event (ex: different endpoints for write ops).
+- Optionally emit write events to a Unix domain socket for a sidecar to handle
+  webhooks/streaming out of process.
 
 ## Phase 2: HTTP/3 / QUIC
 - Maintain the same API schema and semantics.

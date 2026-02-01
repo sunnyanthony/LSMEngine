@@ -57,6 +57,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.WriteEventQueueDepth <= 0 {
 		opts.WriteEventQueueDepth = opts.WebhookQueueDepth
 	}
+	if opts.UDSWriteEventTimeout <= 0 {
+		opts.UDSWriteEventTimeout = opts.WebhookTimeout
+	}
 	if opts.TrashDir == "" {
 		opts.TrashDir = filepath.Join(opts.DataDir, "trash")
 	}

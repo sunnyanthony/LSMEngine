@@ -31,6 +31,9 @@ func TestNormalizeOptionsDefaults(t *testing.T) {
 	if opts.WriteEventQueueDepth <= 0 {
 		t.Fatalf("expected write event queue depth default")
 	}
+	if opts.UDSWriteEventTimeout <= 0 {
+		t.Fatalf("expected uds write timeout default")
+	}
 }
 
 func TestNormalizeOptionsRequiresDataDir(t *testing.T) {

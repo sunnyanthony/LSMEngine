@@ -114,6 +114,17 @@ func New(opts Options) (*LSM, error) {
 			opts.WriteEventQueueDepth,
 			lsm.logger.Printf,
 		)
+	} else if opts.UDSWriteEventPath != "" {
+		handler := NewUDSWriteEventHandler(
+			opts.UDSWriteEventPath,
+			opts.UDSWriteEventTimeout,
+			lsm.logger.Printf,
+		)
+		lsm.writeEvents = newWriteEventDispatcher(
+			handler,
+			opts.WriteEventQueueDepth,
+			lsm.logger.Printf,
+		)
 	} else if opts.WebhookURL != "" || opts.WebhookResolver != nil {
 		sink := newWebhookSink(
 			opts.WebhookURL,
