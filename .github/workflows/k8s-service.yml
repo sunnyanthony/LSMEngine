@@ -25,9 +25,22 @@ jobs:
           pf_pid=$!
           trap 'kill ${pf_pid}' EXIT
           for i in {1..30}; do
+            if grep -q "Forwarding from" /tmp/port-forward.log; then
+              break
+            fi
+            if ! kill -0 ${pf_pid} 2>/dev/null; then
+              echo "port-forward exited early"
+              cat /tmp/port-forward.log
+              exit 1
+            fi
+            sleep 1
+          done
+          for i in {1..30}; do
             if curl -k https://127.0.0.1:8443/healthz; then
               exit 0
             fi
             sleep 2
           done
+          echo "health probe failed"
+          cat /tmp/port-forward.log
           exit 1
