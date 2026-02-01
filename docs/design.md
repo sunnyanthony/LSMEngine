@@ -10,3 +10,4 @@ Component specs:
 - `docs/sstable.md`
 - `docs/wal.md`
 - `docs/compaction.md`
+- `docs/server-api.md`

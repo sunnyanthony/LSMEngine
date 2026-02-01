@@ -1,0 +1,14 @@
+FROM golang:1.21 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -o /out/lsmctl ./cmd/lsmctl
+
+FROM debian:bookworm-slim
+RUN useradd -u 10001 -r -s /usr/sbin/nologin lsm
+COPY --from=build /out/lsmctl /usr/local/bin/lsmctl
+USER 10001
+ENTRYPOINT ["/usr/local/bin/lsmctl"]

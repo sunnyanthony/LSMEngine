@@ -108,6 +108,36 @@ func New(opts Options) (*LSM, error) {
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)
 	lsm.flushSvc = newFlushService(lsm)
+	if opts.WriteEventSink != nil {
+		lsm.writeEvents = newWriteEventDispatcher(
+			opts.WriteEventSink,
+			opts.WriteEventQueueDepth,
+			lsm.logger.Printf,
+		)
+	} else if opts.UDSWriteEventPath != "" {
+		handler := NewUDSWriteEventHandler(
+			opts.UDSWriteEventPath,
+			opts.UDSWriteEventTimeout,
+			lsm.logger.Printf,
+		)
+		lsm.writeEvents = newWriteEventDispatcher(
+			handler,
+			opts.WriteEventQueueDepth,
+			lsm.logger.Printf,
+		)
+	} else if opts.WebhookURL != "" || opts.WebhookResolver != nil {
+		sink := newWebhookSink(
+			opts.WebhookURL,
+			opts.WebhookTimeout,
+			opts.WebhookResolver,
+			lsm.logger.Printf,
+		)
+		lsm.writeEvents = newWriteEventDispatcher(
+			sink,
+			opts.WriteEventQueueDepth,
+			lsm.logger.Printf,
+		)
+	}
 
 	lsm.dispatch = dispatch.NewDispatcher(opts.FlushQueueSize, eventBus, lsm.flushSvc.onFlush)
 

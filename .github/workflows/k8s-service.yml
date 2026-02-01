@@ -1,0 +1,30 @@
+name: k8s-service
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  k8s-service:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kind
+        uses: helm/kind-action@v1.8.0
+
+      - name: Build and run Envoy example
+        run: scripts/kind-envoy-example.sh
+
+      - name: Probe health
+        run: |
+          for i in {1..30}; do
+            if curl -k https://127.0.0.1:8443/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

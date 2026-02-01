@@ -54,6 +54,10 @@ Internal engine components (subject to change):
 ## Scripts
 - `scripts/docker-test.sh`: builds the test image with plain progress and no cache to show full test logs.
 
+## Monitoring
+- Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz` + `/stats` for server mode.
+- CLI (single-run or via server): `cmd/lsmctl` with `serve`, `stats`, `health`.
+
 ## Benchmarks
 - Memtable: `go test ./internal/lsm/memtable -bench=Memtable -benchmem`
 

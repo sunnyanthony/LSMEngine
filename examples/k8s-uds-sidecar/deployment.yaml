@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lsm-uds
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lsm-uds
+  template:
+    metadata:
+      labels:
+        app: lsm-uds
+    spec:
+      volumes:
+        - name: lsm-socket
+          emptyDir: {}
+      containers:
+        - name: lsm
+          image: lsm-server:dev
+          volumeMounts:
+            - name: lsm-socket
+              mountPath: /var/run/lsm
+        - name: uds-sidecar
+          image: lsm-uds-sidecar:dev
+          env:
+            - name: LSM_EVENTS_SOCKET
+              value: /var/run/lsm/events.sock
+            - name: LSM_WEBHOOK_URL
+              value: http://example-webhook.default.svc.cluster.local/events
+          volumeMounts:
+            - name: lsm-socket
+              mountPath: /var/run/lsm

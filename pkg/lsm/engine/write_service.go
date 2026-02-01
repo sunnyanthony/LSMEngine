@@ -21,13 +21,18 @@ func (s *writeService) Put(key []byte, value []byte) error {
 		return errs.ErrClosed
 	}
 	if len(key) == 0 {
-		return errs.ErrWALEmptyKey
+		err := errs.ErrWALEmptyKey
+		s.l.notifyWriteEvent("put", key, 0, "failed", err)
+		return err
 	}
 	if len(value) == 0 {
-		return errs.ErrWALEmptyValue
+		err := errs.ErrWALEmptyValue
+		s.l.notifyWriteEvent("put", key, 0, "failed", err)
+		return err
 	}
 	mem, err := s.acquireMemForWrite(len(key) + len(value))
 	if err != nil {
+		s.l.notifyWriteEvent("put", key, 0, "failed", err)
 		return err
 	}
 
@@ -35,6 +40,7 @@ func (s *writeService) Put(key []byte, value []byte) error {
 	entry := builder.Build(key, value, false, s.l.nextSeq())
 	if err := s.l.wal.AppendOwned(entry); err != nil {
 		mem.DecWriter()
+		s.l.notifyWriteEvent("put", key, entry.Seq, "failed", err)
 		return err
 	}
 	s.l.applyEntryOwned(mem, entry)
@@ -46,6 +52,7 @@ func (s *writeService) Put(key []byte, value []byte) error {
 	if s.l.bus != nil {
 		s.l.bus.Publish(bus.Event{Type: bus.EventWalAppended, Sequence: entry.Seq})
 	}
+	s.l.notifyWriteEvent("put", key, entry.Seq, "committed", nil)
 	return nil
 }
 
@@ -54,10 +61,13 @@ func (s *writeService) Delete(key []byte) error {
 		return errs.ErrClosed
 	}
 	if len(key) == 0 {
-		return errs.ErrWALEmptyKey
+		err := errs.ErrWALEmptyKey
+		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
+		return err
 	}
 	mem, err := s.acquireMemForWrite(len(key))
 	if err != nil {
+		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
 		return err
 	}
 
@@ -65,6 +75,7 @@ func (s *writeService) Delete(key []byte) error {
 	entry := builder.Build(key, nil, true, s.l.nextSeq())
 	if err := s.l.wal.AppendOwned(entry); err != nil {
 		mem.DecWriter()
+		s.l.notifyWriteEvent("delete", key, entry.Seq, "failed", err)
 		return err
 	}
 	s.l.applyEntryOwned(mem, entry)
@@ -76,6 +87,7 @@ func (s *writeService) Delete(key []byte) error {
 	if s.l.bus != nil {
 		s.l.bus.Publish(bus.Event{Type: bus.EventWalAppended, Sequence: entry.Seq})
 	}
+	s.l.notifyWriteEvent("delete", key, entry.Seq, "committed", nil)
 	return nil
 }
 

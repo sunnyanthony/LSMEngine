@@ -10,6 +10,8 @@ type SSTableOptions = engine.SSTableOptions
 type MissingSegmentPolicy = engine.MissingSegmentPolicy
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
+type Stats = engine.Stats
+type Health = engine.Health
 
 const (
 	SSTableCompressionNone   = engine.SSTableCompressionNone

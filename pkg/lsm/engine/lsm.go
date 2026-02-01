@@ -57,6 +57,14 @@ type Options struct {
 	TrashMaxBytes             int64
 	TrashMaxFiles             int
 	CloseTimeout              time.Duration
+	WebhookURL                string
+	WebhookQueueDepth         int
+	WebhookTimeout            time.Duration
+	WebhookResolver           WebhookResolver
+	WriteEventQueueDepth      int
+	WriteEventSink            WriteEventSink
+	UDSWriteEventPath         string
+	UDSWriteEventTimeout      time.Duration
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
@@ -154,6 +162,7 @@ type LSM struct {
 	closeTimeout         time.Duration
 	closing              atomic.Bool
 	closed               atomic.Bool
+	writeEvents          *writeEventDispatcher
 }
 
 // FlowMetrics returns a snapshot of SSTable read-path metrics if enabled.
@@ -162,6 +171,19 @@ func (l *LSM) FlowMetrics() sstableconfig.MetricsSnapshot {
 		return sstableconfig.MetricsSnapshot{}
 	}
 	return l.flowMetrics.Snapshot()
+}
+
+func (l *LSM) notifyWriteEvent(op string, key []byte, seq uint64, status string, err error) {
+	if l == nil || l.writeEvents == nil {
+		return
+	}
+	l.writeEvents.notify(WriteEvent{
+		Op:     op,
+		Key:    key,
+		Status: status,
+		Seq:    seq,
+		Err:    err,
+	})
 }
 
 func (l *LSM) Close() error {
@@ -206,6 +228,9 @@ func (l *LSM) Close() error {
 				fmt.Fprintf(os.Stderr, "lsm: log close: %v\n", err)
 				errOut = errors.Join(errOut, err)
 			}
+		}
+		if l.writeEvents != nil {
+			l.writeEvents.stop()
 		}
 		l.closeErr = errOut
 		l.closed.Store(true)
