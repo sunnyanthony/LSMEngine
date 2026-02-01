@@ -35,6 +35,13 @@ spec:
           - "/etc/envoy/envoy.yaml"
         ports:
           - containerPort: 8443
+        readinessProbe:
+          tcpSocket:
+            port: 8443
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          timeoutSeconds: 1
+          failureThreshold: 30
         volumeMounts:
           - name: envoy-config
             mountPath: /etc/envoy
