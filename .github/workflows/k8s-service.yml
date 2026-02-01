@@ -43,4 +43,8 @@ jobs:
           done
           echo "health probe failed"
           cat /tmp/port-forward.log
+          kubectl -n lsm-example get pods -o wide || true
+          kubectl -n lsm-example describe pod -l app=lsm-server || true
+          kubectl -n lsm-example logs deployment/lsm-server -c envoy --tail=200 || true
+          kubectl -n lsm-example logs deployment/lsm-server -c lsm --tail=200 || true
           exit 1
