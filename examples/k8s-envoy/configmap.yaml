@@ -50,6 +50,8 @@ data:
                     route: { cluster: lsm_backend }
               http_filters:
               - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       clusters:
       - name: lsm_backend
         connect_timeout: 1s
