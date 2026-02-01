@@ -39,7 +39,15 @@ kubectl -n "${NAMESPACE}" create secret tls envoy-tls \
   --cert="${TMP_DIR}/tls.crt" \
   --key="${TMP_DIR}/tls.key"
 
-kubectl -n "${NAMESPACE}" rollout status deployment/lsm-server
+if ! kubectl -n "${NAMESPACE}" rollout status deployment/lsm-server --timeout=120s; then
+  echo "rollout failed; dumping diagnostics" >&2
+  kubectl -n "${NAMESPACE}" get pods -o wide || true
+  kubectl -n "${NAMESPACE}" describe pod -l app=lsm-server || true
+  kubectl -n "${NAMESPACE}" logs deployment/lsm-server -c envoy --tail=200 || true
+  kubectl -n "${NAMESPACE}" logs deployment/lsm-server -c lsm --tail=200 || true
+  kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp || true
+  exit 1
+fi
 
 if [[ "${SKIP_PORT_FORWARD:-}" == "1" ]]; then
   exit 0
