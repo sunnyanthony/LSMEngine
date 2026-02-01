@@ -47,7 +47,9 @@ func serveCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "listen address")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	cfg := loadConfigOrExit(*configPath)
 	if *dataDir == "" {
@@ -105,7 +107,9 @@ func statsCmd(args []string) {
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
 	jsonOut := fs.Bool("json", false, "emit JSON")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	cfg := loadConfigOrExit(*configPath)
 	if *addr == "" {
@@ -140,7 +144,9 @@ func healthCmd(args []string) {
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
 	jsonOut := fs.Bool("json", false, "emit JSON")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	cfg := loadConfigOrExit(*configPath)
 	if *addr == "" {
