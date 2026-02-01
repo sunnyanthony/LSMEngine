@@ -41,6 +41,10 @@ kubectl -n "${NAMESPACE}" create secret tls envoy-tls \
 
 kubectl -n "${NAMESPACE}" rollout status deployment/lsm-server
 
+if [[ "${SKIP_PORT_FORWARD:-}" == "1" ]]; then
+  exit 0
+fi
+
 echo "Port forwarding https://127.0.0.1:8443 -> service/lsm-server"
 echo "Try: curl -k https://127.0.0.1:8443/healthz"
 kubectl -n "${NAMESPACE}" port-forward service/lsm-server 8443:8443
