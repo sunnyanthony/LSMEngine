@@ -32,12 +32,14 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -subj "/CN=lsm.local" \
   -days 1 >/dev/null 2>&1
 
-kubectl apply -k examples/k8s-envoy
+kubectl apply -f examples/k8s-envoy/namespace.yaml
 
 kubectl -n "${NAMESPACE}" delete secret envoy-tls >/dev/null 2>&1 || true
 kubectl -n "${NAMESPACE}" create secret tls envoy-tls \
   --cert="${TMP_DIR}/tls.crt" \
   --key="${TMP_DIR}/tls.key"
+
+kubectl apply -k examples/k8s-envoy
 
 if ! kubectl -n "${NAMESPACE}" rollout status deployment/lsm-server --timeout=120s; then
   echo "rollout failed; dumping diagnostics" >&2
