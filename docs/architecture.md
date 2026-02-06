@@ -135,7 +135,7 @@ Tune batching/backpressure to minimize context switches under sustained write lo
 IO backend injection now exists via `IOFS`; a selectable backend can be set via
 `IOBackend` (`os`, `async`, `io_uring`). The async wrapper can be enabled with
 `IOAsyncMaxInFlight`, and the next step is a Linux `io_uring` backend plus
-platform fallbacks.
+platform fallbacks. `io_uring` requires Linux kernel 5.6+.
 Goal: share IO backend abstractions across service, WAL, SSTable, and compaction
 to reduce copies and enable kernel-assisted paths (page cache, sendfile, io_uring).
 
