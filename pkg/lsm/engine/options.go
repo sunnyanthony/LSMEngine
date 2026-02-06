@@ -204,6 +204,9 @@ func buildSSTableOptions(opts Options) (sstableconfig.Options, *sstableconfig.Fl
 	if opts.SSTablePolicyOverride != nil {
 		sstOpts.PolicyOverride = opts.SSTablePolicyOverride
 	}
+	if opts.IOFS != nil {
+		sstOpts.FS = opts.IOFS
+	}
 	var flowMetrics *sstableconfig.FlowMetrics
 	if sstOpts.FlowObserver == nil {
 		flowMetrics = &sstableconfig.FlowMetrics{}

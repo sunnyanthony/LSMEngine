@@ -14,6 +14,7 @@ import (
 
 	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 	"lsmengine/internal/lsm/dispatch"
+	"lsmengine/internal/lsm/iofs"
 	"lsmengine/internal/lsm/logging"
 	"lsmengine/internal/lsm/manifest"
 	memtable "lsmengine/internal/lsm/memtable"
@@ -65,6 +66,7 @@ type Options struct {
 	WriteEventSink            WriteEventSink
 	UDSWriteEventPath         string
 	UDSWriteEventTimeout      time.Duration
+	IOFS                      iofs.FS
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
