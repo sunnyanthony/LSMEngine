@@ -132,8 +132,9 @@ and obsolete SSTable cleanup. This improves throughput but adds crash-recovery c
 Future optimization: async I/O/worker pools for WAL/flush/compaction to reduce blocking.
 Evaluate io_uring integration paths and define fallbacks for non-Linux platforms.
 Tune batching/backpressure to minimize context switches under sustained write load.
-IO backend injection now exists via `IOFS`; next step is a Linux `io_uring` backend
-plus platform fallbacks.
+IO backend injection now exists via `IOFS`; the async wrapper can be enabled with
+`IOAsyncMaxInFlight`, and the next step is a Linux `io_uring` backend plus
+platform fallbacks.
 Goal: share IO backend abstractions across service, WAL, SSTable, and compaction
 to reduce copies and enable kernel-assisted paths (page cache, sendfile, io_uring).
 
@@ -165,7 +166,8 @@ Backlog:
 - WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
 - Cleanup: `TrashDir`, `TrashMaxBytes`, `TrashMaxFiles`.
-- IO: `IOFS` for custom filesystem/IO backends (e.g., io_uring on Linux).
+- IO: `IOFS` for custom filesystem/IO backends (e.g., io_uring on Linux),
+  `IOAsyncMaxInFlight` to wrap reads/writes with an async worker pool.
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
 

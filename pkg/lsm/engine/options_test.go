@@ -51,3 +51,16 @@ func TestWalRepairPolicyDefaults(t *testing.T) {
 		t.Fatalf("expected missing policy ignore when autoRepair, got %v", missing)
 	}
 }
+
+func TestNormalizeOptionsWrapsAsyncFS(t *testing.T) {
+	opts, err := normalizeOptions(Options{
+		DataDir:            t.TempDir(),
+		IOAsyncMaxInFlight: 1,
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if opts.IOFS == nil {
+		t.Fatalf("expected IOFS to be set when IOAsyncMaxInFlight > 0")
+	}
+}

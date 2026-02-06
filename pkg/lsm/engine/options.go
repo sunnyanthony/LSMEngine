@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"lsmengine/internal/lsm/iofs"
 	"lsmengine/internal/lsm/memory/arena"
 	memtable "lsmengine/internal/lsm/memtable"
 	memtabletable "lsmengine/internal/lsm/memtable/table"
@@ -68,6 +69,11 @@ func normalizeOptions(opts Options) (Options, error) {
 	}
 	if opts.TrashMaxFiles == 0 {
 		opts.TrashMaxFiles = 1024
+	}
+	if opts.IOAsyncMaxInFlight > 0 {
+		opts.IOFS = iofs.NewAsyncFS(opts.IOFS, iofs.AsyncConfig{
+			MaxInFlight: opts.IOAsyncMaxInFlight,
+		})
 	}
 	return opts, nil
 }

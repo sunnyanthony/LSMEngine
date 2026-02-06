@@ -67,6 +67,7 @@ type Options struct {
 	UDSWriteEventPath         string
 	UDSWriteEventTimeout      time.Duration
 	IOFS                      iofs.FS
+	IOAsyncMaxInFlight        int
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
