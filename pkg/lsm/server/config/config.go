@@ -12,10 +12,13 @@ import (
 
 // Config captures server-mode defaults.
 type Config struct {
-	DataDir      string        `yaml:"data_dir"`
-	Addr         string        `yaml:"addr"`
-	ReadTimeout  time.Duration `yaml:"read_timeout"`
-	WriteTimeout time.Duration `yaml:"write_timeout"`
+	DataDir            string        `yaml:"data_dir"`
+	Addr               string        `yaml:"addr"`
+	ReadTimeout        time.Duration `yaml:"read_timeout"`
+	WriteTimeout       time.Duration `yaml:"write_timeout"`
+	IOBackend          string        `yaml:"io_backend"`
+	IOBackendStrict    bool          `yaml:"io_backend_strict"`
+	IOAsyncMaxInFlight int           `yaml:"io_async_max_in_flight"`
 }
 
 // Load reads a YAML config file from disk.
