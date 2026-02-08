@@ -225,6 +225,10 @@ func buildSSTableOptions(opts Options) (sstableconfig.Options, *sstableconfig.Fl
 	if opts.IOFS != nil {
 		sstOpts.FS = opts.IOFS
 	}
+	mmapExplicit := opts.SSTable != nil && opts.SSTable.UseMmap != nil
+	if !mmapExplicit && opts.IOBackend == string(iofs.BackendIOUring) {
+		sstOpts.UseMmap = true
+	}
 	var flowMetrics *sstableconfig.FlowMetrics
 	if sstOpts.FlowObserver == nil {
 		flowMetrics = &sstableconfig.FlowMetrics{}

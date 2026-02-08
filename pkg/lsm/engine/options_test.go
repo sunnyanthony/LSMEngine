@@ -77,3 +77,17 @@ func TestNormalizeOptionsSelectsBackend(t *testing.T) {
 		t.Fatalf("expected IOFS to be set when IOBackend is configured")
 	}
 }
+
+func TestBuildSSTableOptionsAutoMmapForIOUring(t *testing.T) {
+	opts, err := normalizeOptions(Options{
+		DataDir:   t.TempDir(),
+		IOBackend: "io_uring",
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	sstOpts, _ := buildSSTableOptions(opts)
+	if !sstOpts.UseMmap {
+		t.Fatalf("expected mmap enabled when io_uring backend is selected")
+	}
+}
