@@ -58,6 +58,13 @@ func (a *asyncFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 }
 func (a *asyncFS) Truncate(path string, size int64) error { return a.base.Truncate(path, size) }
 
+func (a *asyncFS) Close() error {
+	if c, ok := a.base.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
 type asyncFile struct {
 	File
 	sem chan struct{}

@@ -161,6 +161,7 @@ type LSM struct {
 	compactionSvc        *compactionruntime.Runtime
 	tableEdits           tableedit.Editor
 	remover              tableedit.Remover
+	ioFS                 iofs.FS
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
 	closeErr             error
@@ -231,6 +232,14 @@ func (l *LSM) Close() error {
 		if l.logCloser != nil {
 			if err := l.logCloser.Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "lsm: log close: %v\n", err)
+				errOut = errors.Join(errOut, err)
+			}
+		}
+		if c, ok := l.ioFS.(interface{ Close() error }); ok {
+			if err := c.Close(); err != nil {
+				if l.logger != nil {
+					l.logger.Printf("iofs close: %v", err)
+				}
 				errOut = errors.Join(errOut, err)
 			}
 		}

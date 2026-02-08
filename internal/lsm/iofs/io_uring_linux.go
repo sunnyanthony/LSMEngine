@@ -59,6 +59,18 @@ func (i *ioUringFS) WriteFile(path string, data []byte, perm os.FileMode) error 
 }
 func (i *ioUringFS) Truncate(path string, size int64) error { return i.base.Truncate(path, size) }
 
+func (i *ioUringFS) Close() error {
+	if i.ring != nil {
+		if err := i.ring.Close(); err != nil {
+			return err
+		}
+	}
+	if c, ok := i.base.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
 func (i *ioUringFS) wrapFile(f File) (File, error) {
 	osFile, ok := f.(*os.File)
 	if !ok {

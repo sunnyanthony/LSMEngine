@@ -106,6 +106,7 @@ func New(opts Options) (*LSM, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 		remover:              remover,
+		ioFS:                 opts.IOFS,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)
