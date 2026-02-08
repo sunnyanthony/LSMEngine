@@ -2,6 +2,7 @@ data_dir: "./data"
 node_id: "node-a"
 cluster_id: "cluster-dev"
 storage_mode: "local"
+control_state_path: "./data/control_state.json"
 raft:
   replicas: 3
   election_timeout: "2s"

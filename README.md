@@ -12,6 +12,7 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 - Event bus for async signals.
 - SSTable FlowObserver + FlowMetrics hooks for read-path visibility.
 - M1 control-plane surface: fixed shard map metadata + management APIs.
+- M1 control-plane state persistence: shard layout/leader/drain state survive restart via `control_state.json`.
 - Backpressure returns `ErrBackpressure` instead of synchronous flush when the flush queue is full.
 - Close drains flush queues best-effort within `CloseTimeout`; new writes return `ErrClosed`.
 
@@ -59,6 +60,11 @@ Internal engine components (subject to change):
 - Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz`, `/stats`, and control endpoints.
 - Control endpoints: `/cluster/status`, `/cluster/shards`, `/cluster/shards/{id}/{transfer-leader|split|rebalance}`, `/cluster/nodes/{id}/drain`.
 - CLI (single-run or via server): `cmd/lsmctl` with `serve`, `stats`, `health`.
+
+## Control-plane state file (M1)
+- Default path: `<data_dir>/control_state.json` (override with `control_state_path` in server config).
+- Persisted fields: shard ranges/order, current leaders/replicas, drain flag, cluster/node identity.
+- Safety rule: if persisted `cluster_id`/`node_id` does not match runtime config, startup fails fast.
 
 ## Benchmarks
 - Memtable: `go test ./internal/lsm/memtable -bench=Memtable -benchmem`
