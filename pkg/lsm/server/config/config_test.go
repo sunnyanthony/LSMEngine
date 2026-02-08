@@ -12,6 +12,9 @@ data_dir: "./data"
 addr: "127.0.0.1:9090"
 read_timeout: "2s"
 write_timeout: "3s"
+io_backend: "async"
+io_backend_strict: true
+io_async_max_in_flight: 8
 `)
 
 	cfg, err := Load(path)
@@ -29,6 +32,15 @@ write_timeout: "3s"
 	}
 	if cfg.WriteTimeout != 3*time.Second {
 		t.Fatalf("expected write timeout, got %v", cfg.WriteTimeout)
+	}
+	if cfg.IOBackend != "async" {
+		t.Fatalf("expected io backend, got %q", cfg.IOBackend)
+	}
+	if !cfg.IOBackendStrict {
+		t.Fatalf("expected io backend strict to be true")
+	}
+	if cfg.IOAsyncMaxInFlight != 8 {
+		t.Fatalf("expected io async max in flight, got %d", cfg.IOAsyncMaxInFlight)
 	}
 }
 

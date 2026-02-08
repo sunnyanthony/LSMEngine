@@ -52,6 +52,7 @@ func New(opts Options) (*LSM, error) {
 		QueueDepth:     opts.WALQueueDepth,
 		BatchMax:       opts.WALBatchMax,
 		RepairOnReplay: autoRepair,
+		FS:             opts.IOFS,
 	})
 	if err != nil {
 		return nil, err
@@ -67,6 +68,7 @@ func New(opts Options) (*LSM, error) {
 		LogPath:          manifestLogPath,
 		CheckpointPath:   manifestPath,
 		CheckpointEveryN: opts.ManifestCheckpointEvery,
+		FS:               opts.IOFS,
 	})
 	if err != nil {
 		return nil, err
@@ -104,6 +106,7 @@ func New(opts Options) (*LSM, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 		remover:              remover,
+		ioFS:                 opts.IOFS,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)

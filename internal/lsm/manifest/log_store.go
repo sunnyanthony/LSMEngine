@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"lsmengine/internal/lsm/iofs"
 )
 
 // LogOptions configures the append-only manifest store.
@@ -19,11 +21,13 @@ type LogOptions struct {
 	CheckpointEveryN int
 	CheckpointPerm   os.FileMode
 	LogPerm          os.FileMode
+	FS               iofs.FS
 }
 
 // LogStore persists manifest updates to an append-only log with checkpoints.
 type LogStore struct {
 	opts      LogOptions
+	fs        iofs.FS
 	mu        sync.Mutex
 	loaded    bool
 	state     Manifest
@@ -35,10 +39,14 @@ func NewLogStore(opts LogOptions) (*LogStore, error) {
 	if opts.LogPath == "" || opts.CheckpointPath == "" {
 		return nil, fmt.Errorf("manifest log: paths required")
 	}
-	if err := os.MkdirAll(filepath.Dir(opts.LogPath), 0o755); err != nil {
+	fs := opts.FS
+	if fs == nil {
+		fs = iofs.OSFS{}
+	}
+	if err := fs.MkdirAll(filepath.Dir(opts.LogPath), 0o755); err != nil {
 		return nil, fmt.Errorf("manifest log mkdir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(opts.CheckpointPath), 0o755); err != nil {
+	if err := fs.MkdirAll(filepath.Dir(opts.CheckpointPath), 0o755); err != nil {
 		return nil, fmt.Errorf("manifest checkpoint mkdir: %w", err)
 	}
 	if opts.CheckpointEveryN <= 0 {
@@ -50,7 +58,7 @@ func NewLogStore(opts LogOptions) (*LogStore, error) {
 	if opts.CheckpointPerm == 0 {
 		opts.CheckpointPerm = 0o644
 	}
-	return &LogStore{opts: opts}, nil
+	return &LogStore{opts: opts, fs: fs}, nil
 }
 
 func (s *LogStore) Load() (Manifest, error) {
@@ -113,7 +121,7 @@ func (s *LogStore) loadLocked() error {
 		return nil
 	}
 	state := Manifest{}
-	if data, err := os.ReadFile(s.opts.CheckpointPath); err == nil && len(data) > 0 {
+	if data, err := s.fs.ReadFile(s.opts.CheckpointPath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &state); err != nil {
 			// Ignore corrupt checkpoints; fall back to replaying the log.
 			state = Manifest{}
@@ -132,7 +140,7 @@ func (s *LogStore) loadLocked() error {
 
 func (s *LogStore) readLogLocked(state Manifest) (out Manifest, err error) {
 	out = state
-	f, err := os.Open(s.opts.LogPath)
+	f, err := s.fs.Open(s.opts.LogPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return out, nil
@@ -192,7 +200,7 @@ func (s *LogStore) appendLocked(rec logRecord) error {
 		return fmt.Errorf("manifest log marshal: %w", err)
 	}
 	data = append(data, '\n')
-	f, err := os.OpenFile(s.opts.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, s.opts.LogPerm)
+	f, err := s.fs.OpenFile(s.opts.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, s.opts.LogPerm)
 	if err != nil {
 		return fmt.Errorf("manifest log open append: %w", err)
 	}
@@ -214,17 +222,17 @@ func (s *LogStore) writeCheckpointLocked() error {
 		return fmt.Errorf("manifest checkpoint marshal: %w", err)
 	}
 	tmp := s.opts.CheckpointPath + ".tmp"
-	if err := os.WriteFile(tmp, data, s.opts.CheckpointPerm); err != nil {
+	if err := s.fs.WriteFile(tmp, data, s.opts.CheckpointPerm); err != nil {
 		return fmt.Errorf("manifest checkpoint write: %w", err)
 	}
-	if err := os.Rename(tmp, s.opts.CheckpointPath); err != nil {
+	if err := s.fs.Rename(tmp, s.opts.CheckpointPath); err != nil {
 		return fmt.Errorf("manifest checkpoint rename: %w", err)
 	}
 	return nil
 }
 
 func (s *LogStore) truncateLogLocked() error {
-	if err := os.Truncate(s.opts.LogPath, 0); err != nil && !os.IsNotExist(err) {
+	if err := s.fs.Truncate(s.opts.LogPath, 0); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("manifest log truncate: %w", err)
 	}
 	return nil

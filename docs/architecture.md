@@ -132,6 +132,11 @@ and obsolete SSTable cleanup. This improves throughput but adds crash-recovery c
 Future optimization: async I/O/worker pools for WAL/flush/compaction to reduce blocking.
 Evaluate io_uring integration paths and define fallbacks for non-Linux platforms.
 Tune batching/backpressure to minimize context switches under sustained write load.
+IO backend injection now exists via `IOFS`; a selectable backend can be set via
+`IOBackend` (`os`, `async`, `io_uring`). The async wrapper can be enabled with
+`IOAsyncMaxInFlight`, and the next step is a Linux `io_uring` backend plus
+platform fallbacks. `io_uring` requires Linux kernel 5.6+ and auto-enables
+SSTable mmap when no explicit setting is provided.
 Goal: share IO backend abstractions across service, WAL, SSTable, and compaction
 to reduce copies and enable kernel-assisted paths (page cache, sendfile, io_uring).
 
@@ -163,6 +168,19 @@ Backlog:
 - WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
 - Cleanup: `TrashDir`, `TrashMaxBytes`, `TrashMaxFiles`.
+- IO: `IOFS` for custom filesystem/IO backends (e.g., io_uring on Linux),
+  `IOBackend` for selecting the backend, `IOAsyncMaxInFlight` to wrap reads/writes
+  with an async worker pool.
+
+Example:
+```
+opts := engine.Options{
+  DataDir:             "/var/lib/lsm",
+  IOBackend:           "io_uring",
+  IOBackendStrict:     false,
+  IOAsyncMaxInFlight:  128,
+}
+```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
 

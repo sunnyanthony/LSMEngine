@@ -51,3 +51,43 @@ func TestWalRepairPolicyDefaults(t *testing.T) {
 		t.Fatalf("expected missing policy ignore when autoRepair, got %v", missing)
 	}
 }
+
+func TestNormalizeOptionsWrapsAsyncFS(t *testing.T) {
+	opts, err := normalizeOptions(Options{
+		DataDir:            t.TempDir(),
+		IOAsyncMaxInFlight: 1,
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if opts.IOFS == nil {
+		t.Fatalf("expected IOFS to be set when IOAsyncMaxInFlight > 0")
+	}
+}
+
+func TestNormalizeOptionsSelectsBackend(t *testing.T) {
+	opts, err := normalizeOptions(Options{
+		DataDir:   t.TempDir(),
+		IOBackend: "async",
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if opts.IOFS == nil {
+		t.Fatalf("expected IOFS to be set when IOBackend is configured")
+	}
+}
+
+func TestBuildSSTableOptionsAutoMmapForIOUring(t *testing.T) {
+	opts, err := normalizeOptions(Options{
+		DataDir:   t.TempDir(),
+		IOBackend: "io_uring",
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	sstOpts, _ := buildSSTableOptions(opts)
+	if !sstOpts.UseMmap {
+		t.Fatalf("expected mmap enabled when io_uring backend is selected")
+	}
+}

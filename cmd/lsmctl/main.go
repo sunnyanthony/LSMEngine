@@ -47,6 +47,9 @@ func serveCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "listen address")
+	ioBackend := fs.String("io-backend", "", "io backend (os|async|io_uring)")
+	ioBackendStrict := fs.Bool("io-backend-strict", false, "fail if io backend is unavailable")
+	ioAsyncMax := fs.Int("io-async-max-in-flight", 0, "async io max in-flight ops")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -66,7 +69,22 @@ func serveCmd(args []string) {
 		}
 	}
 
-	store, err := lsm.New(lsm.Options{DataDir: *dataDir})
+	if *ioBackend == "" {
+		*ioBackend = cfg.IOBackend
+	}
+	if *ioAsyncMax == 0 {
+		*ioAsyncMax = cfg.IOAsyncMaxInFlight
+	}
+	if !*ioBackendStrict {
+		*ioBackendStrict = cfg.IOBackendStrict
+	}
+
+	store, err := lsm.New(lsm.Options{
+		DataDir:            *dataDir,
+		IOBackend:          *ioBackend,
+		IOBackendStrict:    *ioBackendStrict,
+		IOAsyncMaxInFlight: *ioAsyncMax,
+	})
 	if err != nil {
 		log.Fatalf("open: %v", err)
 	}

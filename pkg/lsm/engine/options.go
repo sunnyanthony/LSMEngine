@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"lsmengine/internal/lsm/iofs"
 	"lsmengine/internal/lsm/memory/arena"
 	memtable "lsmengine/internal/lsm/memtable"
 	memtabletable "lsmengine/internal/lsm/memtable/table"
@@ -68,6 +69,23 @@ func normalizeOptions(opts Options) (Options, error) {
 	}
 	if opts.TrashMaxFiles == 0 {
 		opts.TrashMaxFiles = 1024
+	}
+	if opts.IOFS == nil && opts.IOBackend != "" {
+		fs, err := iofs.SelectFS(
+			iofs.Backend(opts.IOBackend),
+			nil,
+			iofs.AsyncConfig{MaxInFlight: opts.IOAsyncMaxInFlight},
+			opts.IOBackendStrict,
+		)
+		if err != nil {
+			return opts, err
+		}
+		opts.IOFS = fs
+	}
+	if opts.IOAsyncMaxInFlight > 0 {
+		opts.IOFS = iofs.NewAsyncFS(opts.IOFS, iofs.AsyncConfig{
+			MaxInFlight: opts.IOAsyncMaxInFlight,
+		})
 	}
 	return opts, nil
 }
@@ -203,6 +221,13 @@ func buildSSTableOptions(opts Options) (sstableconfig.Options, *sstableconfig.Fl
 	}
 	if opts.SSTablePolicyOverride != nil {
 		sstOpts.PolicyOverride = opts.SSTablePolicyOverride
+	}
+	if opts.IOFS != nil {
+		sstOpts.FS = opts.IOFS
+	}
+	mmapExplicit := opts.SSTable != nil && opts.SSTable.UseMmap != nil
+	if !mmapExplicit && opts.IOBackend == string(iofs.BackendIOUring) {
+		sstOpts.UseMmap = true
 	}
 	var flowMetrics *sstableconfig.FlowMetrics
 	if sstOpts.FlowObserver == nil {
