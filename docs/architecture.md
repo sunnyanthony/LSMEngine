@@ -171,6 +171,16 @@ Backlog:
 - IO: `IOFS` for custom filesystem/IO backends (e.g., io_uring on Linux),
   `IOBackend` for selecting the backend, `IOAsyncMaxInFlight` to wrap reads/writes
   with an async worker pool.
+
+Example:
+```
+opts := engine.Options{
+  DataDir:             "/var/lib/lsm",
+  IOBackend:           "io_uring",
+  IOBackendStrict:     false,
+  IOAsyncMaxInFlight:  128,
+}
+```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
 
