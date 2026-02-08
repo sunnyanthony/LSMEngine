@@ -1,4 +1,22 @@
 data_dir: "./data"
+node_id: "node-a"
+cluster_id: "cluster-dev"
+storage_mode: "local"
+raft:
+  replicas: 3
+  election_timeout: "2s"
+  heartbeat_interval: "500ms"
+shards:
+  - id: "users-a-m"
+    start_key: "a"
+    end_key: "m"
+    replicas: ["node-a", "node-b", "node-c"]
+    leader: "node-a"
+  - id: "users-m-z"
+    start_key: "m"
+    end_key: ""
+    replicas: ["node-a", "node-b", "node-c"]
+    leader: "node-b"
 addr: "127.0.0.1:8080"
 read_timeout: "5s"
 write_timeout: "5s"

@@ -20,6 +20,8 @@ func TestErrorsAreDistinct(t *testing.T) {
 		ErrSSTableBadMeta,
 		ErrSSTableBadIndex,
 		ErrSSTableUnknownCompression,
+		ErrClosed,
+		ErrShardNotFound,
 	}
 	seen := make(map[string]struct{}, len(errs))
 	for _, err := range errs {

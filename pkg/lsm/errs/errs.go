@@ -39,4 +39,6 @@ var (
 	ErrSSTableUnknownCompression = errors.New("sstable: unknown compression id")
 	// ErrClosed indicates the engine has been closed and cannot accept writes.
 	ErrClosed = errors.New("lsm: closed")
+	// ErrShardNotFound indicates no shard was found for a request.
+	ErrShardNotFound = errors.New("lsm: shard not found")
 )
