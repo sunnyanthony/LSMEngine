@@ -17,6 +17,7 @@ Goals:
 - **Manifest**: durable metadata describing current table set and WAL checkpoints.
 - **Table edits**: single apply path updates TableSet + manifest (flush + compaction).
 - **Observability**: event bus hooks; SSTable FlowMetrics available (cache/filter/err), deeper metrics planned.
+- **Plugin runtime**: optional in-process extension point for document/column/vector style adapters via startup registration and typed invoke APIs.
 
 ## Current Design Snapshot
 - Data plane: WAL + memtable + tableset + SSTable read pipeline; emits metadata snapshots.

@@ -10,6 +10,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/cdc.go`: per-shard retained change stream buffer and read API (`ReadCDCEvents`).
 - `pkg/lsm/engine/read.go`: point reads.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
+- `pkg/lsm/engine/plugin_api.go`: plugin discovery + invocation entry points.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
 - `pkg/lsm/engine/commitlog.go`: control/data commit-log adapter and provider selection.
@@ -60,3 +61,4 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `internal/lsm/memory`: single-copy policy; pools only for short-lived buffers.
 - `internal/lsm/iofs`: minimal IO interface; no policy or scheduling.
 - `pkg/lsm/engine`: orchestration only; does not own data invariants.
+- `pkg/lsm/engine/plugins.go`: plugin registration + lifecycle; extension point for document/column/vector adapters.

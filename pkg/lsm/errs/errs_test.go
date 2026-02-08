@@ -24,6 +24,10 @@ func TestErrorsAreDistinct(t *testing.T) {
 		ErrShardNotFound,
 		ErrControlRevisionConflict,
 		ErrControlOperationConflict,
+		ErrControlWriteOptionsUnsupported,
+		ErrPluginInvalid,
+		ErrPluginDuplicate,
+		ErrPluginNotFound,
 	}
 	seen := make(map[string]struct{}, len(errs))
 	for _, err := range errs {

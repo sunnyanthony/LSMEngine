@@ -47,4 +47,10 @@ var (
 	ErrControlOperationConflict = errors.New("lsm: control operation conflict")
 	// ErrControlWriteOptionsUnsupported indicates optimistic control-write options are unavailable.
 	ErrControlWriteOptionsUnsupported = errors.New("lsm: control write options unsupported")
+	// ErrPluginInvalid indicates plugin registration payload is invalid.
+	ErrPluginInvalid = errors.New("lsm: invalid plugin")
+	// ErrPluginDuplicate indicates a plugin with the same name is already registered.
+	ErrPluginDuplicate = errors.New("lsm: duplicate plugin")
+	// ErrPluginNotFound indicates the requested plugin does not exist.
+	ErrPluginNotFound = errors.New("lsm: plugin not found")
 )

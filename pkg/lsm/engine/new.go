@@ -34,6 +34,10 @@ func New(opts Options) (*LSM, error) {
 	if err != nil {
 		return nil, err
 	}
+	plugins, err := newPluginManager(opts.Plugins)
+	if err != nil {
+		return nil, err
+	}
 	autoRepair, missingPolicy := walRepairPolicy(opts)
 
 	logger := opts.Logger
@@ -114,6 +118,7 @@ func New(opts Options) (*LSM, error) {
 		control:              control,
 		commitLog:            control.consensus,
 		cdc:                  newCDCStreamStore(0),
+		plugins:              plugins,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)
@@ -168,6 +173,13 @@ func New(opts Options) (*LSM, error) {
 	}
 	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
 		observer.ObserveCommittedIndex(lsm.seq)
+	}
+	if lsm.plugins != nil {
+		if err := lsm.plugins.start(ctx, lsm); err != nil {
+			cancel()
+			_ = lsm.Close()
+			return nil, err
+		}
 	}
 
 	lsm.bg.Add(1)

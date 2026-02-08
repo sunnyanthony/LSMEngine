@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,10 @@ type cdcStubProvider struct {
 	}
 }
 
+type pluginStubProvider struct {
+	stubProvider
+}
+
 func newWriteControlStubProvider() *writeControlStubProvider {
 	return &writeControlStubProvider{
 		control: newControlStubProvider(),
@@ -72,6 +77,20 @@ func (p *cdcStubProvider) ReadCDCEvents(shardID string, offset uint64, limit int
 	p.lastReq.offset = offset
 	p.lastReq.limit = limit
 	return p.result, nil
+}
+
+func (pluginStubProvider) Plugins() []lsm.PluginSpec {
+	return []lsm.PluginSpec{{
+		Name:  "vector-demo",
+		Kinds: []lsm.PluginKind{lsm.PluginKindVector},
+	}}
+}
+
+func (pluginStubProvider) InvokePlugin(_ context.Context, name string, _ lsm.PluginRequest) (lsm.PluginResponse, error) {
+	if name != "vector-demo" {
+		return lsm.PluginResponse{}, errs.ErrPluginNotFound
+	}
+	return lsm.PluginResponse{Payload: []byte(`{"ok":true}`)}, nil
 }
 
 func (p *writeControlStubProvider) Stats() lsm.Stats   { return p.write.Stats() }
@@ -361,6 +380,80 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if stats.MemtableBytes != 1 || stats.MemtableEntries != 2 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestHandlerPlugins(t *testing.T) {
+	handler := NewHandler(pluginStubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/plugins", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var specs []lsm.PluginSpec
+	if err := json.NewDecoder(rec.Body).Decode(&specs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != "vector-demo" {
+		t.Fatalf("unexpected plugin specs: %+v", specs)
+	}
+}
+
+func TestHandlerPluginInvoke(t *testing.T) {
+	handler := NewHandler(pluginStubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/plugins/vector-demo/invoke", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var resp lsm.PluginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(resp.Payload) != `{"ok":true}` {
+		t.Fatalf("unexpected payload: %s", string(resp.Payload))
+	}
+}
+
+func TestHandlerPluginInvokeNotFound(t *testing.T) {
+	handler := NewHandler(pluginStubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/plugins/nope/invoke", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rec.Code)
+	}
+}
+
+func TestHandlerPluginInvokeRejectsTrailingJSON(t *testing.T) {
+	handler := NewHandler(pluginStubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/plugins/vector-demo/invoke", strings.NewReader(`{} {}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestHandlerPluginRoutesDisabledWhenUnavailable(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/plugins", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rec.Code)
+	}
+}
+
+func TestHandlerPluginMethodCheck(t *testing.T) {
+	handler := NewHandler(pluginStubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/plugins/vector-demo/invoke", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d", rec.Code)
 	}
 }
 

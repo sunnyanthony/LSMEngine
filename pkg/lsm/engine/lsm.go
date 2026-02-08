@@ -77,6 +77,7 @@ type Options struct {
 	IOAsyncMaxInFlight        int
 	IOBackend                 string
 	IOBackendStrict           bool
+	Plugins                   []Plugin
 
 	// SSTableFlowObserver, if set, is propagated to the SSTable read pipeline to
 	// collect per-node events/metrics.
@@ -171,6 +172,7 @@ type LSM struct {
 	ioFS                 iofs.FS
 	control              *controlPlane
 	commitLog            commitLogConsensus
+	plugins              *pluginManager
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
 	closeErr             error
@@ -219,6 +221,14 @@ func (l *LSM) Close() error {
 		}
 		l.bg.Wait()
 		errOut := l.closeErr
+		if l.plugins != nil {
+			if err := l.plugins.stop(context.Background()); err != nil {
+				if l.logger != nil {
+					l.logger.Printf("plugins stop: %v", err)
+				}
+				errOut = errors.Join(errOut, err)
+			}
+		}
 		if l.wal != nil {
 			if err := l.wal.Close(); err != nil {
 				if l.logger != nil {

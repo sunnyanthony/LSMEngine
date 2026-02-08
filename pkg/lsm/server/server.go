@@ -50,8 +50,13 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
+	if plugins, ok := provider.(lsm.PluginProvider); ok {
+		handler.plugins = plugins
+	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
+	mux.HandleFunc("/plugins", handler.handlePlugins)
+	mux.HandleFunc("/plugins/", handler.handlePluginInvoke)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
@@ -79,6 +84,7 @@ type handler struct {
 	controlWithOptions      lsm.ControlProviderWithOptions
 	writer                  lsm.WriteProvider
 	cdc                     lsm.CDCProvider
+	plugins                 lsm.PluginProvider
 	requests                *writeRequestStore
 	writeConsistencyDefault lsm.WriteConsistency
 }
@@ -127,6 +133,59 @@ func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.provider.Stats())
+}
+
+func (h *handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.plugins == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.plugins.Plugins())
+}
+
+func (h *handler) handlePluginInvoke(w http.ResponseWriter, r *http.Request) {
+	if h.plugins == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name, ok := pluginInvokeName(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var req lsm.PluginRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	resp, err := h.plugins.InvokePlugin(r.Context(), name, req)
+	if err != nil {
+		if errors.Is(err, errs.ErrPluginNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func pluginInvokeName(path string) (string, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 {
+		return "", false
+	}
+	if parts[0] != "plugins" || parts[2] != "invoke" || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func (h *handler) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
