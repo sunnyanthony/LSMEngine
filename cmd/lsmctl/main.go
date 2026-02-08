@@ -81,6 +81,11 @@ func serveCmd(args []string) {
 
 	store, err := lsm.New(lsm.Options{
 		DataDir:            *dataDir,
+		NodeID:             cfg.NodeID,
+		ClusterID:          cfg.ClusterID,
+		StorageMode:        cfg.StorageMode,
+		Raft:               toRaftOptions(cfg.Raft),
+		ShardMap:           toShardMap(cfg.Shards),
 		IOBackend:          *ioBackend,
 		IOBackendStrict:    *ioBackendStrict,
 		IOAsyncMaxInFlight: *ioAsyncMax,
@@ -257,4 +262,32 @@ func loadConfigOrExit(path string) serverconfig.Config {
 		log.Fatalf("load config: %v", err)
 	}
 	return cfg
+}
+
+func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
+	if cfg.Replicas == 0 && cfg.ElectionTimeout == 0 && cfg.HeartbeatInterval == 0 {
+		return nil
+	}
+	return &lsm.RaftOptions{
+		Replicas:          cfg.Replicas,
+		ElectionTimeout:   cfg.ElectionTimeout,
+		HeartbeatInterval: cfg.HeartbeatInterval,
+	}
+}
+
+func toShardMap(in []serverconfig.ShardConfig) []lsm.ShardConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]lsm.ShardConfig, 0, len(in))
+	for _, shard := range in {
+		out = append(out, lsm.ShardConfig{
+			ID:       shard.ID,
+			StartKey: []byte(shard.StartKey),
+			EndKey:   []byte(shard.EndKey),
+			Replicas: append([]string(nil), shard.Replicas...),
+			Leader:   shard.Leader,
+		})
+	}
+	return out
 }

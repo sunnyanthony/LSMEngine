@@ -10,6 +10,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
+- `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
 
 ## Internal modules (by responsibility)
 - `internal/lsm/memory`: entry ownership, arenas, buffer pools.

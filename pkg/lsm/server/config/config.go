@@ -13,12 +13,33 @@ import (
 // Config captures server-mode defaults.
 type Config struct {
 	DataDir            string        `yaml:"data_dir"`
+	NodeID             string        `yaml:"node_id"`
+	ClusterID          string        `yaml:"cluster_id"`
+	StorageMode        string        `yaml:"storage_mode"`
+	Raft               RaftConfig    `yaml:"raft"`
+	Shards             []ShardConfig `yaml:"shards"`
 	Addr               string        `yaml:"addr"`
 	ReadTimeout        time.Duration `yaml:"read_timeout"`
 	WriteTimeout       time.Duration `yaml:"write_timeout"`
 	IOBackend          string        `yaml:"io_backend"`
 	IOBackendStrict    bool          `yaml:"io_backend_strict"`
 	IOAsyncMaxInFlight int           `yaml:"io_async_max_in_flight"`
+}
+
+// RaftConfig captures control-plane raft settings.
+type RaftConfig struct {
+	Replicas          int           `yaml:"replicas"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+}
+
+// ShardConfig describes a fixed shard range in server YAML.
+type ShardConfig struct {
+	ID       string   `yaml:"id"`
+	StartKey string   `yaml:"start_key"`
+	EndKey   string   `yaml:"end_key"`
+	Replicas []string `yaml:"replicas"`
+	Leader   string   `yaml:"leader"`
 }
 
 // Load reads a YAML config file from disk.

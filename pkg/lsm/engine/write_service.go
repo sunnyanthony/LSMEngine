@@ -30,6 +30,12 @@ func (s *writeService) Put(key []byte, value []byte) error {
 		s.l.notifyWriteEvent("put", key, 0, "failed", err)
 		return err
 	}
+	if s.l.control != nil {
+		if err := s.l.control.allowWrite(key); err != nil {
+			s.l.notifyWriteEvent("put", key, 0, "failed", err)
+			return err
+		}
+	}
 	mem, err := s.acquireMemForWrite(len(key) + len(value))
 	if err != nil {
 		s.l.notifyWriteEvent("put", key, 0, "failed", err)
@@ -64,6 +70,12 @@ func (s *writeService) Delete(key []byte) error {
 		err := errs.ErrWALEmptyKey
 		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
 		return err
+	}
+	if s.l.control != nil {
+		if err := s.l.control.allowWrite(key); err != nil {
+			s.l.notifyWriteEvent("delete", key, 0, "failed", err)
+			return err
+		}
 	}
 	mem, err := s.acquireMemForWrite(len(key))
 	if err != nil {

@@ -30,6 +30,10 @@ func New(opts Options) (*LSM, error) {
 	if err != nil {
 		return nil, err
 	}
+	control, err := newControlPlane(opts)
+	if err != nil {
+		return nil, err
+	}
 	autoRepair, missingPolicy := walRepairPolicy(opts)
 
 	logger := opts.Logger
@@ -107,6 +111,7 @@ func New(opts Options) (*LSM, error) {
 		cancel:               cancel,
 		remover:              remover,
 		ioFS:                 opts.IOFS,
+		control:              control,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)

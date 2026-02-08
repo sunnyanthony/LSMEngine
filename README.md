@@ -11,6 +11,7 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 - Compaction engine skeleton with strict levelled policy (pluggable).
 - Event bus for async signals.
 - SSTable FlowObserver + FlowMetrics hooks for read-path visibility.
+- M1 control-plane surface: fixed shard map metadata + management APIs.
 - Backpressure returns `ErrBackpressure` instead of synchronous flush when the flush queue is full.
 - Close drains flush queues best-effort within `CloseTimeout`; new writes return `ErrClosed`.
 
@@ -55,7 +56,8 @@ Internal engine components (subject to change):
 - `scripts/docker-test.sh`: builds the test image with plain progress and no cache to show full test logs.
 
 ## Monitoring
-- Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz` + `/stats` for server mode.
+- Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz`, `/stats`, and control endpoints.
+- Control endpoints: `/cluster/status`, `/cluster/shards`, `/cluster/shards/{id}/{transfer-leader|split|rebalance}`, `/cluster/nodes/{id}/drain`.
 - CLI (single-run or via server): `cmd/lsmctl` with `serve`, `stats`, `health`.
 
 ## Benchmarks

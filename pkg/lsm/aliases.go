@@ -8,6 +8,12 @@ type LSM = engine.LSM
 type Options = engine.Options
 type SSTableOptions = engine.SSTableOptions
 type MissingSegmentPolicy = engine.MissingSegmentPolicy
+type StorageMode = engine.StorageMode
+type RaftOptions = engine.RaftOptions
+type ShardConfig = engine.ShardConfig
+type ReplicaStatus = engine.ReplicaStatus
+type ShardStatus = engine.ShardStatus
+type ClusterStatus = engine.ClusterStatus
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
 type Stats = engine.Stats
@@ -30,6 +36,11 @@ const (
 const (
 	MissingSegmentError  = engine.MissingSegmentError
 	MissingSegmentIgnore = engine.MissingSegmentIgnore
+)
+
+const (
+	StorageModeLocal = engine.StorageModeLocal
+	StorageModePVC   = engine.StorageModePVC
 )
 
 func New(opts Options) (*LSM, error) {

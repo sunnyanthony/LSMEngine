@@ -28,6 +28,11 @@ import (
 
 type Options struct {
 	DataDir                   string
+	NodeID                    string
+	ClusterID                 string
+	StorageMode               string
+	Raft                      *RaftOptions
+	ShardMap                  []ShardConfig
 	MemtableLimit             int
 	MemtableConcurrency       int
 	MemtableShards            int
@@ -162,6 +167,7 @@ type LSM struct {
 	tableEdits           tableedit.Editor
 	remover              tableedit.Remover
 	ioFS                 iofs.FS
+	control              *controlPlane
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
 	closeErr             error
