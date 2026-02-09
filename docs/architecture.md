@@ -24,6 +24,7 @@ Goals:
 - M1 distributed surface: fixed shard metadata + manual control operations (leader transfer/split/rebalance/drain) exposed through server APIs.
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
+- Control operation safety: mutations carry a monotonic `revision` and optional `operation_id` for idempotent retries.
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
 - IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).

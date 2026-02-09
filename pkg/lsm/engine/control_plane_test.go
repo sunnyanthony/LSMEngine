@@ -204,6 +204,114 @@ func TestTransferLeaderEnablesWrite(t *testing.T) {
 	}
 }
 
+func TestControlWriteOptionsRevisionConflict(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	revision := uint64(0)
+	if err := store.TransferLeaderWithOptions("users", "node-b", ControlWriteOptions{
+		OperationID:      "op-1",
+		ExpectedRevision: &revision,
+	}); err != nil {
+		t.Fatalf("first transfer: %v", err)
+	}
+	if got := store.ClusterStatus().Revision; got != 1 {
+		t.Fatalf("expected revision 1, got %d", got)
+	}
+	if err := store.TransferLeaderWithOptions("users", "node-a", ControlWriteOptions{
+		OperationID:      "op-2",
+		ExpectedRevision: &revision,
+	}); !errors.Is(err, errs.ErrControlRevisionConflict) {
+		t.Fatalf("expected revision conflict, got %v", err)
+	}
+}
+
+func TestControlWriteOptionsIdempotentRetry(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	revision := uint64(0)
+	opts := ControlWriteOptions{
+		OperationID:      "op-1",
+		ExpectedRevision: &revision,
+	}
+	if err := store.TransferLeaderWithOptions("users", "node-b", opts); err != nil {
+		t.Fatalf("first transfer: %v", err)
+	}
+	if err := store.TransferLeaderWithOptions("users", "node-b", opts); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if got := store.ClusterStatus().Revision; got != 1 {
+		t.Fatalf("expected revision 1 after idempotent retry, got %d", got)
+	}
+}
+
+func TestControlWriteOptionsOperationConflict(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	revision := uint64(0)
+	if err := store.TransferLeaderWithOptions("users", "node-b", ControlWriteOptions{
+		OperationID:      "op-1",
+		ExpectedRevision: &revision,
+	}); err != nil {
+		t.Fatalf("first transfer: %v", err)
+	}
+	if err := store.TransferLeaderWithOptions("users", "node-a", ControlWriteOptions{
+		OperationID: "op-1",
+	}); !errors.Is(err, errs.ErrControlOperationConflict) {
+		t.Fatalf("expected operation conflict, got %v", err)
+	}
+}
+
 func TestTriggerSplitAndDrain(t *testing.T) {
 	store, err := New(Options{
 		DataDir:   t.TempDir(),
@@ -305,6 +413,9 @@ func TestControlPlaneStatePersistsAcrossRestart(t *testing.T) {
 	if !status.Draining {
 		t.Fatalf("expected draining=true after restart")
 	}
+	if status.Revision == 0 {
+		t.Fatalf("expected revision to persist across restart")
+	}
 	shards := restarted.Shards()
 	if len(shards) != 2 {
 		t.Fatalf("expected 2 shards after restart, got %d", len(shards))
@@ -313,6 +424,16 @@ func TestControlPlaneStatePersistsAcrossRestart(t *testing.T) {
 		if shard.Leader == "node-a" {
 			t.Fatalf("expected leaders moved from node-a, shard=%q", shard.ID)
 		}
+	}
+	if err := restarted.TransferLeaderWithOptions("users-a", "node-b", ControlWriteOptions{
+		OperationID: "op-retry",
+	}); err != nil {
+		t.Fatalf("seed operation id: %v", err)
+	}
+	if err := restarted.TransferLeaderWithOptions("users-a", "node-b", ControlWriteOptions{
+		OperationID: "op-retry",
+	}); err != nil {
+		t.Fatalf("expected idempotent retry after restart, got %v", err)
 	}
 }
 

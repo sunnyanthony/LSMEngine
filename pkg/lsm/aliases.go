@@ -14,6 +14,7 @@ type ShardConfig = engine.ShardConfig
 type ReplicaStatus = engine.ReplicaStatus
 type ShardStatus = engine.ShardStatus
 type ClusterStatus = engine.ClusterStatus
+type ControlWriteOptions = engine.ControlWriteOptions
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
 type Stats = engine.Stats

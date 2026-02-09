@@ -22,6 +22,8 @@ func TestErrorsAreDistinct(t *testing.T) {
 		ErrSSTableUnknownCompression,
 		ErrClosed,
 		ErrShardNotFound,
+		ErrControlRevisionConflict,
+		ErrControlOperationConflict,
 	}
 	seen := make(map[string]struct{}, len(errs))
 	for _, err := range errs {

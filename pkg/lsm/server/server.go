@@ -20,6 +20,9 @@ func NewHandler(provider lsm.StatsProvider) http.Handler {
 	handler := &handler{provider: provider}
 	if control, ok := provider.(lsm.ControlProvider); ok {
 		handler.control = control
+		if advanced, ok := provider.(lsm.ControlProviderWithOptions); ok {
+			handler.controlWithOptions = advanced
+		}
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
@@ -40,8 +43,9 @@ func Serve(addr string, provider lsm.StatsProvider) error {
 }
 
 type handler struct {
-	provider lsm.StatsProvider
-	control  lsm.ControlProvider
+	provider           lsm.StatsProvider
+	control            lsm.ControlProvider
+	controlWithOptions lsm.ControlProviderWithOptions
 }
 
 func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -112,13 +116,13 @@ func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		writeActionResult(w, h.control.TransferLeader(shardID, req.Target))
+		writeActionResult(w, h.transferLeader(shardID, req))
 	case "rebalance":
 		var req targetRequest
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		writeActionResult(w, h.control.TriggerRebalance(shardID, req.Target))
+		writeActionResult(w, h.rebalance(shardID, req))
 	case "split":
 		var req splitRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -129,7 +133,7 @@ func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid split_key_base64", http.StatusBadRequest)
 			return
 		}
-		writeActionResult(w, h.control.TriggerSplit(shardID, splitKey))
+		writeActionResult(w, h.split(shardID, splitKey, req.controlWriteOptions()))
 	default:
 		http.NotFound(w, r)
 	}
@@ -153,15 +157,41 @@ func (h *handler) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeActionResult(w, h.control.PrepareDrain(nodeID))
+	var req drainRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	writeActionResult(w, h.drain(nodeID, req.controlWriteOptions()))
+}
+
+type controlRequestOptions struct {
+	OperationID      string  `json:"operation_id,omitempty"`
+	ExpectedRevision *uint64 `json:"expected_revision,omitempty"`
+}
+
+func (o controlRequestOptions) controlWriteOptions() lsm.ControlWriteOptions {
+	return lsm.ControlWriteOptions{
+		OperationID:      o.OperationID,
+		ExpectedRevision: o.ExpectedRevision,
+	}
+}
+
+func (o controlRequestOptions) hasControlWriteOptions() bool {
+	return strings.TrimSpace(o.OperationID) != "" || o.ExpectedRevision != nil
 }
 
 type targetRequest struct {
 	Target string `json:"target"`
+	controlRequestOptions
 }
 
 type splitRequest struct {
 	SplitKeyBase64 string `json:"split_key_base64"`
+	controlRequestOptions
+}
+
+type drainRequest struct {
+	controlRequestOptions
 }
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
@@ -182,7 +212,53 @@ func writeActionResult(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, errs.ErrControlRevisionConflict) || errors.Is(err, errs.ErrControlOperationConflict) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+func (h *handler) transferLeader(shardID string, req targetRequest) error {
+	opts := req.controlWriteOptions()
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.TransferLeaderWithOptions(shardID, req.Target, opts)
+	}
+	if req.hasControlWriteOptions() {
+		return errs.ErrControlRevisionConflict
+	}
+	return h.control.TransferLeader(shardID, req.Target)
+}
+
+func (h *handler) rebalance(shardID string, req targetRequest) error {
+	opts := req.controlWriteOptions()
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.TriggerRebalanceWithOptions(shardID, req.Target, opts)
+	}
+	if req.hasControlWriteOptions() {
+		return errs.ErrControlRevisionConflict
+	}
+	return h.control.TriggerRebalance(shardID, req.Target)
+}
+
+func (h *handler) split(shardID string, splitKey []byte, opts lsm.ControlWriteOptions) error {
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.TriggerSplitWithOptions(shardID, splitKey, opts)
+	}
+	if strings.TrimSpace(opts.OperationID) != "" || opts.ExpectedRevision != nil {
+		return errs.ErrControlRevisionConflict
+	}
+	return h.control.TriggerSplit(shardID, splitKey)
+}
+
+func (h *handler) drain(nodeID string, opts lsm.ControlWriteOptions) error {
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.PrepareDrainWithOptions(nodeID, opts)
+	}
+	if strings.TrimSpace(opts.OperationID) != "" || opts.ExpectedRevision != nil {
+		return errs.ErrControlRevisionConflict
+	}
+	return h.control.PrepareDrain(nodeID)
 }
 
 func shardActionPath(path string) (shardID string, action string, ok bool) {

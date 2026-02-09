@@ -24,12 +24,14 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `Range(start, end, limit) -> stream<entry>`
 
 ### M1 control-plane HTTP
-- `GET /cluster/status`: node id, cluster id, storage mode, raft, shard count, draining.
+- `GET /cluster/status`: node id, cluster id, storage mode, raft, shard count, draining, `revision`.
 - `GET /cluster/shards`: shard ids, key ranges, leader and replica roles.
-- `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x" }`.
-- `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>" }`.
-- `POST /cluster/shards/{id}/rebalance` with `{ "target": "node-x" }`.
-- `POST /cluster/nodes/{id}/drain`.
+- `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
+- `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>", "operation_id": "...", "expected_revision": 12 }`.
+- `POST /cluster/shards/{id}/rebalance` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
+- `POST /cluster/nodes/{id}/drain` with optional `{ "operation_id": "...", "expected_revision": 12 }`.
+  - `operation_id` is optional; if reused with the same operation, server returns success (idempotent retry).
+  - `expected_revision` is optional; mismatch returns `409 Conflict`.
 
 ### Async writes (webhook callback)
 - `AsyncPut(key, value, callback_url, callback_token, request_id?) -> request_id`

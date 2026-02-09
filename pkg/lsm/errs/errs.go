@@ -41,4 +41,8 @@ var (
 	ErrClosed = errors.New("lsm: closed")
 	// ErrShardNotFound indicates no shard was found for a request.
 	ErrShardNotFound = errors.New("lsm: shard not found")
+	// ErrControlRevisionConflict indicates optimistic control-plane concurrency failed.
+	ErrControlRevisionConflict = errors.New("lsm: control revision conflict")
+	// ErrControlOperationConflict indicates an operation_id was reused with different semantics.
+	ErrControlOperationConflict = errors.New("lsm: control operation conflict")
 )
