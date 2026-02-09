@@ -29,6 +29,7 @@ go test ./...
 
 Design docs:
 - `docs/design.md` (index)
+- `docs/cloudnative-alignment.md`
 - `docs/architecture.md`
 - `docs/memtable.md`
 - `docs/sstable.md`
