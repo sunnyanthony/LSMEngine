@@ -12,6 +12,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
+  - Validates shard layout and builds deterministic route index for key-to-shard lookup.
 
 ## Internal modules (by responsibility)
 - `internal/lsm/memory`: entry ownership, arenas, buffer pools.

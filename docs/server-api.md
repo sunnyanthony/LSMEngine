@@ -70,6 +70,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Control-plane persistence config:
   - `node_id`, `cluster_id`, `storage_mode`.
   - `control_state_path` (optional, defaults to `<data_dir>/control_state.json`).
+  - `shards` must be declared in route order with non-overlapping ranges; open-ended range is only allowed on the last shard.
   - Startup validates persisted identity; mismatch fails startup to prevent cross-cluster state reuse.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.
 - Keep the app server thin; let the proxy handle most ingress concerns.

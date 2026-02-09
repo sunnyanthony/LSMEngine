@@ -8,6 +8,7 @@ raft:
   election_timeout: "2s"
   heartbeat_interval: "500ms"
 shards:
+  # shards are ordered by key-range routing; keep non-overlapping ranges.
   - id: "users-a-m"
     start_key: "a"
     end_key: "m"
