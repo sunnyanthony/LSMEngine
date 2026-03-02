@@ -12,3 +12,4 @@ data/
 
 # Build cache
 .cache/
+.gocache/

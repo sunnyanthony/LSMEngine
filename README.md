@@ -25,7 +25,7 @@ go test ./...
 ## Testing
 - Default tests: `go test ./...`
 - Integration + test-only hooks: `go test -tags test ./tests/integration`
-- Docker (runs tests with `-tags test`): `scripts/docker-test.sh`
+- Docker (cached fast path, runs tests with `-tags test`): `scripts/docker-test.sh`
 
 Design docs:
 - `docs/design.md` (index)
@@ -55,7 +55,9 @@ Internal engine components (subject to change):
 - Run tests via image (verbose): `docker run --rm lsmengine-test`
 
 ## Scripts
-- `scripts/docker-test.sh`: builds the test image with plain progress and no cache to show full test logs.
+- `scripts/docker-test.sh`: default mode runs `go test -v -tags test ./...` inside Docker with mounted module/build caches.
+  - Legacy image build mode: `LSM_DOCKER_TEST_MODE=build scripts/docker-test.sh`
+  - Optional package override: `LSM_DOCKER_TEST_PKGS=./tests/integration/... scripts/docker-test.sh`
 
 ## Monitoring
 - Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz`, `/stats`, and control endpoints.
