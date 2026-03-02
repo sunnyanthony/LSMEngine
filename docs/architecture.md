@@ -159,6 +159,9 @@ Backlog:
 - Observability/ops: metrics and health endpoints.
 - Distributed/Replication: transport + term gating; external term manager integration; replay checkpoints to avoid resending histories.
 
+TODO (later discussion):
+- Compaction optimization deep-dive (deferred): evaluate candidate strategies (sub-compaction parallelism, adaptive level sizing, compaction debt scheduling, and cost/SLO-aware triggers) and decide which are production-targeted vs experimental.
+
 ## Data layout (local FS)
 - `<data>/wal.log`: current WAL.
 - `<data>/sstables/` for immutable runs (e.g., `sstable-<seq>-<id>.sst`).
