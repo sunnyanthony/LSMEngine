@@ -192,6 +192,62 @@ func TestLSMPutCopiesInput(t *testing.T) {
 	}
 }
 
+func TestLSMRejectsOverlappingShardMap(t *testing.T) {
+	_, err := lsm.New(lsm.Options{
+		DataDir: t.TempDir(),
+		NodeID:  "node-a",
+		ShardMap: []lsm.ShardConfig{
+			{
+				ID:       "users-a-m",
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Leader:   "node-a",
+			},
+			{
+				ID:       "users-k-z",
+				StartKey: []byte("k"),
+				EndKey:   []byte("z"),
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected overlap error")
+	}
+}
+
+func TestLSMWriteReturnsShardNotFoundForGap(t *testing.T) {
+	store, err := lsm.New(lsm.Options{
+		DataDir: t.TempDir(),
+		NodeID:  "node-a",
+		ShardMap: []lsm.ShardConfig{
+			{
+				ID:       "users-a-m",
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Replicas: []string{"node-a"},
+				Leader:   "node-a",
+			},
+			{
+				ID:       "users-t-z",
+				StartKey: []byte("t"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	cleanupCloser(t, "store", store)
+
+	err = store.Put([]byte("q"), []byte("value"))
+	if !errors.Is(err, errs.ErrShardNotFound) {
+		t.Fatalf("expected ErrShardNotFound, got %v", err)
+	}
+}
+
 func cleanupCloser(t *testing.T, name string, c interface{ Close() error }) {
 	t.Helper()
 	t.Cleanup(func() {

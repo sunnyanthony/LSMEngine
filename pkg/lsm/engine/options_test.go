@@ -16,6 +16,9 @@ func TestNormalizeOptionsDefaults(t *testing.T) {
 	if opts.TrashDir != filepath.Join(opts.DataDir, "trash") {
 		t.Fatalf("expected trash dir default, got %q", opts.TrashDir)
 	}
+	if opts.ControlStatePath != filepath.Join(opts.DataDir, "control_state.json") {
+		t.Fatalf("expected control state path default, got %q", opts.ControlStatePath)
+	}
 	if opts.ManifestCheckpointEvery == 0 || opts.ReplayBatchSize == 0 {
 		t.Fatalf("expected manifest/replay defaults")
 	}

@@ -22,6 +22,8 @@ Goals:
 - Data plane: WAL + memtable + tableset + SSTable read pipeline; emits metadata snapshots.
 - Control plane: flush + compaction scheduling; works off metadata only and never mutates data-plane state directly.
 - M1 distributed surface: fixed shard metadata + manual control operations (leader transfer/split/rebalance/drain) exposed through server APIs.
+- M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
+- Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
 - IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
@@ -163,6 +165,11 @@ Backlog:
   - If the manifest is missing/invalid but SSTables exist, the engine rebuilds the manifest by scanning the SSTable directory.
   - If there are no SSTables, startup proceeds and WAL replay reconstructs memtables.
 - `<data>/trash/`: cyclic trash for obsolete files (SSTables, temp files), pruned by size/count.
+- `<data>/control_state.json`: control-plane state snapshot (shards/order/leaders/draining + node/cluster identity).
+  - Persisted atomically via temp file + rename.
+  - If file is missing: bootstrap from `ShardMap` (or default shard).
+  - If file is invalid or identity mismatches (`cluster_id`/`node_id`): startup fails fast.
+  - If shard layout is invalid (overlap, bad bounds, open-ended shard not last): startup fails fast.
 
 ## Configuration knobs
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.

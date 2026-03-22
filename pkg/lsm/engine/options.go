@@ -64,6 +64,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.TrashDir == "" {
 		opts.TrashDir = filepath.Join(opts.DataDir, "trash")
 	}
+	if opts.ControlStatePath == "" {
+		opts.ControlStatePath = filepath.Join(opts.DataDir, "control_state.json")
+	}
 	if opts.TrashMaxBytes == 0 {
 		opts.TrashMaxBytes = 512 << 20
 	}

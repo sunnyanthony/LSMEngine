@@ -16,6 +16,7 @@ type Config struct {
 	NodeID             string        `yaml:"node_id"`
 	ClusterID          string        `yaml:"cluster_id"`
 	StorageMode        string        `yaml:"storage_mode"`
+	ControlStatePath   string        `yaml:"control_state_path"`
 	Raft               RaftConfig    `yaml:"raft"`
 	Shards             []ShardConfig `yaml:"shards"`
 	Addr               string        `yaml:"addr"`

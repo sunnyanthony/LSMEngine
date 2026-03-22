@@ -12,6 +12,7 @@ data_dir: "./data"
 node_id: "node-a"
 cluster_id: "dev-cluster"
 storage_mode: "pvc"
+control_state_path: "/var/lib/lsm/control_state.json"
 raft:
   replicas: 3
   election_timeout: "2s"
@@ -50,6 +51,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.StorageMode != "pvc" {
 		t.Fatalf("expected storage mode, got %q", cfg.StorageMode)
+	}
+	if cfg.ControlStatePath != "/var/lib/lsm/control_state.json" {
+		t.Fatalf("expected control state path, got %q", cfg.ControlStatePath)
 	}
 	if cfg.Raft.Replicas != 3 {
 		t.Fatalf("expected raft replicas, got %d", cfg.Raft.Replicas)

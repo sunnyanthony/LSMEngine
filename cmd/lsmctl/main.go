@@ -84,6 +84,7 @@ func serveCmd(args []string) {
 		NodeID:             cfg.NodeID,
 		ClusterID:          cfg.ClusterID,
 		StorageMode:        cfg.StorageMode,
+		ControlStatePath:   cfg.ControlStatePath,
 		Raft:               toRaftOptions(cfg.Raft),
 		ShardMap:           toShardMap(cfg.Shards),
 		IOBackend:          *ioBackend,

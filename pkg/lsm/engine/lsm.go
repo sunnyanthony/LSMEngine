@@ -31,6 +31,7 @@ type Options struct {
 	NodeID                    string
 	ClusterID                 string
 	StorageMode               string
+	ControlStatePath          string
 	Raft                      *RaftOptions
 	ShardMap                  []ShardConfig
 	MemtableLimit             int
