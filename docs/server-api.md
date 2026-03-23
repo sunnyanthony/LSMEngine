@@ -30,8 +30,10 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/shards/{id}/rebalance` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/nodes/{id}/drain` with optional `{ "operation_id": "...", "expected_revision": 12 }`.
-  - `operation_id` is optional; if reused with the same operation, server returns success (idempotent retry).
+  - `operation_id` is optional; if reused with the same operation while retained in the server's recent-operation window, server returns success as an idempotent retry. The current window is bounded to the most recent 256 applied control mutations.
   - `expected_revision` is optional; mismatch returns `409 Conflict`.
+  - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
+  - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
 
 ### Async writes (webhook callback)
 - `AsyncPut(key, value, callback_url, callback_token, request_id?) -> request_id`

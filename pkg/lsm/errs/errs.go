@@ -45,4 +45,6 @@ var (
 	ErrControlRevisionConflict = errors.New("lsm: control revision conflict")
 	// ErrControlOperationConflict indicates an operation_id was reused with different semantics.
 	ErrControlOperationConflict = errors.New("lsm: control operation conflict")
+	// ErrControlWriteOptionsUnsupported indicates optimistic control-write options are unavailable.
+	ErrControlWriteOptionsUnsupported = errors.New("lsm: control write options unsupported")
 )

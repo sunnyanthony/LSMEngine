@@ -83,6 +83,55 @@ func TestServerControlRevisionAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestServerControlRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	store, err := lsm.New(lsm.Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []lsm.ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	handler := server.NewHandler(store)
+
+	reqUnknown := httptest.NewRequest(
+		http.MethodPost,
+		"/cluster/shards/users/transfer-leader",
+		bytes.NewBufferString(`{"target":"node-b","unexpected":true}`),
+	)
+	recUnknown := httptest.NewRecorder()
+	handler.ServeHTTP(recUnknown, reqUnknown)
+	if recUnknown.Code != http.StatusBadRequest {
+		t.Fatalf("expected unknown-field status 400, got %d", recUnknown.Code)
+	}
+
+	reqTrailing := httptest.NewRequest(
+		http.MethodPost,
+		"/cluster/shards/users/transfer-leader",
+		bytes.NewBufferString(`{"target":"node-b"}{"target":"node-a"}`),
+	)
+	recTrailing := httptest.NewRecorder()
+	handler.ServeHTTP(recTrailing, reqTrailing)
+	if recTrailing.Code != http.StatusBadRequest {
+		t.Fatalf("expected trailing-json status 400, got %d", recTrailing.Code)
+	}
+}
+
 func readControlJSON[T any](t *testing.T, handler http.Handler, path string) T {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)

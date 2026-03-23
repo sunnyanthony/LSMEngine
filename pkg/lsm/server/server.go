@@ -196,11 +196,24 @@ type drainRequest struct {
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
-	return true
+	var trailing any
+	if err := dec.Decode(&trailing); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	http.Error(w, "request body must contain a single JSON value", http.StatusBadRequest)
+	return false
 }
 
 func writeActionResult(w http.ResponseWriter, err error) {
@@ -210,6 +223,10 @@ func writeActionResult(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, errs.ErrShardNotFound) {
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, errs.ErrControlWriteOptionsUnsupported) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if errors.Is(err, errs.ErrControlRevisionConflict) || errors.Is(err, errs.ErrControlOperationConflict) {
@@ -225,7 +242,7 @@ func (h *handler) transferLeader(shardID string, req targetRequest) error {
 		return h.controlWithOptions.TransferLeaderWithOptions(shardID, req.Target, opts)
 	}
 	if req.hasControlWriteOptions() {
-		return errs.ErrControlRevisionConflict
+		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.TransferLeader(shardID, req.Target)
 }
@@ -236,7 +253,7 @@ func (h *handler) rebalance(shardID string, req targetRequest) error {
 		return h.controlWithOptions.TriggerRebalanceWithOptions(shardID, req.Target, opts)
 	}
 	if req.hasControlWriteOptions() {
-		return errs.ErrControlRevisionConflict
+		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.TriggerRebalance(shardID, req.Target)
 }
@@ -246,7 +263,7 @@ func (h *handler) split(shardID string, splitKey []byte, opts lsm.ControlWriteOp
 		return h.controlWithOptions.TriggerSplitWithOptions(shardID, splitKey, opts)
 	}
 	if strings.TrimSpace(opts.OperationID) != "" || opts.ExpectedRevision != nil {
-		return errs.ErrControlRevisionConflict
+		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.TriggerSplit(shardID, splitKey)
 }
@@ -256,7 +273,7 @@ func (h *handler) drain(nodeID string, opts lsm.ControlWriteOptions) error {
 		return h.controlWithOptions.PrepareDrainWithOptions(nodeID, opts)
 	}
 	if strings.TrimSpace(opts.OperationID) != "" || opts.ExpectedRevision != nil {
-		return errs.ErrControlRevisionConflict
+		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.PrepareDrain(nodeID)
 }

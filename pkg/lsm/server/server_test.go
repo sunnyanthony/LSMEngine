@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -31,6 +32,39 @@ type controlStubProvider struct {
 		shards []lsm.ShardStatus
 		ops    map[string]string
 	}
+}
+
+type legacyControlStubProvider struct {
+	stubProvider
+	inner *controlStubProvider
+}
+
+func newLegacyControlStubProvider() *legacyControlStubProvider {
+	return &legacyControlStubProvider{inner: newControlStubProvider()}
+}
+
+func (c *legacyControlStubProvider) ClusterStatus() lsm.ClusterStatus {
+	return c.inner.ClusterStatus()
+}
+
+func (c *legacyControlStubProvider) Shards() []lsm.ShardStatus {
+	return c.inner.Shards()
+}
+
+func (c *legacyControlStubProvider) TransferLeader(shardID, target string) error {
+	return c.inner.TransferLeader(shardID, target)
+}
+
+func (c *legacyControlStubProvider) TriggerSplit(shardID string, splitKey []byte) error {
+	return c.inner.TriggerSplit(shardID, splitKey)
+}
+
+func (c *legacyControlStubProvider) TriggerRebalance(shardID, target string) error {
+	return c.inner.TriggerRebalance(shardID, target)
+}
+
+func (c *legacyControlStubProvider) PrepareDrain(nodeID string) error {
+	return c.inner.PrepareDrain(nodeID)
 }
 
 func newControlStubProvider() *controlStubProvider {
@@ -324,6 +358,45 @@ func TestHandlerTransferLeaderIdempotentRetry(t *testing.T) {
 	status := p.ClusterStatus()
 	if status.Revision != 1 {
 		t.Fatalf("expected revision to stay 1 after idempotent retry, got %d", status.Revision)
+	}
+}
+
+func TestHandlerTransferLeaderRejectsUnknownFields(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-b","unexpected":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/transfer-leader", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestHandlerTransferLeaderRejectsTrailingJSON(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-b"}{"target":"node-a"}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/transfer-leader", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestHandlerTransferLeaderRejectsUnsupportedControlWriteOptions(t *testing.T) {
+	p := newLegacyControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-b","operation_id":"op-1","expected_revision":0}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/transfer-leader", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), errs.ErrControlWriteOptionsUnsupported.Error()) {
+		t.Fatalf("expected unsupported control write options error, got %q", rec.Body.String())
 	}
 }
 

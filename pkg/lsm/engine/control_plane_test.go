@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,6 +276,58 @@ func TestControlWriteOptionsIdempotentRetry(t *testing.T) {
 	}
 	if got := store.ClusterStatus().Revision; got != 1 {
 		t.Fatalf("expected revision 1 after idempotent retry, got %d", got)
+	}
+}
+
+func TestControlWriteOptionsIdempotencyIsBoundedByRetentionWindow(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.TransferLeaderWithOptions("users", "node-b", ControlWriteOptions{
+		OperationID: "op-0",
+	}); err != nil {
+		t.Fatalf("first transfer: %v", err)
+	}
+
+	for i := 1; i <= maxAppliedControlOps; i++ {
+		target := "node-a"
+		if i%2 == 0 {
+			target = "node-b"
+		}
+		if err := store.TransferLeaderWithOptions("users", target, ControlWriteOptions{
+			OperationID: fmt.Sprintf("op-%d", i),
+		}); err != nil {
+			t.Fatalf("transfer %d: %v", i, err)
+		}
+	}
+
+	if got := store.ClusterStatus().Revision; got != uint64(maxAppliedControlOps+1) {
+		t.Fatalf("expected revision %d after filling retention window, got %d", maxAppliedControlOps+1, got)
+	}
+
+	if err := store.TransferLeaderWithOptions("users", "node-b", ControlWriteOptions{
+		OperationID: "op-0",
+	}); err != nil {
+		t.Fatalf("retry after eviction: %v", err)
+	}
+	if got := store.ClusterStatus().Revision; got != uint64(maxAppliedControlOps+2) {
+		t.Fatalf("expected revision %d after retrying evicted operation, got %d", maxAppliedControlOps+2, got)
 	}
 }
 
