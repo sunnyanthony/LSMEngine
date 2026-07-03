@@ -63,18 +63,33 @@ type ClusterStatus struct {
 	StorageMode StorageMode `json:"storage_mode"`
 	ShardCount  int         `json:"shard_count"`
 	Draining    bool        `json:"draining"`
+	Revision    uint64      `json:"revision"`
 	Raft        RaftOptions `json:"raft"`
 }
 
+// ControlWriteOptions carries optional optimistic concurrency and idempotency inputs.
+type ControlWriteOptions struct {
+	OperationID      string  `json:"operation_id,omitempty"`
+	ExpectedRevision *uint64 `json:"expected_revision,omitempty"`
+}
+
+type appliedOperationState struct {
+	ID          string `json:"id"`
+	Fingerprint string `json:"fingerprint"`
+	Revision    uint64 `json:"revision"`
+}
+
 type controlPlaneState struct {
-	Version     int           `json:"version"`
-	NodeID      string        `json:"node_id"`
-	ClusterID   string        `json:"cluster_id"`
-	StorageMode StorageMode   `json:"storage_mode"`
-	Raft        RaftOptions   `json:"raft"`
-	Draining    bool          `json:"draining"`
-	Order       []string      `json:"order"`
-	Shards      []ShardStatus `json:"shards"`
+	Version     int                     `json:"version"`
+	NodeID      string                  `json:"node_id"`
+	ClusterID   string                  `json:"cluster_id"`
+	StorageMode StorageMode             `json:"storage_mode"`
+	Raft        RaftOptions             `json:"raft"`
+	Draining    bool                    `json:"draining"`
+	Revision    uint64                  `json:"revision"`
+	Order       []string                `json:"order"`
+	Shards      []ShardStatus           `json:"shards"`
+	AppliedOps  []appliedOperationState `json:"applied_ops,omitempty"`
 }
 
 type shardRoute struct {
@@ -84,19 +99,24 @@ type shardRoute struct {
 }
 
 type controlPlane struct {
-	mu          sync.RWMutex
-	nodeID      string
-	clusterID   string
-	storageMode StorageMode
-	raft        RaftOptions
-	draining    bool
-	order       []string
-	shards      map[string]ShardStatus
-	routes      []shardRoute
+	mu           sync.RWMutex
+	nodeID       string
+	clusterID    string
+	storageMode  StorageMode
+	raft         RaftOptions
+	draining     bool
+	revision     uint64
+	order        []string
+	shards       map[string]ShardStatus
+	routes       []shardRoute
+	appliedOps   map[string]appliedOperationState
+	appliedOrder []string
 
 	fs        iofs.FS
 	statePath string
 }
+
+const maxAppliedControlOps = 256
 
 func newControlPlane(opts Options) (*controlPlane, error) {
 	nodeID := strings.TrimSpace(opts.NodeID)
@@ -134,14 +154,18 @@ func newControlPlane(opts Options) (*controlPlane, error) {
 		statePath = filepath.Join(opts.DataDir, "control_state.json")
 	}
 	c := &controlPlane{
-		nodeID:      nodeID,
-		clusterID:   clusterID,
-		storageMode: mode,
-		raft:        raft,
-		order:       nil,
-		shards:      make(map[string]ShardStatus),
-		fs:          fs,
-		statePath:   statePath,
+		nodeID:       nodeID,
+		clusterID:    clusterID,
+		storageMode:  mode,
+		raft:         raft,
+		revision:     0,
+		order:        nil,
+		shards:       make(map[string]ShardStatus),
+		routes:       nil,
+		appliedOps:   make(map[string]appliedOperationState),
+		appliedOrder: nil,
+		fs:           fs,
+		statePath:    statePath,
 	}
 
 	if err := c.loadOrBootstrap(opts.ShardMap); err != nil {
@@ -241,6 +265,7 @@ func (c *controlPlane) status() ClusterStatus {
 		StorageMode: c.storageMode,
 		ShardCount:  len(c.order),
 		Draining:    c.draining,
+		Revision:    c.revision,
 		Raft:        c.raft,
 	}
 }
@@ -282,6 +307,10 @@ func (c *controlPlane) allowWrite(key []byte) error {
 }
 
 func (c *controlPlane) transferLeader(shardID, target string) error {
+	return c.transferLeaderWithOptions(shardID, target, ControlWriteOptions{})
+}
+
+func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts ControlWriteOptions) error {
 	if c == nil {
 		return errs.ErrShardNotFound
 	}
@@ -293,6 +322,10 @@ func (c *controlPlane) transferLeader(shardID, target string) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	applied, err := c.checkOperationPreconditionsLocked(opts, transferLeaderFingerprint(shardID, target))
+	if err != nil || applied {
+		return err
+	}
 	shard, ok := c.shards[shardID]
 	if !ok {
 		return errs.ErrShardNotFound
@@ -313,10 +346,15 @@ func (c *controlPlane) transferLeader(shardID, target string) error {
 		shard.Replicas[i].Role = "follower"
 	}
 	c.shards[shardID] = shard
+	c.noteOperationAppliedLocked(opts, transferLeaderFingerprint(shardID, target))
 	return c.saveLocked()
 }
 
 func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
+	return c.triggerSplitWithOptions(shardID, splitKey, ControlWriteOptions{})
+}
+
+func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, opts ControlWriteOptions) error {
 	if c == nil {
 		return errs.ErrShardNotFound
 	}
@@ -327,6 +365,10 @@ func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	applied, err := c.checkOperationPreconditionsLocked(opts, splitFingerprint(shardID, splitKey))
+	if err != nil || applied {
+		return err
+	}
 	shard, ok := c.shards[shardID]
 	if !ok {
 		return errs.ErrShardNotFound
@@ -361,14 +403,23 @@ func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
 	if err := c.rebuildRoutesLocked(); err != nil {
 		return err
 	}
+	c.noteOperationAppliedLocked(opts, splitFingerprint(shardID, splitKey))
 	return c.saveLocked()
 }
 
 func (c *controlPlane) triggerRebalance(shardID, target string) error {
-	return c.transferLeader(shardID, target)
+	return c.triggerRebalanceWithOptions(shardID, target, ControlWriteOptions{})
+}
+
+func (c *controlPlane) triggerRebalanceWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	return c.transferLeaderWithOptions(shardID, target, opts)
 }
 
 func (c *controlPlane) prepareDrain(nodeID string) error {
+	return c.prepareDrainWithOptions(nodeID, ControlWriteOptions{})
+}
+
+func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteOptions) error {
 	if c == nil {
 		return errs.ErrShardNotFound
 	}
@@ -382,6 +433,10 @@ func (c *controlPlane) prepareDrain(nodeID string) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	applied, err := c.checkOperationPreconditionsLocked(opts, prepareDrainFingerprint(nodeID))
+	if err != nil || applied {
+		return err
+	}
 	for _, id := range c.order {
 		shard := c.shards[id]
 		if shard.Leader != nodeID {
@@ -408,6 +463,7 @@ func (c *controlPlane) prepareDrain(nodeID string) error {
 		c.shards[id] = shard
 	}
 	c.draining = true
+	c.noteOperationAppliedLocked(opts, prepareDrainFingerprint(nodeID))
 	return c.saveLocked()
 }
 
@@ -440,6 +496,59 @@ func (c *controlPlane) uniqueShardID(base string) string {
 			return candidate
 		}
 	}
+}
+
+func (c *controlPlane) checkOperationPreconditionsLocked(opts ControlWriteOptions, fingerprint string) (bool, error) {
+	opID := strings.TrimSpace(opts.OperationID)
+	if opID != "" {
+		if applied, exists := c.appliedOps[opID]; exists {
+			if applied.Fingerprint != fingerprint {
+				return false, errs.ErrControlOperationConflict
+			}
+			return true, nil
+		}
+	}
+	if opts.ExpectedRevision != nil && *opts.ExpectedRevision != c.revision {
+		return false, errs.ErrControlRevisionConflict
+	}
+	return false, nil
+}
+
+func (c *controlPlane) noteOperationAppliedLocked(opts ControlWriteOptions, fingerprint string) {
+	c.revision++
+	opID := strings.TrimSpace(opts.OperationID)
+	if opID == "" {
+		return
+	}
+	record := appliedOperationState{
+		ID:          opID,
+		Fingerprint: fingerprint,
+		Revision:    c.revision,
+	}
+	if _, exists := c.appliedOps[opID]; !exists {
+		c.appliedOrder = append(c.appliedOrder, opID)
+	}
+	c.appliedOps[opID] = record
+	if len(c.appliedOrder) <= maxAppliedControlOps {
+		return
+	}
+	overflow := len(c.appliedOrder) - maxAppliedControlOps
+	for _, oldID := range c.appliedOrder[:overflow] {
+		delete(c.appliedOps, oldID)
+	}
+	c.appliedOrder = append([]string(nil), c.appliedOrder[overflow:]...)
+}
+
+func transferLeaderFingerprint(shardID, target string) string {
+	return fmt.Sprintf("transfer:%s:%s", shardID, target)
+}
+
+func splitFingerprint(shardID string, splitKey []byte) string {
+	return fmt.Sprintf("split:%s:%x", shardID, splitKey)
+}
+
+func prepareDrainFingerprint(nodeID string) string {
+	return fmt.Sprintf("drain:%s", nodeID)
 }
 
 func (c *controlPlane) save() error {
@@ -515,6 +624,23 @@ func validateControlPlaneState(state *controlPlaneState) error {
 	if _, err := buildShardRoutes(state.Order, shards); err != nil {
 		return err
 	}
+	if len(state.AppliedOps) > maxAppliedControlOps {
+		return fmt.Errorf("state contains too many applied operations: %d", len(state.AppliedOps))
+	}
+	seenOps := make(map[string]struct{}, len(state.AppliedOps))
+	for _, op := range state.AppliedOps {
+		opID := strings.TrimSpace(op.ID)
+		if opID == "" {
+			return fmt.Errorf("state has applied operation with empty id")
+		}
+		if _, exists := seenOps[opID]; exists {
+			return fmt.Errorf("state has duplicate applied operation id %q", opID)
+		}
+		seenOps[opID] = struct{}{}
+		if strings.TrimSpace(op.Fingerprint) == "" {
+			return fmt.Errorf("state has applied operation %q without fingerprint", opID)
+		}
+	}
 	return nil
 }
 
@@ -534,13 +660,16 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 		StorageMode: c.storageMode,
 		Raft:        c.raft,
 		Draining:    c.draining,
+		Revision:    c.revision,
 		Order:       append([]string(nil), c.order...),
 		Shards:      shards,
+		AppliedOps:  c.appliedOpsSnapshotLocked(),
 	}
 }
 
 func (c *controlPlane) applyState(state controlPlaneState) error {
 	c.draining = state.Draining
+	c.revision = state.Revision
 	c.order = append([]string(nil), state.Order...)
 	c.shards = make(map[string]ShardStatus, len(state.Shards))
 	for _, shard := range state.Shards {
@@ -550,10 +679,36 @@ func (c *controlPlane) applyState(state controlPlaneState) error {
 		shardCopy.Replicas = append([]ReplicaStatus(nil), shard.Replicas...)
 		c.shards[shard.ID] = shardCopy
 	}
+	c.appliedOps = make(map[string]appliedOperationState, len(state.AppliedOps))
+	c.appliedOrder = make([]string, 0, len(state.AppliedOps))
+	for _, op := range state.AppliedOps {
+		opID := strings.TrimSpace(op.ID)
+		c.appliedOps[opID] = appliedOperationState{
+			ID:          opID,
+			Fingerprint: op.Fingerprint,
+			Revision:    op.Revision,
+		}
+		c.appliedOrder = append(c.appliedOrder, opID)
+	}
 	if err := c.rebuildRoutesLocked(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *controlPlane) appliedOpsSnapshotLocked() []appliedOperationState {
+	if len(c.appliedOrder) == 0 {
+		return nil
+	}
+	out := make([]appliedOperationState, 0, len(c.appliedOrder))
+	for _, opID := range c.appliedOrder {
+		op, ok := c.appliedOps[opID]
+		if !ok {
+			continue
+		}
+		out = append(out, op)
+	}
+	return out
 }
 
 func (c *controlPlane) rebuildRoutesLocked() error {
@@ -664,12 +819,28 @@ func (l *LSM) TransferLeader(shardID, target string) error {
 	return l.control.transferLeader(shardID, target)
 }
 
+// TransferLeaderWithOptions sets a new leader with optional concurrency controls.
+func (l *LSM) TransferLeaderWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.transferLeaderWithOptions(shardID, target, opts)
+}
+
 // TriggerSplit splits a shard into two ranges at splitKey.
 func (l *LSM) TriggerSplit(shardID string, splitKey []byte) error {
 	if l == nil || l.control == nil {
 		return errs.ErrShardNotFound
 	}
 	return l.control.triggerSplit(shardID, splitKey)
+}
+
+// TriggerSplitWithOptions splits a shard with optional concurrency controls.
+func (l *LSM) TriggerSplitWithOptions(shardID string, splitKey []byte, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.triggerSplitWithOptions(shardID, splitKey, opts)
 }
 
 // TriggerRebalance moves shard leadership to target.
@@ -680,10 +851,26 @@ func (l *LSM) TriggerRebalance(shardID, target string) error {
 	return l.control.triggerRebalance(shardID, target)
 }
 
+// TriggerRebalanceWithOptions rebalances leadership with optional concurrency controls.
+func (l *LSM) TriggerRebalanceWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.triggerRebalanceWithOptions(shardID, target, opts)
+}
+
 // PrepareDrain transfers local leadership off-node before drain.
 func (l *LSM) PrepareDrain(nodeID string) error {
 	if l == nil || l.control == nil {
 		return errs.ErrShardNotFound
 	}
 	return l.control.prepareDrain(nodeID)
+}
+
+// PrepareDrainWithOptions prepares drain with optional concurrency controls.
+func (l *LSM) PrepareDrainWithOptions(nodeID string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.prepareDrainWithOptions(nodeID, opts)
 }
