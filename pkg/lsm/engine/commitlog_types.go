@@ -97,7 +97,6 @@ type CommitLogFactory interface {
 // contract types above.
 type controlMutation = CommitLogControlMutation
 type dataMutation = CommitLogDataMutation
-type commitResult = CommitLogCommit
 type controlCommittedEntry = CommitLogControlCommittedEntry
 type dataCommittedEntry = CommitLogDataCommittedEntry
 type commitLogConsensus = CommitLogConsensus
