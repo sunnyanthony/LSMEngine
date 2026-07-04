@@ -9,6 +9,8 @@ type Options = engine.Options
 type SSTableOptions = engine.SSTableOptions
 type MissingSegmentPolicy = engine.MissingSegmentPolicy
 type StorageMode = engine.StorageMode
+type CommitLogProvider = engine.CommitLogProvider
+type CommitLogOptions = engine.CommitLogOptions
 type RaftOptions = engine.RaftOptions
 type ShardConfig = engine.ShardConfig
 type ReplicaStatus = engine.ReplicaStatus
@@ -42,6 +44,11 @@ const (
 const (
 	StorageModeLocal = engine.StorageModeLocal
 	StorageModePVC   = engine.StorageModePVC
+)
+
+const (
+	CommitLogProviderLocal    = engine.CommitLogProviderLocal
+	CommitLogProviderEtcdRaft = engine.CommitLogProviderEtcdRaft
 )
 
 func New(opts Options) (*LSM, error) {

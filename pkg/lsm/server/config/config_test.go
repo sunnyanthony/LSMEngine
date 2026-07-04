@@ -13,6 +13,8 @@ node_id: "node-a"
 cluster_id: "dev-cluster"
 storage_mode: "pvc"
 control_state_path: "/var/lib/lsm/control_state.json"
+commitlog:
+  provider: "local"
 raft:
   replicas: 3
   election_timeout: "2s"
@@ -54,6 +56,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.ControlStatePath != "/var/lib/lsm/control_state.json" {
 		t.Fatalf("expected control state path, got %q", cfg.ControlStatePath)
+	}
+	if cfg.CommitLog.Provider != "local" {
+		t.Fatalf("expected commit log provider, got %q", cfg.CommitLog.Provider)
 	}
 	if cfg.Raft.Replicas != 3 {
 		t.Fatalf("expected raft replicas, got %d", cfg.Raft.Replicas)

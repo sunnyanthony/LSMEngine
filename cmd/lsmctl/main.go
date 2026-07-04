@@ -85,6 +85,7 @@ func serveCmd(args []string) {
 		ClusterID:          cfg.ClusterID,
 		StorageMode:        cfg.StorageMode,
 		ControlStatePath:   cfg.ControlStatePath,
+		CommitLog:          toCommitLogOptions(cfg.CommitLog),
 		Raft:               toRaftOptions(cfg.Raft),
 		ShardMap:           toShardMap(cfg.Shards),
 		IOBackend:          *ioBackend,
@@ -273,6 +274,15 @@ func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
 		Replicas:          cfg.Replicas,
 		ElectionTimeout:   cfg.ElectionTimeout,
 		HeartbeatInterval: cfg.HeartbeatInterval,
+	}
+}
+
+func toCommitLogOptions(cfg serverconfig.CommitLogConfig) *lsm.CommitLogOptions {
+	if cfg.Provider == "" {
+		return nil
+	}
+	return &lsm.CommitLogOptions{
+		Provider: lsm.CommitLogProvider(cfg.Provider),
 	}
 }
 

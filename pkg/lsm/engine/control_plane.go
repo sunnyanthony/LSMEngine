@@ -2,7 +2,9 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +66,7 @@ type ClusterStatus struct {
 	ShardCount  int         `json:"shard_count"`
 	Draining    bool        `json:"draining"`
 	Revision    uint64      `json:"revision"`
+	CommitLog   string      `json:"commit_log"`
 	Raft        RaftOptions `json:"raft"`
 }
 
@@ -114,9 +117,12 @@ type controlPlane struct {
 
 	fs        iofs.FS
 	statePath string
+	consensus controlConsensus
 }
 
 const maxAppliedControlOps = 256
+
+var errControlNoop = errors.New("control noop")
 
 func newControlPlane(opts Options) (*controlPlane, error) {
 	nodeID := strings.TrimSpace(opts.NodeID)
@@ -153,6 +159,10 @@ func newControlPlane(opts Options) (*controlPlane, error) {
 	if statePath == "" {
 		statePath = filepath.Join(opts.DataDir, "control_state.json")
 	}
+	consensus, err := newControlConsensus(opts)
+	if err != nil {
+		return nil, err
+	}
 	c := &controlPlane{
 		nodeID:       nodeID,
 		clusterID:    clusterID,
@@ -166,6 +176,7 @@ func newControlPlane(opts Options) (*controlPlane, error) {
 		appliedOrder: nil,
 		fs:           fs,
 		statePath:    statePath,
+		consensus:    consensus,
 	}
 
 	if err := c.loadOrBootstrap(opts.ShardMap); err != nil {
@@ -259,6 +270,10 @@ func (c *controlPlane) status() ClusterStatus {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	provider := CommitLogProviderLocal
+	if c.consensus != nil {
+		provider = c.consensus.Provider()
+	}
 	return ClusterStatus{
 		NodeID:      c.nodeID,
 		ClusterID:   c.clusterID,
@@ -266,6 +281,7 @@ func (c *controlPlane) status() ClusterStatus {
 		ShardCount:  len(c.order),
 		Draining:    c.draining,
 		Revision:    c.revision,
+		CommitLog:   string(provider),
 		Raft:        c.raft,
 	}
 }
@@ -319,36 +335,42 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 	if shardID == "" || target == "" {
 		return errs.ErrShardNotFound
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	applied, err := c.checkOperationPreconditionsLocked(opts, transferLeaderFingerprint(shardID, target))
-	if err != nil || applied {
-		return err
-	}
-	shard, ok := c.shards[shardID]
-	if !ok {
-		return errs.ErrShardNotFound
-	}
-	previous := c.snapshotStateLocked()
-	if !hasReplica(shard.Replicas, target) {
-		shard.Replicas = append(shard.Replicas, ReplicaStatus{
-			NodeID:  target,
-			Role:    "follower",
-			Healthy: true,
-		})
-	}
-	shard.Leader = target
-	for i := range shard.Replicas {
-		if shard.Replicas[i].NodeID == target {
-			shard.Replicas[i].Role = "leader"
-			continue
-		}
-		shard.Replicas[i].Role = "follower"
-	}
-	c.shards[shardID] = shard
-	c.noteOperationAppliedLocked(opts, transferLeaderFingerprint(shardID, target))
-	return c.saveLockedWithRollback(previous)
+	fingerprint := transferLeaderFingerprint(shardID, target)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:    "transfer-leader",
+			ShardID: shardID,
+			Target:  target,
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "transfer-leader" || mutation.ShardID != shardID || mutation.Target != target {
+				return fmt.Errorf("committed control mutation mismatch")
+			}
+			shard, ok := c.shards[shardID]
+			if !ok {
+				return errs.ErrShardNotFound
+			}
+			if !hasReplica(shard.Replicas, target) {
+				shard.Replicas = append(shard.Replicas, ReplicaStatus{
+					NodeID:  target,
+					Role:    "follower",
+					Healthy: true,
+				})
+			}
+			shard.Leader = target
+			for i := range shard.Replicas {
+				if shard.Replicas[i].NodeID == target {
+					shard.Replicas[i].Role = "leader"
+					continue
+				}
+				shard.Replicas[i].Role = "follower"
+			}
+			c.shards[shardID] = shard
+			return nil
+		},
+	)
 }
 
 func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
@@ -363,51 +385,53 @@ func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, 
 	if shardID == "" {
 		return errs.ErrShardNotFound
 	}
+	fingerprint := splitFingerprint(shardID, splitKey)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:    "split",
+			ShardID: shardID,
+			Split:   append([]byte(nil), splitKey...),
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "split" || mutation.ShardID != shardID || !bytes.Equal(mutation.Split, splitKey) {
+				return fmt.Errorf("committed control mutation mismatch")
+			}
+			shard, ok := c.shards[shardID]
+			if !ok {
+				return errs.ErrShardNotFound
+			}
+			if !keyInRange(splitKey, shard.StartKey, shard.EndKey) {
+				return fmt.Errorf("split key outside shard range")
+			}
+			if (len(shard.StartKey) > 0 && bytes.Equal(splitKey, shard.StartKey)) ||
+				(len(shard.EndKey) > 0 && bytes.Equal(splitKey, shard.EndKey)) {
+				return fmt.Errorf("split key must be inside range")
+			}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	applied, err := c.checkOperationPreconditionsLocked(opts, splitFingerprint(shardID, splitKey))
-	if err != nil || applied {
-		return err
-	}
-	shard, ok := c.shards[shardID]
-	if !ok {
-		return errs.ErrShardNotFound
-	}
-	if !keyInRange(splitKey, shard.StartKey, shard.EndKey) {
-		return fmt.Errorf("split key outside shard range")
-	}
-	if (len(shard.StartKey) > 0 && bytes.Equal(splitKey, shard.StartKey)) ||
-		(len(shard.EndKey) > 0 && bytes.Equal(splitKey, shard.EndKey)) {
-		return fmt.Errorf("split key must be inside range")
-	}
+			left := shard
+			right := shard
+			left.ID = c.uniqueShardID(shardID + "-a")
+			right.ID = c.uniqueShardID(shardID + "-b")
+			left.EndKey = append([]byte(nil), splitKey...)
+			right.StartKey = append([]byte(nil), splitKey...)
+			delete(c.shards, shardID)
+			c.shards[left.ID] = left
+			c.shards[right.ID] = right
 
-	previous := c.snapshotStateLocked()
-	left := shard
-	right := shard
-	left.ID = c.uniqueShardID(shardID + "-a")
-	right.ID = c.uniqueShardID(shardID + "-b")
-	left.EndKey = append([]byte(nil), splitKey...)
-	right.StartKey = append([]byte(nil), splitKey...)
-	delete(c.shards, shardID)
-	c.shards[left.ID] = left
-	c.shards[right.ID] = right
-
-	nextOrder := make([]string, 0, len(c.order)+1)
-	for _, id := range c.order {
-		if id == shardID {
-			nextOrder = append(nextOrder, left.ID, right.ID)
-			continue
-		}
-		nextOrder = append(nextOrder, id)
-	}
-	c.order = nextOrder
-	if err := c.rebuildRoutesLocked(); err != nil {
-		_ = c.applyState(previous)
-		return err
-	}
-	c.noteOperationAppliedLocked(opts, splitFingerprint(shardID, splitKey))
-	return c.saveLockedWithRollback(previous)
+			nextOrder := make([]string, 0, len(c.order)+1)
+			for _, id := range c.order {
+				if id == shardID {
+					nextOrder = append(nextOrder, left.ID, right.ID)
+					continue
+				}
+				nextOrder = append(nextOrder, id)
+			}
+			c.order = nextOrder
+			return c.rebuildRoutesLocked()
+		},
+	)
 }
 
 func (c *controlPlane) triggerRebalance(shardID, target string) error {
@@ -433,51 +457,56 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 	if nodeID != c.nodeID {
 		return fmt.Errorf("drain supported only for local node")
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	applied, err := c.checkOperationPreconditionsLocked(opts, prepareDrainFingerprint(nodeID))
-	if err != nil || applied {
-		return err
-	}
-	targets := make(map[string]string)
-	for _, id := range c.order {
-		shard := c.shards[id]
-		if shard.Leader != nodeID {
-			continue
-		}
-		target := ""
-		for _, replica := range shard.Replicas {
-			if replica.NodeID != nodeID && replica.Healthy {
-				target = replica.NodeID
-				break
+	fingerprint := prepareDrainFingerprint(nodeID)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:   "prepare-drain",
+			NodeID: nodeID,
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "prepare-drain" || mutation.NodeID != nodeID {
+				return fmt.Errorf("committed control mutation mismatch")
 			}
-		}
-		if target == "" {
-			return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
-		}
-		targets[id] = target
-	}
-	previous := c.snapshotStateLocked()
-	for _, id := range c.order {
-		target, ok := targets[id]
-		if !ok {
-			continue
-		}
-		shard := c.shards[id]
-		shard.Leader = target
-		for i := range shard.Replicas {
-			if shard.Replicas[i].NodeID == target {
-				shard.Replicas[i].Role = "leader"
-				continue
+			targets := make(map[string]string)
+			for _, id := range c.order {
+				shard := c.shards[id]
+				if shard.Leader != nodeID {
+					continue
+				}
+				target := ""
+				for _, replica := range shard.Replicas {
+					if replica.NodeID != nodeID && replica.Healthy {
+						target = replica.NodeID
+						break
+					}
+				}
+				if target == "" {
+					return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
+				}
+				targets[id] = target
 			}
-			shard.Replicas[i].Role = "follower"
-		}
-		c.shards[id] = shard
-	}
-	c.draining = true
-	c.noteOperationAppliedLocked(opts, prepareDrainFingerprint(nodeID))
-	return c.saveLockedWithRollback(previous)
+			for _, id := range c.order {
+				target, ok := targets[id]
+				if !ok {
+					continue
+				}
+				shard := c.shards[id]
+				shard.Leader = target
+				for i := range shard.Replicas {
+					if shard.Replicas[i].NodeID == target {
+						shard.Replicas[i].Role = "leader"
+						continue
+					}
+					shard.Replicas[i].Role = "follower"
+				}
+				c.shards[id] = shard
+			}
+			c.draining = true
+			return nil
+		},
+	)
 }
 
 func (c *controlPlane) shardForKeyLocked(key []byte) (ShardStatus, bool) {
@@ -509,6 +538,66 @@ func (c *controlPlane) uniqueShardID(base string) string {
 			return candidate
 		}
 	}
+}
+
+func (c *controlPlane) checkOperationPreconditions(opts ControlWriteOptions, fingerprint string) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.checkOperationPreconditionsLocked(opts, fingerprint)
+}
+
+func (c *controlPlane) applyControlMutation(
+	mutation controlMutation,
+	opts ControlWriteOptions,
+	fingerprint string,
+	mutate func(controlMutation) error,
+) error {
+	if c == nil {
+		return errs.ErrShardNotFound
+	}
+	if c.consensus == nil {
+		return fmt.Errorf("control consensus unavailable")
+	}
+	applied, err := c.checkOperationPreconditions(opts, fingerprint)
+	if err != nil || applied {
+		return err
+	}
+	entry, err := c.consensus.CommitControl(context.Background(), mutation)
+	if err != nil {
+		return err
+	}
+	err = c.applyCommittedControlMutation(entry, opts, fingerprint, mutate)
+	if errors.Is(err, errControlNoop) {
+		return nil
+	}
+	return err
+}
+
+func (c *controlPlane) applyCommittedControlMutation(
+	entry controlCommittedEntry,
+	opts ControlWriteOptions,
+	fingerprint string,
+	mutate func(controlMutation) error,
+) error {
+	if entry.Commit.Index == 0 || entry.Commit.Term == 0 {
+		return fmt.Errorf("invalid committed control entry")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	appliedLocked, err := c.checkOperationPreconditionsLocked(opts, fingerprint)
+	if err != nil {
+		return err
+	}
+	if appliedLocked {
+		return errControlNoop
+	}
+	previous := c.snapshotStateLocked()
+	if err := mutate(entry.Mutation); err != nil {
+		_ = c.applyState(previous)
+		return err
+	}
+	c.noteOperationAppliedLocked(opts, fingerprint)
+	return c.saveLockedWithRollback(previous)
 }
 
 func (c *controlPlane) checkOperationPreconditionsLocked(opts ControlWriteOptions, fingerprint string) (bool, error) {
