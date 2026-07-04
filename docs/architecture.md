@@ -25,6 +25,7 @@ Goals:
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - M1 etcd-raft commit-log foundation: `commitlog.provider=etcd-raft` now executes control/data mutations through a real Raft propose/commit/apply path for cluster-of-one deployments.
+- M1 commit-log runtime observability: `ClusterStatus` includes `commit_log_runtime` (`mode/index/term/leader/replicas`) so control-plane health and progress can be inspected without parsing logs.
 - M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
 - M1 write consistency API surface: server supports `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
 - M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.

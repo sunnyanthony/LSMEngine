@@ -15,6 +15,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - `local`: single-node ordered commit, then local apply.
   - `etcd-raft`: real Raft propose/commit foundation (cluster-of-one stage).
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
+  - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
 - `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache + stale-route refresh/retry for writes).
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.

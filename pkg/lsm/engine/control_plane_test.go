@@ -49,6 +49,18 @@ func TestControlPlaneDefaults(t *testing.T) {
 	if status.CommitLog != string(CommitLogProviderLocal) {
 		t.Fatalf("expected local commit log provider, got %q", status.CommitLog)
 	}
+	if status.CommitLogRuntime.Mode != "local" {
+		t.Fatalf("expected local commit log runtime mode, got %q", status.CommitLogRuntime.Mode)
+	}
+	if status.CommitLogRuntime.Replicas != 1 {
+		t.Fatalf("expected local commit log runtime replicas=1, got %d", status.CommitLogRuntime.Replicas)
+	}
+	if !status.CommitLogRuntime.Leader {
+		t.Fatalf("expected local provider to report leader=true")
+	}
+	if status.CommitLogRuntime.Term == 0 {
+		t.Fatalf("expected local provider term > 0")
+	}
 }
 
 func TestControlPlaneRejectsUnknownStorageMode(t *testing.T) {
@@ -272,6 +284,22 @@ func TestControlPlaneEtcdRaftAppliesControlMutation(t *testing.T) {
 	if shards[0].Leader != "node-1" {
 		t.Fatalf("expected leader node-1, got %q", shards[0].Leader)
 	}
+	status := store.ClusterStatus()
+	if status.CommitLogRuntime.Mode != "raft_single_node" {
+		t.Fatalf("expected raft_single_node commit log runtime mode, got %q", status.CommitLogRuntime.Mode)
+	}
+	if status.CommitLogRuntime.Replicas != 1 {
+		t.Fatalf("expected commit log runtime replicas=1, got %d", status.CommitLogRuntime.Replicas)
+	}
+	if !status.CommitLogRuntime.Leader {
+		t.Fatalf("expected commit log runtime leader=true")
+	}
+	if status.CommitLogRuntime.Term == 0 {
+		t.Fatalf("expected commit log runtime term > 0")
+	}
+	if status.CommitLogRuntime.Index == 0 {
+		t.Fatalf("expected commit log runtime index > 0")
+	}
 }
 
 func TestDataWriteEtcdRaftAppliesMutation(t *testing.T) {
@@ -304,6 +332,10 @@ func TestDataWriteEtcdRaftAppliesMutation(t *testing.T) {
 	}
 	if string(got.Value) != "b" {
 		t.Fatalf("expected value b, got %q", string(got.Value))
+	}
+	status := store.ClusterStatus()
+	if status.CommitLogRuntime.Index == 0 {
+		t.Fatalf("expected commit log runtime index > 0 after put")
 	}
 }
 
