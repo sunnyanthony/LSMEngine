@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestLocalControlConsensusReturnsOrderedCommittedEntries(t *testing.T) {
-	consensus := newLocalControlConsensus()
+func TestLocalCommitLogConsensusReturnsOrderedCommittedControlEntries(t *testing.T) {
+	consensus := newLocalCommitLogConsensus()
 
 	first, err := consensus.CommitControl(context.Background(), controlMutation{
 		Kind:    "split",
@@ -39,10 +39,38 @@ func TestLocalControlConsensusReturnsOrderedCommittedEntries(t *testing.T) {
 	}
 }
 
-func TestLocalControlConsensusClonesMutationPayload(t *testing.T) {
-	consensus := newLocalControlConsensus()
+func TestLocalCommitLogConsensusReturnsOrderedCommittedDataEntries(t *testing.T) {
+	consensus := newLocalCommitLogConsensus()
+
+	first, err := consensus.CommitData(context.Background(), dataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v1"),
+	})
+	if err != nil {
+		t.Fatalf("first commit: %v", err)
+	}
+	second, err := consensus.CommitData(context.Background(), dataMutation{
+		Kind: "delete",
+		Key:  []byte("k"),
+	})
+	if err != nil {
+		t.Fatalf("second commit: %v", err)
+	}
+
+	if first.Commit.Index != 1 || second.Commit.Index != 2 {
+		t.Fatalf("expected ordered indexes 1,2; got %d,%d", first.Commit.Index, second.Commit.Index)
+	}
+	if first.Seq != first.Commit.Index || second.Seq != second.Commit.Index {
+		t.Fatalf("expected seq to derive from committed index, got seq/index %d/%d and %d/%d",
+			first.Seq, first.Commit.Index, second.Seq, second.Commit.Index)
+	}
+}
+
+func TestLocalCommitLogConsensusClonesMutationPayload(t *testing.T) {
+	consensus := newLocalCommitLogConsensus()
 	split := []byte("m")
-	entry, err := consensus.CommitControl(context.Background(), controlMutation{
+	controlEntry, err := consensus.CommitControl(context.Background(), controlMutation{
 		Kind:    "split",
 		ShardID: "users",
 		Split:   split,
@@ -52,7 +80,38 @@ func TestLocalControlConsensusClonesMutationPayload(t *testing.T) {
 	}
 
 	split[0] = 'z'
-	if string(entry.Mutation.Split) != "m" {
-		t.Fatalf("expected committed mutation split key to be immutable, got %q", entry.Mutation.Split)
+	if string(controlEntry.Mutation.Split) != "m" {
+		t.Fatalf("expected committed mutation split key to be immutable, got %q", controlEntry.Mutation.Split)
+	}
+
+	value := []byte("v1")
+	dataEntry, err := consensus.CommitData(context.Background(), dataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: value,
+	})
+	if err != nil {
+		t.Fatalf("data commit: %v", err)
+	}
+	value[1] = '2'
+	if string(dataEntry.Mutation.Value) != "v1" {
+		t.Fatalf("expected committed data value to be immutable, got %q", dataEntry.Mutation.Value)
+	}
+}
+
+func TestLocalCommitLogConsensusObservesRecoveredIndex(t *testing.T) {
+	consensus := newLocalCommitLogConsensus()
+	consensus.ObserveCommittedIndex(42)
+
+	entry, err := consensus.CommitData(context.Background(), dataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if entry.Commit.Index != 43 || entry.Seq != 43 {
+		t.Fatalf("expected commit and seq after recovered index, got index=%d seq=%d", entry.Commit.Index, entry.Seq)
 	}
 }

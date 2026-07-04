@@ -3,6 +3,8 @@
 package engine
 
 import (
+	"context"
+
 	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/errs"
@@ -36,29 +38,13 @@ func (s *writeService) Put(key []byte, value []byte) error {
 			return err
 		}
 	}
-	mem, err := s.acquireMemForWrite(len(key) + len(value))
-	if err != nil {
-		s.l.notifyWriteEvent("put", key, 0, "failed", err)
-		return err
-	}
 
-	builder := s.l.entryBuilder(mem)
-	entry := builder.Build(key, value, false, s.l.nextSeq())
-	if err := s.l.wal.AppendOwned(entry); err != nil {
-		mem.DecWriter()
-		s.l.notifyWriteEvent("put", key, entry.Seq, "failed", err)
+	seq, err := s.commitPut(key, value)
+	if err != nil {
+		s.l.notifyWriteEvent("put", key, seq, "failed", err)
 		return err
 	}
-	s.l.applyEntryOwned(mem, entry)
-	shouldFlush := mem.Size() >= s.l.mtLimit
-	mem.DecWriter()
-	if shouldFlush {
-		s.triggerFlush(mem)
-	}
-	if s.l.bus != nil {
-		s.l.bus.Publish(bus.Event{Type: bus.EventWalAppended, Sequence: entry.Seq})
-	}
-	s.l.notifyWriteEvent("put", key, entry.Seq, "committed", nil)
+	s.l.notifyWriteEvent("put", key, seq, "committed", nil)
 	return nil
 }
 
@@ -77,19 +63,72 @@ func (s *writeService) Delete(key []byte) error {
 			return err
 		}
 	}
-	mem, err := s.acquireMemForWrite(len(key))
+
+	seq, err := s.commitDelete(key)
 	if err != nil {
-		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
+		s.l.notifyWriteEvent("delete", key, seq, "failed", err)
 		return err
+	}
+	s.l.notifyWriteEvent("delete", key, seq, "committed", nil)
+	return nil
+}
+
+func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
+	if s.l == nil || s.l.commitLog == nil {
+		return 0, errs.ErrBackpressure
+	}
+	entry, err := s.l.commitLog.CommitData(context.Background(), dataMutation{
+		Kind:  "put",
+		Key:   append([]byte(nil), key...),
+		Value: append([]byte(nil), value...),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return s.applyCommittedData(entry)
+}
+
+func (s *writeService) commitDelete(key []byte) (uint64, error) {
+	if s.l == nil || s.l.commitLog == nil {
+		return 0, errs.ErrBackpressure
+	}
+	entry, err := s.l.commitLog.CommitData(context.Background(), dataMutation{
+		Kind: "delete",
+		Key:  append([]byte(nil), key...),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return s.applyCommittedData(entry)
+}
+
+func (s *writeService) applyCommittedData(entry dataCommittedEntry) (uint64, error) {
+	if entry.Commit.Index == 0 || entry.Commit.Term == 0 || entry.Seq == 0 {
+		return 0, errs.ErrBackpressure
+	}
+	switch entry.Mutation.Kind {
+	case "put":
+		return s.appendPutToLocalStore(entry.Mutation.Key, entry.Mutation.Value, entry.Seq)
+	case "delete":
+		return s.appendDeleteToLocalStore(entry.Mutation.Key, entry.Seq)
+	default:
+		return entry.Seq, errs.ErrBackpressure
+	}
+}
+
+func (s *writeService) appendPutToLocalStore(key []byte, value []byte, seq uint64) (uint64, error) {
+	mem, err := s.acquireMemForWrite(len(key) + len(value))
+	if err != nil {
+		return 0, err
 	}
 
 	builder := s.l.entryBuilder(mem)
-	entry := builder.Build(key, nil, true, s.l.nextSeq())
+	entry := builder.Build(key, value, false, seq)
 	if err := s.l.wal.AppendOwned(entry); err != nil {
 		mem.DecWriter()
-		s.l.notifyWriteEvent("delete", key, entry.Seq, "failed", err)
-		return err
+		return entry.Seq, err
 	}
+	s.l.observeCommittedSeq(entry.Seq)
 	s.l.applyEntryOwned(mem, entry)
 	shouldFlush := mem.Size() >= s.l.mtLimit
 	mem.DecWriter()
@@ -99,8 +138,32 @@ func (s *writeService) Delete(key []byte) error {
 	if s.l.bus != nil {
 		s.l.bus.Publish(bus.Event{Type: bus.EventWalAppended, Sequence: entry.Seq})
 	}
-	s.l.notifyWriteEvent("delete", key, entry.Seq, "committed", nil)
-	return nil
+	return entry.Seq, nil
+}
+
+func (s *writeService) appendDeleteToLocalStore(key []byte, seq uint64) (uint64, error) {
+	mem, err := s.acquireMemForWrite(len(key))
+	if err != nil {
+		return 0, err
+	}
+
+	builder := s.l.entryBuilder(mem)
+	entry := builder.Build(key, nil, true, seq)
+	if err := s.l.wal.AppendOwned(entry); err != nil {
+		mem.DecWriter()
+		return entry.Seq, err
+	}
+	s.l.observeCommittedSeq(entry.Seq)
+	s.l.applyEntryOwned(mem, entry)
+	shouldFlush := mem.Size() >= s.l.mtLimit
+	mem.DecWriter()
+	if shouldFlush {
+		s.triggerFlush(mem)
+	}
+	if s.l.bus != nil {
+		s.l.bus.Publish(bus.Event{Type: bus.EventWalAppended, Sequence: entry.Seq})
+	}
+	return entry.Seq, nil
 }
 
 func (s *writeService) triggerFlush(current memtable.Table) {

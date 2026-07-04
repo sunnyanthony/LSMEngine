@@ -170,6 +170,7 @@ type LSM struct {
 	remover              tableedit.Remover
 	ioFS                 iofs.FS
 	control              *controlPlane
+	commitLog            commitLogConsensus
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
 	closeErr             error

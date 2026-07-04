@@ -15,7 +15,7 @@ const (
 	CommitLogProviderEtcdRaft CommitLogProvider = "etcd-raft"
 )
 
-// CommitLogOptions controls control-plane commit-log execution.
+// CommitLogOptions controls commit-log execution.
 type CommitLogOptions struct {
 	Provider CommitLogProvider `json:"provider" yaml:"provider"`
 }
@@ -28,59 +28,102 @@ type controlMutation struct {
 	NodeID  string
 }
 
-type controlCommit struct {
+type dataMutation struct {
+	Kind  string
+	Key   []byte
+	Value []byte
+}
+
+type commitResult struct {
 	Index uint64
 	Term  uint64
 }
 
 type controlCommittedEntry struct {
-	Commit   controlCommit
+	Commit   commitResult
 	Mutation controlMutation
 }
 
-type controlConsensus interface {
+type dataCommittedEntry struct {
+	Commit   commitResult
+	Mutation dataMutation
+	Seq      uint64
+}
+
+type commitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error)
+	CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error)
 	Provider() CommitLogProvider
 }
 
-type localControlConsensus struct {
+type commitLogIndexObserver interface {
+	ObserveCommittedIndex(index uint64)
+}
+
+type localCommitLogConsensus struct {
 	mu    sync.Mutex
 	index uint64
 	term  uint64
 }
 
-func newLocalControlConsensus() *localControlConsensus {
-	return &localControlConsensus{term: 1}
+func newLocalCommitLogConsensus() *localCommitLogConsensus {
+	return &localCommitLogConsensus{term: 1}
 }
 
-func (c *localControlConsensus) CommitControl(_ context.Context, mutation controlMutation) (controlCommittedEntry, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.index++
+func (c *localCommitLogConsensus) CommitControl(_ context.Context, mutation controlMutation) (controlCommittedEntry, error) {
+	commit := c.nextCommit()
 	return controlCommittedEntry{
-		Commit: controlCommit{
-			Index: c.index,
-			Term:  c.term,
-		},
+		Commit:   commit,
 		Mutation: cloneControlMutation(mutation),
 	}, nil
 }
 
-func (c *localControlConsensus) Provider() CommitLogProvider {
+func (c *localCommitLogConsensus) CommitData(_ context.Context, mutation dataMutation) (dataCommittedEntry, error) {
+	commit := c.nextCommit()
+	return dataCommittedEntry{
+		Commit:   commit,
+		Mutation: cloneDataMutation(mutation),
+		Seq:      commit.Index,
+	}, nil
+}
+
+func (c *localCommitLogConsensus) nextCommit() commitResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.index++
+	return commitResult{
+		Index: c.index,
+		Term:  c.term,
+	}
+}
+
+func (c *localCommitLogConsensus) ObserveCommittedIndex(index uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index > c.index {
+		c.index = index
+	}
+}
+
+func (c *localCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderLocal
 }
 
-type etcdRaftControlConsensus struct{}
+type etcdRaftCommitLogConsensus struct{}
 
-func (c *etcdRaftControlConsensus) CommitControl(_ context.Context, _ controlMutation) (controlCommittedEntry, error) {
+func (c *etcdRaftCommitLogConsensus) CommitControl(_ context.Context, _ controlMutation) (controlCommittedEntry, error) {
 	return controlCommittedEntry{}, fmt.Errorf("commit log provider %q not wired yet", CommitLogProviderEtcdRaft)
 }
 
-func (c *etcdRaftControlConsensus) Provider() CommitLogProvider {
+func (c *etcdRaftCommitLogConsensus) CommitData(_ context.Context, _ dataMutation) (dataCommittedEntry, error) {
+	return dataCommittedEntry{}, fmt.Errorf("commit log provider %q not wired yet", CommitLogProviderEtcdRaft)
+}
+
+func (c *etcdRaftCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderEtcdRaft
 }
 
-func newControlConsensus(opts Options) (controlConsensus, error) {
+func newCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 	provider := CommitLogProviderLocal
 	if opts.CommitLog != nil {
 		if trimmed := strings.TrimSpace(string(opts.CommitLog.Provider)); trimmed != "" {
@@ -89,10 +132,10 @@ func newControlConsensus(opts Options) (controlConsensus, error) {
 	}
 	switch provider {
 	case CommitLogProviderLocal:
-		return newLocalControlConsensus(), nil
+		return newLocalCommitLogConsensus(), nil
 	case CommitLogProviderEtcdRaft:
 		// Stage-1 skeleton: provider is selectable, wiring is deferred.
-		return &etcdRaftControlConsensus{}, nil
+		return &etcdRaftCommitLogConsensus{}, nil
 	default:
 		return nil, fmt.Errorf("unknown commit log provider %q", provider)
 	}
@@ -100,5 +143,11 @@ func newControlConsensus(opts Options) (controlConsensus, error) {
 
 func cloneControlMutation(mutation controlMutation) controlMutation {
 	mutation.Split = append([]byte(nil), mutation.Split...)
+	return mutation
+}
+
+func cloneDataMutation(mutation dataMutation) dataMutation {
+	mutation.Key = append([]byte(nil), mutation.Key...)
+	mutation.Value = append([]byte(nil), mutation.Value...)
 	return mutation
 }

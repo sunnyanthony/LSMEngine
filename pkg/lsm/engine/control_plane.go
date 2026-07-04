@@ -117,7 +117,7 @@ type controlPlane struct {
 
 	fs        iofs.FS
 	statePath string
-	consensus controlConsensus
+	consensus commitLogConsensus
 }
 
 const maxAppliedControlOps = 256
@@ -159,7 +159,7 @@ func newControlPlane(opts Options) (*controlPlane, error) {
 	if statePath == "" {
 		statePath = filepath.Join(opts.DataDir, "control_state.json")
 	}
-	consensus, err := newControlConsensus(opts)
+	consensus, err := newCommitLogConsensus(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +556,7 @@ func (c *controlPlane) applyControlMutation(
 		return errs.ErrShardNotFound
 	}
 	if c.consensus == nil {
-		return fmt.Errorf("control consensus unavailable")
+		return fmt.Errorf("commit log consensus unavailable")
 	}
 	applied, err := c.checkOperationPreconditions(opts, fingerprint)
 	if err != nil || applied {

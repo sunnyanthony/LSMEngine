@@ -269,6 +269,34 @@ func TestControlPlaneEtcdRaftSkeletonRejectsMutation(t *testing.T) {
 	}
 }
 
+func TestDataWriteEtcdRaftSkeletonRejectsMutation(t *testing.T) {
+	store, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderEtcdRaft,
+		},
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-0", "node-1"},
+				Leader:   "node-0",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Put([]byte("a"), []byte("b")); err == nil {
+		t.Fatalf("expected write error")
+	} else if !strings.Contains(err.Error(), "not wired yet") {
+		t.Fatalf("expected not wired error, got %v", err)
+	}
+}
+
 func TestControlWriteOptionsRevisionConflict(t *testing.T) {
 	store, err := New(Options{
 		DataDir:   t.TempDir(),
