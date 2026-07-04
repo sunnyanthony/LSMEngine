@@ -102,8 +102,10 @@ func serveCmd(args []string) {
 	}()
 
 	server := &http.Server{
-		Addr:         *addr,
-		Handler:      server.NewHandler(store),
+		Addr: *addr,
+		Handler: server.NewHandlerWithOptions(store, server.HandlerOptions{
+			WriteConsistencyDefault: mustWriteConsistencyDefault(cfg.WriteConsistencyDefault),
+		}),
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 	}
@@ -301,4 +303,25 @@ func toShardMap(in []serverconfig.ShardConfig) []lsm.ShardConfig {
 		})
 	}
 	return out
+}
+
+func mustWriteConsistencyDefault(raw string) lsm.WriteConsistency {
+	mode, err := parseWriteConsistencyDefault(raw)
+	if err != nil {
+		log.Fatalf("invalid write_consistency_default: %v", err)
+	}
+	return mode
+}
+
+func parseWriteConsistencyDefault(raw string) (lsm.WriteConsistency, error) {
+	switch raw {
+	case "":
+		return lsm.WriteConsistencyAccepted, nil
+	case string(lsm.WriteConsistencyAccepted):
+		return lsm.WriteConsistencyAccepted, nil
+	case string(lsm.WriteConsistencyLocalCommitted):
+		return lsm.WriteConsistencyLocalCommitted, nil
+	default:
+		return "", fmt.Errorf("%q", raw)
+	}
 }

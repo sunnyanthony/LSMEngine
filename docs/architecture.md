@@ -25,6 +25,8 @@ Goals:
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
+- M1 write consistency API surface: server supports `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
+- M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.

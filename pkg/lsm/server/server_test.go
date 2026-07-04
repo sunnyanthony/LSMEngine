@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 	"lsmengine/pkg/lsm/errs"
@@ -32,6 +34,51 @@ type controlStubProvider struct {
 		shards []lsm.ShardStatus
 		ops    map[string]string
 	}
+}
+
+type writeStubProvider struct {
+	stubProvider
+	mu        sync.Mutex
+	data      map[string][]byte
+	putErr    error
+	deleteErr error
+	putGate   chan struct{}
+}
+
+func newWriteStubProvider() *writeStubProvider {
+	return &writeStubProvider{
+		data: make(map[string][]byte),
+	}
+}
+
+func (w *writeStubProvider) Put(key []byte, value []byte) error {
+	if w.putGate != nil {
+		<-w.putGate
+	}
+	if w.putErr != nil {
+		return w.putErr
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.data[string(key)] = append([]byte(nil), value...)
+	return nil
+}
+
+func (w *writeStubProvider) Delete(key []byte) error {
+	if w.deleteErr != nil {
+		return w.deleteErr
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.data, string(key))
+	return nil
+}
+
+func (w *writeStubProvider) Value(key string) ([]byte, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	value, ok := w.data[key]
+	return append([]byte(nil), value...), ok
 }
 
 type legacyControlStubProvider struct {
@@ -451,5 +498,168 @@ func TestHandlerControlUnavailable(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", rec.Code)
+	}
+}
+
+func TestHandlerPutLocalCommitted(t *testing.T) {
+	p := newWriteStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("1")) + `","consistency":"local_committed"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/put", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var status lsm.WriteRequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed state, got %s", status.State)
+	}
+	if status.Consistency != lsm.WriteConsistencyLocalCommitted {
+		t.Fatalf("expected local_committed consistency, got %s", status.Consistency)
+	}
+	if got, ok := p.Value("a"); !ok || string(got) != "1" {
+		t.Fatalf("expected stored value 1, got %q found=%v", string(got), ok)
+	}
+}
+
+func TestHandlerPutAcceptedStatusLifecycle(t *testing.T) {
+	p := newWriteStubProvider()
+	p.putGate = make(chan struct{})
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("1")) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/put", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var accepted lsm.WriteRequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&accepted); err != nil {
+		t.Fatalf("decode accepted: %v", err)
+	}
+	if accepted.State != lsm.WriteRequestPending {
+		t.Fatalf("expected pending state, got %s", accepted.State)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/kv/write-status/"+accepted.RequestID, nil)
+	statusRec := httptest.NewRecorder()
+	handler.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", statusRec.Code)
+	}
+	var pending lsm.WriteRequestStatus
+	if err := json.NewDecoder(statusRec.Body).Decode(&pending); err != nil {
+		t.Fatalf("decode pending: %v", err)
+	}
+	if pending.State != lsm.WriteRequestPending {
+		t.Fatalf("expected pending state before unblocking writer, got %s", pending.State)
+	}
+
+	close(p.putGate)
+
+	var final lsm.WriteRequestStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		statusReq := httptest.NewRequest(http.MethodGet, "/kv/write-status/"+accepted.RequestID, nil)
+		statusRec := httptest.NewRecorder()
+		handler.ServeHTTP(statusRec, statusReq)
+		if statusRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", statusRec.Code)
+		}
+		if err := json.NewDecoder(statusRec.Body).Decode(&final); err != nil {
+			t.Fatalf("decode final: %v", err)
+		}
+		if final.State == lsm.WriteRequestCommitted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for committed status; last=%+v", final)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, ok := p.Value("a"); !ok || string(got) != "1" {
+		t.Fatalf("expected stored value 1, got %q found=%v", string(got), ok)
+	}
+}
+
+func TestHandlerDeleteLocalCommittedRejectsNotLeader(t *testing.T) {
+	p := newWriteStubProvider()
+	p.deleteErr = errs.ErrNotLeader
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","consistency":"local_committed"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/delete", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d", rec.Code)
+	}
+	if !errors.Is(p.deleteErr, errs.ErrNotLeader) {
+		t.Fatalf("unexpected delete error")
+	}
+}
+
+func TestHandlerRejectsLinearizableConsistency(t *testing.T) {
+	p := newWriteStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("1")) + `","consistency":"linearizable"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/put", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if _, ok := p.Value("a"); ok {
+		t.Fatalf("expected invalid consistency to skip write")
+	}
+}
+
+func TestHandlerPutUsesConfiguredDefaultConsistency(t *testing.T) {
+	p := newWriteStubProvider()
+	handler := NewHandlerWithOptions(p, HandlerOptions{
+		WriteConsistencyDefault: lsm.WriteConsistencyLocalCommitted,
+	})
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("1")) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/put", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var status lsm.WriteRequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status.Consistency != lsm.WriteConsistencyLocalCommitted {
+		t.Fatalf("expected default consistency local_committed, got %s", status.Consistency)
+	}
+}
+
+func TestWriteRequestStoreCompactionKeepsPending(t *testing.T) {
+	store := newWriteRequestStore(1)
+	s1 := store.New("put", lsm.WriteConsistencyAccepted)
+	s2 := store.New("put", lsm.WriteConsistencyAccepted)
+	if _, ok := store.Get(s1.RequestID); !ok {
+		t.Fatalf("expected pending request %s to be retained", s1.RequestID)
+	}
+	if _, ok := store.Get(s2.RequestID); !ok {
+		t.Fatalf("expected pending request %s to be retained", s2.RequestID)
+	}
+
+	store.Commit(s1.RequestID)
+	s3 := store.New("put", lsm.WriteConsistencyAccepted)
+	if _, ok := store.Get(s1.RequestID); ok {
+		t.Fatalf("expected committed request %s to be evicted", s1.RequestID)
+	}
+	if _, ok := store.Get(s2.RequestID); !ok {
+		t.Fatalf("expected pending request %s to be retained", s2.RequestID)
+	}
+	if _, ok := store.Get(s3.RequestID); !ok {
+		t.Fatalf("expected pending request %s to be retained", s3.RequestID)
 	}
 }
