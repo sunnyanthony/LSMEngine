@@ -9,6 +9,7 @@ raft:
   replicas: 3
   election_timeout: "2s"
   heartbeat_interval: "500ms"
+  peers: ["node-a", "node-b", "node-c"]
 shards:
   # shards are ordered by key-range routing; keep non-overlapping ranges.
   - id: "users-a-m"

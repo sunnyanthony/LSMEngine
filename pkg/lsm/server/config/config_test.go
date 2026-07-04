@@ -19,6 +19,7 @@ raft:
   replicas: 3
   election_timeout: "2s"
   heartbeat_interval: "500ms"
+  peers: ["node-a", "node-b", "node-c"]
 shards:
   - id: "users-a-m"
     start_key: "a"
@@ -69,6 +70,12 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.HeartbeatInterval != 500*time.Millisecond {
 		t.Fatalf("expected raft heartbeat interval, got %v", cfg.Raft.HeartbeatInterval)
+	}
+	if len(cfg.Raft.Peers) != 3 {
+		t.Fatalf("expected raft peers, got %d", len(cfg.Raft.Peers))
+	}
+	if cfg.Raft.Peers[1] != "node-b" {
+		t.Fatalf("expected raft peer node-b, got %q", cfg.Raft.Peers[1])
 	}
 	if len(cfg.Shards) != 2 {
 		t.Fatalf("expected shard configs, got %d", len(cfg.Shards))

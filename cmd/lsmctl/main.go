@@ -269,13 +269,15 @@ func loadConfigOrExit(path string) serverconfig.Config {
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
-	if cfg.Replicas == 0 && cfg.ElectionTimeout == 0 && cfg.HeartbeatInterval == 0 {
+	if cfg.Replicas == 0 && cfg.ElectionTimeout == 0 && cfg.HeartbeatInterval == 0 && len(cfg.Peers) == 0 {
 		return nil
 	}
+	peers := append([]string(nil), cfg.Peers...)
 	return &lsm.RaftOptions{
 		Replicas:          cfg.Replicas,
 		ElectionTimeout:   cfg.ElectionTimeout,
 		HeartbeatInterval: cfg.HeartbeatInterval,
+		Peers:             peers,
 	}
 }
 
