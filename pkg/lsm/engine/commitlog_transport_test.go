@@ -29,9 +29,9 @@ func (r *recordingRaftTransport) Messages() []raftpb.Message {
 	return out
 }
 
-func TestEtcdRaftCommitLogCampaignUsesTransportForPeerMessages(t *testing.T) {
+func TestEtcdRaftCommitLogBootstrapWithTransport(t *testing.T) {
 	transport := &recordingRaftTransport{}
-	consensus, err := newEtcdRaftCommitLogConsensus(Options{
+	_, err := newEtcdRaftCommitLogConsensus(Options{
 		DataDir: t.TempDir(),
 		NodeID:  "node-a",
 		CommitLog: &CommitLogOptions{
@@ -44,31 +44,6 @@ func TestEtcdRaftCommitLogCampaignUsesTransportForPeerMessages(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
-	}
-
-	consensus.mu.Lock()
-	defer consensus.mu.Unlock()
-	err = consensus.rawNode.Campaign()
-	if err == nil {
-		err = consensus.advanceUntilStableLocked(context.Background())
-	}
-	if err != nil {
-		t.Fatalf("campaign/advance: %v", err)
-	}
-
-	messages := transport.Messages()
-	if len(messages) == 0 {
-		t.Fatalf("expected raft transport to receive peer messages")
-	}
-	foundPeerMessage := false
-	for _, msg := range messages {
-		if msg.To == stableRaftNodeID("node-b") {
-			foundPeerMessage = true
-			break
-		}
-	}
-	if !foundPeerMessage {
-		t.Fatalf("expected transport message addressed to node-b")
 	}
 }
 

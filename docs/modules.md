@@ -16,6 +16,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - `local`: single-node ordered commit, then local apply.
   - `etcd-raft`: real Raft propose/commit foundation for cluster-of-one, plus static peer bootstrap and outbound transport scaffolding.
   - `factory`: optional injected provider factory (`CommitLogOptions.Factory`); custom providers must return committed entries before engine apply.
+  - code layout: public contracts in `pkg/lsm/engine/commitlog_types.go`; built-in provider implementations in `internal/lsm/commitlog/*`; engine adapter/factory glue in `pkg/lsm/engine/commitlog.go` and `pkg/lsm/engine/commitlog_factory.go`.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.

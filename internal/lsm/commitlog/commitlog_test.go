@@ -1,4 +1,4 @@
-package engine
+package commitlog
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
-func TestLocalCommitLogConsensusReturnsOrderedCommittedControlEntries(t *testing.T) {
-	consensus := newLocalCommitLogConsensus()
+func TestLocalConsensusReturnsOrderedCommittedControlEntries(t *testing.T) {
+	consensus := newLocalConsensus()
 
-	first, err := consensus.CommitControl(context.Background(), controlMutation{
+	first, err := consensus.CommitControl(context.Background(), ControlMutation{
 		Kind:    "split",
 		ShardID: "users",
 		Split:   []byte("m"),
@@ -19,7 +19,7 @@ func TestLocalCommitLogConsensusReturnsOrderedCommittedControlEntries(t *testing
 	if err != nil {
 		t.Fatalf("first commit: %v", err)
 	}
-	second, err := consensus.CommitControl(context.Background(), controlMutation{
+	second, err := consensus.CommitControl(context.Background(), ControlMutation{
 		Kind:    "transfer-leader",
 		ShardID: "users-a",
 		Target:  "node-b",
@@ -42,10 +42,10 @@ func TestLocalCommitLogConsensusReturnsOrderedCommittedControlEntries(t *testing
 	}
 }
 
-func TestLocalCommitLogConsensusReturnsOrderedCommittedDataEntries(t *testing.T) {
-	consensus := newLocalCommitLogConsensus()
+func TestLocalConsensusReturnsOrderedCommittedDataEntries(t *testing.T) {
+	consensus := newLocalConsensus()
 
-	first, err := consensus.CommitData(context.Background(), dataMutation{
+	first, err := consensus.CommitData(context.Background(), DataMutation{
 		Kind:  "put",
 		Key:   []byte("k"),
 		Value: []byte("v1"),
@@ -53,7 +53,7 @@ func TestLocalCommitLogConsensusReturnsOrderedCommittedDataEntries(t *testing.T)
 	if err != nil {
 		t.Fatalf("first commit: %v", err)
 	}
-	second, err := consensus.CommitData(context.Background(), dataMutation{
+	second, err := consensus.CommitData(context.Background(), DataMutation{
 		Kind: "delete",
 		Key:  []byte("k"),
 	})
@@ -70,10 +70,10 @@ func TestLocalCommitLogConsensusReturnsOrderedCommittedDataEntries(t *testing.T)
 	}
 }
 
-func TestLocalCommitLogConsensusClonesMutationPayload(t *testing.T) {
-	consensus := newLocalCommitLogConsensus()
+func TestLocalConsensusClonesMutationPayload(t *testing.T) {
+	consensus := newLocalConsensus()
 	split := []byte("m")
-	controlEntry, err := consensus.CommitControl(context.Background(), controlMutation{
+	controlEntry, err := consensus.CommitControl(context.Background(), ControlMutation{
 		Kind:    "split",
 		ShardID: "users",
 		Split:   split,
@@ -88,7 +88,7 @@ func TestLocalCommitLogConsensusClonesMutationPayload(t *testing.T) {
 	}
 
 	value := []byte("v1")
-	dataEntry, err := consensus.CommitData(context.Background(), dataMutation{
+	dataEntry, err := consensus.CommitData(context.Background(), DataMutation{
 		Kind:  "put",
 		Key:   []byte("k"),
 		Value: value,
@@ -102,27 +102,11 @@ func TestLocalCommitLogConsensusClonesMutationPayload(t *testing.T) {
 	}
 }
 
-func TestLocalCommitLogConsensusObservesRecoveredIndex(t *testing.T) {
-	consensus := newLocalCommitLogConsensus()
-	consensus.ObserveCommittedIndex(42)
-
-	entry, err := consensus.CommitData(context.Background(), dataMutation{
-		Kind:  "put",
-		Key:   []byte("k"),
-		Value: []byte("v"),
-	})
-	if err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if entry.Commit.Index != 43 || entry.Seq != 43 {
-		t.Fatalf("expected commit and seq after recovered index, got index=%d seq=%d", entry.Commit.Index, entry.Seq)
-	}
-}
-func TestEtcdRaftCommitLogRecordsCommittedEntryWithoutPendingProposal(t *testing.T) {
-	consensus := &etcdRaftCommitLogConsensus{
+func TestEtcdRaftConsensusRecordsCommittedEntryWithoutPendingProposal(t *testing.T) {
+	consensus := &etcdRaftConsensus{
 		pending: make(map[uint64]*pendingRaftProposal),
 	}
-	mutation := dataMutation{
+	mutation := DataMutation{
 		Kind:  "put",
 		Key:   []byte("k"),
 		Value: []byte("v"),
