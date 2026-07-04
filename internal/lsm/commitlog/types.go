@@ -65,6 +65,7 @@ type RuntimeStatus struct {
 type Consensus interface {
 	CommitControl(ctx context.Context, mutation ControlMutation) (ControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation DataMutation) (DataCommittedEntry, error)
+	HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error
 	Provider() Provider
 	RuntimeStatus() RuntimeStatus
 }

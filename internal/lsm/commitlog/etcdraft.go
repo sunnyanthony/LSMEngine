@@ -144,6 +144,31 @@ func (c *etcdRaftConsensus) CommitData(ctx context.Context, mutation DataMutatio
 	return *pending.data, pending.err
 }
 
+func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rawNode == nil || c.storage == nil {
+		return fmt.Errorf("etcd raft commit log is unavailable")
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
+	defer cancel()
+	for _, msg := range messages {
+		if msg.To != 0 && msg.To != c.nodeID {
+			continue
+		}
+		if err := c.rawNode.Step(msg); err != nil {
+			return fmt.Errorf("raft step peer message: %w", err)
+		}
+		if err := c.advanceUntilStableLocked(runCtx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *etcdRaftConsensus) Provider() Provider {
 	return ProviderEtcdRaft
 }

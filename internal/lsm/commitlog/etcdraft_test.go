@@ -74,3 +74,49 @@ func TestEtcdRaftConsensusRequiresTransportForMultiPeer(t *testing.T) {
 		t.Fatalf("expected transport error, got %v", err)
 	}
 }
+
+func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		NodeID:    "node-a",
+		Peers:     []string{"node-a", "node-b"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("new etcd raft consensus: %v", err)
+	}
+	other := stableRaftNodeID("node-b")
+	if err := consensus.HandlePeerMessages(context.Background(), []raftpb.Message{
+		{
+			Type: raftpb.MsgHeartbeat,
+			From: other,
+			To:   other,
+			Term: 1,
+		},
+	}); err != nil {
+		t.Fatalf("handle peer messages: %v", err)
+	}
+}
+
+func TestEtcdRaftConsensusHandlePeerMessagesReturnsStepError(t *testing.T) {
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		NodeID:   "node-a",
+	})
+	if err != nil {
+		t.Fatalf("new etcd raft consensus: %v", err)
+	}
+	err = consensus.HandlePeerMessages(context.Background(), []raftpb.Message{
+		{
+			Type: raftpb.MsgHup,
+			To:   consensus.nodeID,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected step error")
+	}
+	if !strings.Contains(err.Error(), "step") {
+		t.Fatalf("expected step error, got %v", err)
+	}
+}

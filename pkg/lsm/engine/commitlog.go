@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	internalcommitlog "lsmengine/internal/lsm/commitlog"
 )
 
@@ -28,6 +29,14 @@ func (c *builtinCommitLogConsensus) CommitData(ctx context.Context, mutation dat
 		return dataCommittedEntry{}, err
 	}
 	return fromInternalDataCommittedEntry(entry), nil
+}
+
+func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	copied := append([]raftpb.Message(nil), messages...)
+	return c.inner.HandlePeerMessages(ctx, copied)
 }
 
 func (c *builtinCommitLogConsensus) Provider() CommitLogProvider {
