@@ -60,14 +60,15 @@ type ShardStatus struct {
 
 // ClusterStatus is node-level control-plane status.
 type ClusterStatus struct {
-	NodeID      string      `json:"node_id"`
-	ClusterID   string      `json:"cluster_id"`
-	StorageMode StorageMode `json:"storage_mode"`
-	ShardCount  int         `json:"shard_count"`
-	Draining    bool        `json:"draining"`
-	Revision    uint64      `json:"revision"`
-	CommitLog   string      `json:"commit_log"`
-	Raft        RaftOptions `json:"raft"`
+	NodeID           string                 `json:"node_id"`
+	ClusterID        string                 `json:"cluster_id"`
+	StorageMode      StorageMode            `json:"storage_mode"`
+	ShardCount       int                    `json:"shard_count"`
+	Draining         bool                   `json:"draining"`
+	Revision         uint64                 `json:"revision"`
+	CommitLog        string                 `json:"commit_log"`
+	CommitLogRuntime CommitLogRuntimeStatus `json:"commit_log_runtime"`
+	Raft             RaftOptions            `json:"raft"`
 }
 
 // ControlWriteOptions carries optional optimistic concurrency and idempotency inputs.
@@ -269,21 +270,24 @@ func (c *controlPlane) status() ClusterStatus {
 		return ClusterStatus{}
 	}
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	provider := CommitLogProviderLocal
-	if c.consensus != nil {
-		provider = c.consensus.Provider()
-	}
-	return ClusterStatus{
+	status := ClusterStatus{
 		NodeID:      c.nodeID,
 		ClusterID:   c.clusterID,
 		StorageMode: c.storageMode,
 		ShardCount:  len(c.order),
 		Draining:    c.draining,
 		Revision:    c.revision,
-		CommitLog:   string(provider),
 		Raft:        c.raft,
 	}
+	consensus := c.consensus
+	c.mu.RUnlock()
+
+	status.CommitLog = string(CommitLogProviderLocal)
+	if consensus != nil {
+		status.CommitLog = string(consensus.Provider())
+		status.CommitLogRuntime = consensus.RuntimeStatus()
+	}
+	return status
 }
 
 func (c *controlPlane) shardsSnapshot() []ShardStatus {

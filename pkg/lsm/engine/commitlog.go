@@ -56,10 +56,20 @@ type dataCommittedEntry struct {
 	Seq      uint64
 }
 
+// CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
+type CommitLogRuntimeStatus struct {
+	Mode     string `json:"mode"`
+	Index    uint64 `json:"index"`
+	Term     uint64 `json:"term"`
+	Leader   bool   `json:"leader"`
+	Replicas int    `json:"replicas"`
+}
+
 type commitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error)
 	Provider() CommitLogProvider
+	RuntimeStatus() CommitLogRuntimeStatus
 }
 
 type commitLogIndexObserver interface {
@@ -115,6 +125,18 @@ func (c *localCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderLocal
 }
 
+func (c *localCommitLogConsensus) RuntimeStatus() CommitLogRuntimeStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return CommitLogRuntimeStatus{
+		Mode:     "local",
+		Index:    c.index,
+		Term:     c.term,
+		Leader:   true,
+		Replicas: 1,
+	}
+}
+
 type raftCommitProposal struct {
 	ID      uint64           `json:"id"`
 	Kind    string           `json:"kind"`
@@ -147,6 +169,7 @@ type etcdRaftCommitLogConsensus struct {
 	committed   []raftCommittedProposal
 	index       uint64
 	term        uint64
+	replicas    int
 }
 
 const (
@@ -179,10 +202,11 @@ func newEtcdRaftCommitLogConsensus(opts Options) (*etcdRaftCommitLogConsensus, e
 		return nil, fmt.Errorf("bootstrap etcd raft node: %w", err)
 	}
 	c := &etcdRaftCommitLogConsensus{
-		nodeID:  nodeID,
-		rawNode: rawNode,
-		storage: storage,
-		pending: make(map[uint64]*pendingRaftProposal),
+		nodeID:   nodeID,
+		rawNode:  rawNode,
+		storage:  storage,
+		pending:  make(map[uint64]*pendingRaftProposal),
+		replicas: 1,
 	}
 	if err := c.advanceUntilStableLocked(); err != nil {
 		return nil, err
@@ -227,6 +251,31 @@ func (c *etcdRaftCommitLogConsensus) CommitData(ctx context.Context, mutation da
 
 func (c *etcdRaftCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderEtcdRaft
+}
+
+func (c *etcdRaftCommitLogConsensus) RuntimeStatus() CommitLogRuntimeStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	replicas := c.replicas
+	if replicas <= 0 {
+		replicas = 1
+	}
+	mode := "raft_single_node"
+	if replicas > 1 {
+		mode = "raft_multi_node"
+	}
+	status := CommitLogRuntimeStatus{
+		Mode:     mode,
+		Index:    c.index,
+		Term:     c.term,
+		Replicas: replicas,
+	}
+	if c.rawNode == nil {
+		return status
+	}
+	lead := c.rawNode.Status().Lead
+	status.Leader = lead != 0 && lead == c.nodeID
+	return status
 }
 
 func (c *etcdRaftCommitLogConsensus) commitMutation(

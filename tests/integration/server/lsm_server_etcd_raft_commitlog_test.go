@@ -64,6 +64,22 @@ func TestServerEtcdRaftCommitLogWriteAndControl(t *testing.T) {
 	if final.State != lsm.WriteRequestCommitted {
 		t.Fatalf("expected committed state, got %s", final.State)
 	}
+	statusAfterWrite := readControlJSON[lsm.ClusterStatus](t, handler, "/cluster/status")
+	if statusAfterWrite.CommitLogRuntime.Mode != "raft_single_node" {
+		t.Fatalf("expected commit log runtime mode raft_single_node, got %q", statusAfterWrite.CommitLogRuntime.Mode)
+	}
+	if statusAfterWrite.CommitLogRuntime.Replicas != 1 {
+		t.Fatalf("expected commit log runtime replicas=1, got %d", statusAfterWrite.CommitLogRuntime.Replicas)
+	}
+	if statusAfterWrite.CommitLogRuntime.Index == 0 {
+		t.Fatalf("expected commit log runtime index > 0 after write")
+	}
+	if statusAfterWrite.CommitLogRuntime.Term == 0 {
+		t.Fatalf("expected commit log runtime term > 0 after write")
+	}
+	if !statusAfterWrite.CommitLogRuntime.Leader {
+		t.Fatalf("expected commit log runtime leader=true in cluster-of-one mode")
+	}
 
 	transferReq := httptest.NewRequest(
 		http.MethodPost,
