@@ -33,6 +33,7 @@ shards:
 addr: "127.0.0.1:9090"
 read_timeout: "2s"
 write_timeout: "3s"
+write_consistency_default: "accepted"
 io_backend: "async"
 io_backend_strict: true
 io_async_max_in_flight: 8
@@ -80,6 +81,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.WriteTimeout != 3*time.Second {
 		t.Fatalf("expected write timeout, got %v", cfg.WriteTimeout)
+	}
+	if cfg.WriteConsistencyDefault != "accepted" {
+		t.Fatalf("expected write consistency default, got %q", cfg.WriteConsistencyDefault)
 	}
 	if cfg.IOBackend != "async" {
 		t.Fatalf("expected io backend, got %q", cfg.IOBackend)

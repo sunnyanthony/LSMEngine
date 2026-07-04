@@ -6,9 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"lsmengine/pkg/lsm"
 	"lsmengine/pkg/lsm/errs"
@@ -16,6 +20,18 @@ import (
 
 // NewHandler returns an HTTP handler that serves monitoring and control APIs.
 func NewHandler(provider lsm.StatsProvider) http.Handler {
+	return NewHandlerWithOptions(provider, HandlerOptions{})
+}
+
+// HandlerOptions controls server API behavior.
+type HandlerOptions struct {
+	WriteConsistencyDefault lsm.WriteConsistency
+	MaxWriteRequests        int
+}
+
+// NewHandlerWithOptions returns an HTTP handler with explicit behavior options.
+func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http.Handler {
+	resolved := resolveHandlerOptions(opts)
 	mux := http.NewServeMux()
 	handler := &handler{provider: provider}
 	if control, ok := provider.(lsm.ControlProvider); ok {
@@ -24,12 +40,20 @@ func NewHandler(provider lsm.StatsProvider) http.Handler {
 			handler.controlWithOptions = advanced
 		}
 	}
+	if writer, ok := provider.(lsm.WriteProvider); ok {
+		handler.writer = writer
+		handler.requests = newWriteRequestStore(resolved.maxWriteRequests)
+		handler.writeConsistencyDefault = resolved.writeConsistencyDefault
+	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
+	mux.HandleFunc("/kv/put", handler.handlePut)
+	mux.HandleFunc("/kv/delete", handler.handleDelete)
+	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
 	return mux
 }
 
@@ -43,9 +67,34 @@ func Serve(addr string, provider lsm.StatsProvider) error {
 }
 
 type handler struct {
-	provider           lsm.StatsProvider
-	control            lsm.ControlProvider
-	controlWithOptions lsm.ControlProviderWithOptions
+	provider                lsm.StatsProvider
+	control                 lsm.ControlProvider
+	controlWithOptions      lsm.ControlProviderWithOptions
+	writer                  lsm.WriteProvider
+	requests                *writeRequestStore
+	writeConsistencyDefault lsm.WriteConsistency
+}
+
+const defaultWriteRequestCapacity = 4096
+
+type resolvedHandlerOptions struct {
+	writeConsistencyDefault lsm.WriteConsistency
+	maxWriteRequests        int
+}
+
+func resolveHandlerOptions(opts HandlerOptions) resolvedHandlerOptions {
+	consistency := opts.WriteConsistencyDefault
+	if consistency != lsm.WriteConsistencyLocalCommitted && consistency != lsm.WriteConsistencyAccepted {
+		consistency = lsm.WriteConsistencyAccepted
+	}
+	max := opts.MaxWriteRequests
+	if max <= 0 {
+		max = defaultWriteRequestCapacity
+	}
+	return resolvedHandlerOptions{
+		writeConsistencyDefault: consistency,
+		maxWriteRequests:        max,
+	}
 }
 
 func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +243,17 @@ type drainRequest struct {
 	controlRequestOptions
 }
 
+type putRequest struct {
+	KeyBase64   string               `json:"key_base64"`
+	ValueBase64 string               `json:"value_base64"`
+	Consistency lsm.WriteConsistency `json:"consistency,omitempty"`
+}
+
+type deleteRequest struct {
+	KeyBase64   string               `json:"key_base64"`
+	Consistency lsm.WriteConsistency `json:"consistency,omitempty"`
+}
+
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -216,6 +276,89 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	return false
 }
 
+func (h *handler) handlePut(w http.ResponseWriter, r *http.Request) {
+	if h.writer == nil || h.requests == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req putRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	key, err := base64.StdEncoding.DecodeString(req.KeyBase64)
+	if err != nil {
+		http.Error(w, "invalid key_base64", http.StatusBadRequest)
+		return
+	}
+	value, err := base64.StdEncoding.DecodeString(req.ValueBase64)
+	if err != nil {
+		http.Error(w, "invalid value_base64", http.StatusBadRequest)
+		return
+	}
+	consistency, err := normalizeWriteConsistency(req.Consistency, h.writeConsistencyDefault)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.executeWrite(w, consistency, "put", func() error {
+		return h.writer.Put(key, value)
+	})
+}
+
+func (h *handler) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if h.writer == nil || h.requests == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req deleteRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	key, err := base64.StdEncoding.DecodeString(req.KeyBase64)
+	if err != nil {
+		http.Error(w, "invalid key_base64", http.StatusBadRequest)
+		return
+	}
+	consistency, err := normalizeWriteConsistency(req.Consistency, h.writeConsistencyDefault)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.executeWrite(w, consistency, "delete", func() error {
+		return h.writer.Delete(key)
+	})
+}
+
+func (h *handler) handleWriteStatus(w http.ResponseWriter, r *http.Request) {
+	if h.requests == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	requestID, ok := writeStatusPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	status, found := h.requests.Get(requestID)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 func writeActionResult(w http.ResponseWriter, err error) {
 	if err == nil {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -234,6 +377,39 @@ func writeActionResult(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+func (h *handler) executeWrite(
+	w http.ResponseWriter,
+	consistency lsm.WriteConsistency,
+	operation string,
+	apply func() error,
+) {
+	if h.requests == nil {
+		http.Error(w, "write tracker unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	status := h.requests.New(operation, consistency)
+	if consistency == lsm.WriteConsistencyAccepted {
+		go h.executeAccepted(status.RequestID, apply)
+		writeJSON(w, http.StatusAccepted, status)
+		return
+	}
+	if err := apply(); err != nil {
+		final := h.requests.Reject(status.RequestID, err)
+		http.Error(w, final.Error, writeErrorHTTPStatus(err))
+		return
+	}
+	final := h.requests.Commit(status.RequestID)
+	writeJSON(w, http.StatusOK, final)
+}
+
+func (h *handler) executeAccepted(requestID string, apply func() error) {
+	if err := apply(); err != nil {
+		h.requests.Reject(requestID, err)
+		return
+	}
+	h.requests.Commit(requestID)
 }
 
 func (h *handler) transferLeader(shardID string, req targetRequest) error {
@@ -298,6 +474,141 @@ func nodeActionPath(path string) (nodeID string, action string, ok bool) {
 		return "", "", false
 	}
 	return parts[2], parts[3], true
+}
+
+func writeStatusPath(path string) (requestID string, ok bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 {
+		return "", false
+	}
+	if parts[0] != "kv" || parts[1] != "write-status" || parts[2] == "" {
+		return "", false
+	}
+	return parts[2], true
+}
+
+func normalizeWriteConsistency(
+	mode lsm.WriteConsistency,
+	defaultConsistency lsm.WriteConsistency,
+) (lsm.WriteConsistency, error) {
+	trimmed := strings.TrimSpace(string(mode))
+	if trimmed == "" {
+		if defaultConsistency == "" {
+			return lsm.WriteConsistencyAccepted, nil
+		}
+		return defaultConsistency, nil
+	}
+	switch lsm.WriteConsistency(trimmed) {
+	case lsm.WriteConsistencyAccepted:
+		return lsm.WriteConsistencyAccepted, nil
+	case lsm.WriteConsistencyLocalCommitted:
+		return lsm.WriteConsistencyLocalCommitted, nil
+	default:
+		return "", fmt.Errorf("invalid consistency %q", trimmed)
+	}
+}
+
+func writeErrorHTTPStatus(err error) int {
+	switch {
+	case errors.Is(err, errs.ErrNotLeader):
+		return http.StatusConflict
+	case errors.Is(err, errs.ErrShardNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, errs.ErrBackpressure):
+		return http.StatusTooManyRequests
+	case errors.Is(err, errs.ErrClosed):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusBadRequest
+	}
+}
+
+type writeRequestStore struct {
+	mu        sync.Mutex
+	max       int
+	seq       atomic.Uint64
+	order     []string
+	statusMap map[string]lsm.WriteRequestStatus
+}
+
+func newWriteRequestStore(max int) *writeRequestStore {
+	if max <= 0 {
+		max = defaultWriteRequestCapacity
+	}
+	return &writeRequestStore{
+		max:       max,
+		order:     make([]string, 0, max),
+		statusMap: make(map[string]lsm.WriteRequestStatus, max),
+	}
+}
+
+func (s *writeRequestStore) New(operation string, consistency lsm.WriteConsistency) lsm.WriteRequestStatus {
+	now := time.Now().UTC()
+	requestID := fmt.Sprintf("wr-%d", s.seq.Add(1))
+	status := lsm.WriteRequestStatus{
+		RequestID:   requestID,
+		Operation:   operation,
+		Consistency: consistency,
+		State:       lsm.WriteRequestPending,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusMap[requestID] = status
+	s.order = append(s.order, requestID)
+	s.compactLocked()
+	return status
+}
+
+func (s *writeRequestStore) Commit(requestID string) lsm.WriteRequestStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := s.statusMap[requestID]
+	status.State = lsm.WriteRequestCommitted
+	status.Error = ""
+	status.UpdatedAt = time.Now().UTC()
+	s.statusMap[requestID] = status
+	return status
+}
+
+func (s *writeRequestStore) Reject(requestID string, err error) lsm.WriteRequestStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := s.statusMap[requestID]
+	status.State = lsm.WriteRequestRejected
+	status.Error = err.Error()
+	status.UpdatedAt = time.Now().UTC()
+	s.statusMap[requestID] = status
+	return status
+}
+
+func (s *writeRequestStore) Get(requestID string) (lsm.WriteRequestStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status, ok := s.statusMap[requestID]
+	return status, ok
+}
+
+func (s *writeRequestStore) compactLocked() {
+	if len(s.order) <= s.max {
+		return
+	}
+	drop := len(s.order) - s.max
+	kept := make([]string, 0, len(s.order))
+	for _, requestID := range s.order {
+		status, ok := s.statusMap[requestID]
+		if !ok {
+			continue
+		}
+		if drop > 0 && status.State != lsm.WriteRequestPending {
+			delete(s.statusMap, requestID)
+			drop--
+			continue
+		}
+		kept = append(kept, requestID)
+	}
+	s.order = kept
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

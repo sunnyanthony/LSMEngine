@@ -24,6 +24,7 @@ shards:
 addr: "127.0.0.1:8080"
 read_timeout: "5s"
 write_timeout: "5s"
+write_consistency_default: "accepted"
 # io_backend: "async"
 # io_backend_strict: false
 # io_async_max_in_flight: 64
