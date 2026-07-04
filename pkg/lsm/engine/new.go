@@ -113,6 +113,7 @@ func New(opts Options) (*LSM, error) {
 		ioFS:                 opts.IOFS,
 		control:              control,
 		commitLog:            control.consensus,
+		cdc:                  newCDCStreamStore(0),
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)

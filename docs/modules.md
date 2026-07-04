@@ -7,6 +7,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/new.go`: wiring and startup.
 - `pkg/lsm/engine/write.go`: write path entry points (Put/Delete).
 - `pkg/lsm/engine/write_service.go`: write mutation execution via commit-log adapter then local materialization.
+- `pkg/lsm/engine/cdc.go`: per-shard retained change stream buffer and read API (`ReadCDCEvents`).
 - `pkg/lsm/engine/read.go`: point reads.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
@@ -17,6 +18,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
+  - Also exposes CDC recent-events endpoint (`/cdc/events`).
 - `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache + stale-route refresh/retry for writes).
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.

@@ -50,11 +50,28 @@ type writeControlStubProvider struct {
 	write   *writeStubProvider
 }
 
+type cdcStubProvider struct {
+	stubProvider
+	result  lsm.CDCReadResult
+	lastReq struct {
+		shardID string
+		offset  uint64
+		limit   int
+	}
+}
+
 func newWriteControlStubProvider() *writeControlStubProvider {
 	return &writeControlStubProvider{
 		control: newControlStubProvider(),
 		write:   newWriteStubProvider(),
 	}
+}
+
+func (p *cdcStubProvider) ReadCDCEvents(shardID string, offset uint64, limit int) (lsm.CDCReadResult, error) {
+	p.lastReq.shardID = shardID
+	p.lastReq.offset = offset
+	p.lastReq.limit = limit
+	return p.result, nil
 }
 
 func (p *writeControlStubProvider) Stats() lsm.Stats   { return p.write.Stats() }
@@ -405,6 +422,62 @@ func TestHandlerClusterRoutes(t *testing.T) {
 	}
 	if routes.Shards[0].Leader != "node-a" {
 		t.Fatalf("expected leader node-a, got %s", routes.Shards[0].Leader)
+	}
+}
+
+func TestHandlerCDCEvents(t *testing.T) {
+	provider := &cdcStubProvider{
+		result: lsm.CDCReadResult{
+			ShardID:       "users",
+			FromOffset:    3,
+			NextOffset:    5,
+			OldestOffset:  2,
+			DroppedBefore: true,
+			Events: []lsm.CDCEvent{
+				{
+					Offset:      4,
+					ShardID:     "users",
+					Operation:   "put",
+					Key:         []byte("a"),
+					Value:       []byte("1"),
+					CommittedAt: time.Unix(1700000000, 0).UTC(),
+				},
+				{
+					Offset:      5,
+					ShardID:     "users",
+					Operation:   "delete",
+					Key:         []byte("a"),
+					Tombstone:   true,
+					CommittedAt: time.Unix(1700000001, 0).UTC(),
+				},
+			},
+		},
+	}
+	handler := NewHandler(provider)
+	req := httptest.NewRequest(http.MethodGet, "/cdc/events?shard=users&offset=3&limit=2", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if provider.lastReq.shardID != "users" || provider.lastReq.offset != 3 || provider.lastReq.limit != 2 {
+		t.Fatalf("unexpected cdc request: %+v", provider.lastReq)
+	}
+	var out cdcReadResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.ShardID != "users" || out.NextOffset != 5 || !out.DroppedBefore {
+		t.Fatalf("unexpected cdc response metadata: %+v", out)
+	}
+	if len(out.Events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(out.Events))
+	}
+	if out.Events[0].KeyBase64 != base64.StdEncoding.EncodeToString([]byte("a")) {
+		t.Fatalf("unexpected key base64: %q", out.Events[0].KeyBase64)
+	}
+	if out.Events[1].Tombstone != true {
+		t.Fatalf("expected second event tombstone=true")
 	}
 }
 

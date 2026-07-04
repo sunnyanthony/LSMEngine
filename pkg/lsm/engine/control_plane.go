@@ -326,6 +326,19 @@ func (c *controlPlane) allowWrite(key []byte) error {
 	return nil
 }
 
+func (c *controlPlane) shardIDForKey(key []byte) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	shard, ok := c.shardForKeyLocked(key)
+	if !ok {
+		return "", false
+	}
+	return shard.ID, true
+}
+
 func (c *controlPlane) transferLeader(shardID, target string) error {
 	return c.transferLeaderWithOptions(shardID, target, ControlWriteOptions{})
 }
