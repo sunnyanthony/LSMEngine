@@ -178,6 +178,7 @@ type LSM struct {
 	closing              atomic.Bool
 	closed               atomic.Bool
 	writeEvents          *writeEventDispatcher
+	cdc                  *cdcStreamStore
 }
 
 // FlowMetrics returns a snapshot of SSTable read-path metrics if enabled.

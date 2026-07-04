@@ -44,6 +44,7 @@ func (s *writeService) Put(key []byte, value []byte) error {
 		s.l.notifyWriteEvent("put", key, seq, "failed", err)
 		return err
 	}
+	s.l.recordCDCEvent("put", key, value, seq, false)
 	s.l.notifyWriteEvent("put", key, seq, "committed", nil)
 	return nil
 }
@@ -69,6 +70,7 @@ func (s *writeService) Delete(key []byte) error {
 		s.l.notifyWriteEvent("delete", key, seq, "failed", err)
 		return err
 	}
+	s.l.recordCDCEvent("delete", key, nil, seq, true)
 	s.l.notifyWriteEvent("delete", key, seq, "committed", nil)
 	return nil
 }

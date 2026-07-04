@@ -38,6 +38,12 @@ the LSM engine. It is intentionally separate from the engine internals.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
 
+### CDC HTTP (foundation)
+- `GET /cdc/events?shard=<id>&offset=<n>&limit=<n>`
+  - Returns per-shard ordered events after `offset`.
+  - Response includes `next_offset`, `oldest_offset`, and `dropped_before` (retention signal).
+  - Delivery contract at this stage: node-local and in-memory only; events are readable while retained and are not rebuilt from WAL on restart.
+
 ### Async writes (webhook callback)
 - `AsyncPut(key, value, callback_url, callback_token, request_id?) -> request_id`
 - `AsyncDelete(key, callback_url, callback_token, request_id?) -> request_id`

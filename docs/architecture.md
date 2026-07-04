@@ -30,6 +30,7 @@ Goals:
 - M1 write consistency API surface: server supports `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
 - M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.
 - M1 routing metadata/retry surface: server exposes route table snapshots (`/cluster/routes`) and write errors include retryable route hints (`revision/shard/leader`) for stale-route refresh and retry.
+- M1 CDC foundation: server exposes node-local retained per-shard change events via `/cdc/events` with `offset/limit` and retention signaling (`dropped_before`).
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
@@ -165,6 +166,9 @@ Backlog:
 - Compaction: optional flush coalescing; pluggable storage (local vs object store); output size caps + multi-output split; scheduler/backpressure/priority policy.
 - Observability/ops: metrics and health endpoints.
 - Distributed/Replication: transport + term gating; external term manager integration; replay checkpoints to avoid resending histories.
+
+TODO (later discussion):
+- Compaction optimization deep-dive (deferred): evaluate candidate strategies (sub-compaction parallelism, adaptive level sizing, compaction debt scheduling, and cost/SLO-aware triggers) and decide which are production-targeted vs experimental.
 
 ## Data layout (local FS)
 - `<data>/wal.log`: current WAL.

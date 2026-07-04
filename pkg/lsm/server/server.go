@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,11 +47,15 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 		handler.requests = newWriteRequestStore(resolved.maxWriteRequests)
 		handler.writeConsistencyDefault = resolved.writeConsistencyDefault
 	}
+	if cdc, ok := provider.(lsm.CDCProvider); ok {
+		handler.cdc = cdc
+	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
+	mux.HandleFunc("/cdc/events", handler.handleCDCEvents)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
 	mux.HandleFunc("/kv/put", handler.handlePut)
@@ -73,6 +78,7 @@ type handler struct {
 	control                 lsm.ControlProvider
 	controlWithOptions      lsm.ControlProviderWithOptions
 	writer                  lsm.WriteProvider
+	cdc                     lsm.CDCProvider
 	requests                *writeRequestStore
 	writeConsistencyDefault lsm.WriteConsistency
 }
@@ -159,6 +165,24 @@ type routingShard struct {
 	Leader         string `json:"leader"`
 }
 
+type cdcReadResponse struct {
+	ShardID       string             `json:"shard_id"`
+	FromOffset    uint64             `json:"from_offset"`
+	NextOffset    uint64             `json:"next_offset"`
+	OldestOffset  uint64             `json:"oldest_offset"`
+	DroppedBefore bool               `json:"dropped_before"`
+	Events        []cdcEventResponse `json:"events"`
+}
+
+type cdcEventResponse struct {
+	Offset      uint64    `json:"offset"`
+	Operation   string    `json:"operation"`
+	KeyBase64   string    `json:"key_base64,omitempty"`
+	ValueBase64 string    `json:"value_base64,omitempty"`
+	Tombstone   bool      `json:"tombstone,omitempty"`
+	CommittedAt time.Time `json:"committed_at"`
+}
+
 func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -180,6 +204,75 @@ func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {
 			StartKeyBase64: base64.StdEncoding.EncodeToString(shard.StartKey),
 			EndKeyBase64:   base64.StdEncoding.EncodeToString(shard.EndKey),
 			Leader:         shard.Leader,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) handleCDCEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.cdc == nil {
+		http.NotFound(w, r)
+		return
+	}
+	query := r.URL.Query()
+	shardID := strings.TrimSpace(query.Get("shard"))
+	if shardID == "" && h.control != nil {
+		shards := h.control.Shards()
+		if len(shards) == 1 {
+			shardID = shards[0].ID
+		}
+	}
+	if shardID == "" {
+		http.Error(w, "missing shard query parameter", http.StatusBadRequest)
+		return
+	}
+	offset := uint64(0)
+	if raw := strings.TrimSpace(query.Get("offset")); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid offset", http.StatusBadRequest)
+			return
+		}
+		offset = parsed
+	}
+	limit := 0
+	if raw := strings.TrimSpace(query.Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.cdc.ReadCDCEvents(shardID, offset, limit)
+	if err != nil {
+		if errors.Is(err, errs.ErrShardNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	out := cdcReadResponse{
+		ShardID:       result.ShardID,
+		FromOffset:    result.FromOffset,
+		NextOffset:    result.NextOffset,
+		OldestOffset:  result.OldestOffset,
+		DroppedBefore: result.DroppedBefore,
+		Events:        make([]cdcEventResponse, 0, len(result.Events)),
+	}
+	for _, event := range result.Events {
+		out.Events = append(out.Events, cdcEventResponse{
+			Offset:      event.Offset,
+			Operation:   event.Operation,
+			KeyBase64:   base64.StdEncoding.EncodeToString(event.Key),
+			ValueBase64: base64.StdEncoding.EncodeToString(event.Value),
+			Tombstone:   event.Tombstone,
+			CommittedAt: event.CommittedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
