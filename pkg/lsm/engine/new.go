@@ -112,6 +112,7 @@ func New(opts Options) (*LSM, error) {
 		remover:              remover,
 		ioFS:                 opts.IOFS,
 		control:              control,
+		commitLog:            control.consensus,
 	}
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)
@@ -163,6 +164,9 @@ func New(opts Options) (*LSM, error) {
 	if err := lsm.replayWAL(m.WALSeq); err != nil {
 		cancel()
 		return nil, err
+	}
+	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
+		observer.ObserveCommittedIndex(lsm.seq)
 	}
 
 	lsm.bg.Add(1)

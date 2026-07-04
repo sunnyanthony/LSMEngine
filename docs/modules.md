@@ -5,12 +5,13 @@ Goal: make tracing and onboarding fast without flattening the layout.
 ## Start here (core flows)
 - `pkg/lsm/engine/lsm.go`: options + core struct.
 - `pkg/lsm/engine/new.go`: wiring and startup.
-- `pkg/lsm/engine/write.go`: write path (Put/Delete).
+- `pkg/lsm/engine/write.go`: write path entry points (Put/Delete).
+- `pkg/lsm/engine/write_service.go`: write mutation execution via commit-log adapter then local materialization.
 - `pkg/lsm/engine/read.go`: point reads.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
-- `pkg/lsm/engine/commitlog.go`: control-plane commit-log adapter and provider selection.
+- `pkg/lsm/engine/commitlog.go`: control/data commit-log adapter and provider selection.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.

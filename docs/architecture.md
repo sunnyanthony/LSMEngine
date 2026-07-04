@@ -24,6 +24,7 @@ Goals:
 - M1 distributed surface: fixed shard metadata + manual control operations (leader transfer/split/rebalance/drain) exposed through server APIs.
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
+- M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
@@ -60,7 +61,7 @@ Data plane (TableSet) -> metadata snapshot -> Planner (control)
 
 ## Async model
 - Write path: WAL append (batch + fsync as configured) -> memtable apply -> return.
-- Sequence assignment: LSM assigns a monotonic `Seq` before WAL append to keep ordering consistent.
+- Sequence assignment: data writes use the committed data entry `Seq` before WAL append. The local provider derives it from the ordered commit index; replicated providers must supply the same sequence on every replica.
 - Background flush: channel of drained memtables; workers write SSTables and update manifest.
 - Compaction: scheduled by size/level thresholds; merges SSTables asynchronously.
 - Backpressure: when flush queue is full, writes return `ErrBackpressure` and a background goroutine
