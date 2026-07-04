@@ -38,6 +38,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - Static multi-peer bootstrap currently requires an outbound raft transport adapter (engine-side injection), but it is transport scaffolding only: inbound routing, durable raft log storage, quorum-backed commits, and membership lifecycle are deferred.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
+  - Embedded mode can inject a custom commit-log provider via `CommitLogOptions.Factory`; the provider contract is committed-entry first, not apply-callback based.
 
 ### CDC HTTP (foundation)
 - `GET /cdc/events?shard=<id>&offset=<n>&limit=<n>`

@@ -25,6 +25,7 @@ const (
 type CommitLogOptions struct {
 	Provider  CommitLogProvider    `json:"provider" yaml:"provider"`
 	Transport RaftMessageTransport `json:"-" yaml:"-"`
+	Factory   CommitLogFactory     `json:"-" yaml:"-"`
 }
 
 // RaftMessageTransport sends raft protocol messages to peer nodes.
@@ -35,7 +36,9 @@ type RaftMessageTransport interface {
 	Send(ctx context.Context, messages []raftpb.Message) error
 }
 
-type controlMutation struct {
+// CommitLogControlMutation is a control-plane state mutation that must go
+// through the commit-log correctness path.
+type CommitLogControlMutation struct {
 	Kind    string
 	ShardID string
 	Target  string
@@ -43,25 +46,32 @@ type controlMutation struct {
 	NodeID  string
 }
 
-type dataMutation struct {
+// CommitLogDataMutation is a data-plane mutation that must go through the
+// commit-log correctness path.
+type CommitLogDataMutation struct {
 	Kind  string
 	Key   []byte
 	Value []byte
 }
 
-type commitResult struct {
+// CommitLogCommit identifies a mutation's durable ordered position.
+type CommitLogCommit struct {
 	Index uint64
 	Term  uint64
 }
 
-type controlCommittedEntry struct {
-	Commit   commitResult
-	Mutation controlMutation
+// CommitLogControlCommittedEntry is the committed control mutation the engine
+// must apply locally.
+type CommitLogControlCommittedEntry struct {
+	Commit   CommitLogCommit
+	Mutation CommitLogControlMutation
 }
 
-type dataCommittedEntry struct {
-	Commit   commitResult
-	Mutation dataMutation
+// CommitLogDataCommittedEntry is the committed data mutation the engine must
+// apply locally. Seq must be deterministic for a given committed entry.
+type CommitLogDataCommittedEntry struct {
+	Commit   CommitLogCommit
+	Mutation CommitLogDataMutation
 	Seq      uint64
 }
 
@@ -74,12 +84,28 @@ type CommitLogRuntimeStatus struct {
 	Replicas int    `json:"replicas"`
 }
 
-type commitLogConsensus interface {
-	CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error)
-	CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error)
+// CommitLogConsensus is the provider contract for commit-log implementations.
+type CommitLogConsensus interface {
+	CommitControl(ctx context.Context, mutation CommitLogControlMutation) (CommitLogControlCommittedEntry, error)
+	CommitData(ctx context.Context, mutation CommitLogDataMutation) (CommitLogDataCommittedEntry, error)
 	Provider() CommitLogProvider
 	RuntimeStatus() CommitLogRuntimeStatus
 }
+
+// CommitLogFactory builds a commit-log provider implementation.
+//
+// If CommitLogOptions.Factory is set, engine initialization uses it before
+// built-in provider selection.
+type CommitLogFactory interface {
+	New(opts Options) (CommitLogConsensus, error)
+}
+
+type controlMutation = CommitLogControlMutation
+type dataMutation = CommitLogDataMutation
+type commitResult = CommitLogCommit
+type controlCommittedEntry = CommitLogControlCommittedEntry
+type dataCommittedEntry = CommitLogDataCommittedEntry
+type commitLogConsensus = CommitLogConsensus
 
 type commitLogIndexObserver interface {
 	ObserveCommittedIndex(index uint64)
@@ -582,6 +608,16 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 }
 
 func newCommitLogConsensus(opts Options) (commitLogConsensus, error) {
+	if opts.CommitLog != nil && opts.CommitLog.Factory != nil {
+		consensus, err := opts.CommitLog.Factory.New(opts)
+		if err != nil {
+			return nil, fmt.Errorf("build commit log from factory: %w", err)
+		}
+		if consensus == nil {
+			return nil, fmt.Errorf("build commit log from factory: nil consensus")
+		}
+		return consensus, nil
+	}
 	provider := CommitLogProviderLocal
 	if opts.CommitLog != nil {
 		if trimmed := strings.TrimSpace(string(opts.CommitLog.Provider)); trimmed != "" {
