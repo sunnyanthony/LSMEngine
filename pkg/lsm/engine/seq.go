@@ -12,32 +12,6 @@ const (
 	hlcCounterMask = uint64(1<<hlcCounterBits) - 1
 )
 
-// nextSeq returns a hybrid logical clock value (time, counter) that is
-// monotonically increasing across local writes.
-func (l *LSM) nextSeq() uint64 {
-	for {
-		now := uint64(time.Now().UnixMicro())
-		last := atomic.LoadUint64(&l.seq)
-		lastTime := last >> hlcCounterBits
-		lastCounter := uint16(last & hlcCounterMask)
-
-		var next uint64
-		if now > lastTime {
-			next = now << hlcCounterBits
-		} else {
-			counter := lastCounter + 1
-			if counter == 0 {
-				next = (lastTime + 1) << hlcCounterBits
-			} else {
-				next = (lastTime << hlcCounterBits) | uint64(counter)
-			}
-		}
-		if atomic.CompareAndSwapUint64(&l.seq, last, next) {
-			return next
-		}
-	}
-}
-
 // bumpSeq observes a remote or replayed sequence and advances the local HLC.
 func (l *LSM) bumpSeq(seq uint64) {
 	if seq == 0 {
