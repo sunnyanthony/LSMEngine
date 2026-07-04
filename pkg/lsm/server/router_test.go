@@ -1,0 +1,272 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+
+	"lsmengine/pkg/lsm"
+)
+
+func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
+	var leader atomic.Value
+	leader.Store("node-a")
+	var writesA atomic.Int32
+	var writesB atomic.Int32
+
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/routes":
+			currentLeader := leader.Load().(string)
+			revision := uint64(1)
+			if currentLeader == "node-b" {
+				revision = 2
+			}
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: revision,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==", // a
+						EndKeyBase64:   "eg==", // z
+						Leader:         currentLeader,
+					},
+				},
+			})
+		case "/kv/put":
+			writesA.Add(1)
+			if leader.Load().(string) == "node-a" {
+				writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+					RequestID:   "a-1",
+					Operation:   "put",
+					Consistency: lsm.WriteConsistencyLocalCommitted,
+					State:       lsm.WriteRequestCommitted,
+				})
+				return
+			}
+			writeJSON(w, http.StatusConflict, writeErrorResponse{
+				Error:     "lsm: not leader",
+				Code:      "not_leader",
+				Retryable: true,
+				Route: &writeRouteHint{
+					Revision: 2,
+					ShardID:  "users",
+					Leader:   "node-b",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/kv/put":
+			writesB.Add(1)
+			if leader.Load().(string) != "node-b" {
+				writeJSON(w, http.StatusConflict, writeErrorResponse{
+					Error:     "lsm: not leader",
+					Code:      "not_leader",
+					Retryable: true,
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+				RequestID:   "b-1",
+				Operation:   "put",
+				Consistency: lsm.WriteConsistencyLocalCommitted,
+				State:       lsm.WriteRequestCommitted,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	client := newInMemoryHTTPClient(map[string]http.Handler{
+		"node-a": handlerA,
+		"node-b": handlerB,
+	})
+
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	if err := gateway.refreshRoutes(context.Background()); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	leader.Store("node-b")
+
+	status, err := gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed status, got %+v", status)
+	}
+	if writesA.Load() != 1 {
+		t.Fatalf("expected one stale write to node-a, got %d", writesA.Load())
+	}
+	if writesB.Load() != 1 {
+		t.Fatalf("expected one retried write to node-b, got %d", writesB.Load())
+	}
+}
+
+func TestGatewayPutReturnsWriteRequestError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/routes":
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: 1,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==",
+						EndKeyBase64:   "eg==",
+						Leader:         "node-a",
+					},
+				},
+			})
+		case "/kv/put":
+			writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
+				Error:     "lsm: closed",
+				Code:      "closed",
+				Retryable: false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{"node-a": handler}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	_, err = gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	reqErr, ok := err.(*WriteRequestError)
+	if !ok {
+		t.Fatalf("expected WriteRequestError, got %T", err)
+	}
+	if reqErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", reqErr.Status)
+	}
+	if reqErr.Response.Code != "closed" {
+		t.Fatalf("expected closed code, got %s", reqErr.Response.Code)
+	}
+}
+
+func TestGatewayDeleteRoutesToLeader(t *testing.T) {
+	var nodeBDeleteCalls atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cluster/routes" {
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: 1,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==",
+						EndKeyBase64:   "eg==",
+						Leader:         "node-b",
+					},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/delete" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeBDeleteCalls.Add(1)
+		var in deleteRequest
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+			RequestID:   "d-1",
+			Operation:   "delete",
+			Consistency: in.Consistency,
+			State:       lsm.WriteRequestCommitted,
+		})
+	})
+
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	status, err := gateway.Delete(context.Background(), []byte("c"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed delete, got %+v", status)
+	}
+	if nodeBDeleteCalls.Load() != 1 {
+		t.Fatalf("expected delete to be routed to node-b")
+	}
+}
+
+func newInMemoryHTTPClient(hostHandlers map[string]http.Handler) *http.Client {
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		handler, ok := hostHandlers[req.URL.Host]
+		if !ok {
+			return nil, fmt.Errorf("no handler for host %q", req.URL.Host)
+		}
+		clone := req.Clone(req.Context())
+		if req.Body != nil {
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				return nil, err
+			}
+			_ = req.Body.Close()
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			clone.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, clone)
+		return rec.Result(), nil
+	})
+	return &http.Client{Transport: transport}
+}
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

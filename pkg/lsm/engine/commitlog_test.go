@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestLocalCommitLogConsensusReturnsOrderedCommittedControlEntries(t *testing.T) {
@@ -113,5 +116,49 @@ func TestLocalCommitLogConsensusObservesRecoveredIndex(t *testing.T) {
 	}
 	if entry.Commit.Index != 43 || entry.Seq != 43 {
 		t.Fatalf("expected commit and seq after recovered index, got index=%d seq=%d", entry.Commit.Index, entry.Seq)
+	}
+}
+func TestEtcdRaftCommitLogRecordsCommittedEntryWithoutPendingProposal(t *testing.T) {
+	consensus := &etcdRaftCommitLogConsensus{
+		pending: make(map[uint64]*pendingRaftProposal),
+	}
+	mutation := dataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	}
+	payload, err := json.Marshal(raftCommitProposal{
+		ID:   99,
+		Kind: "data",
+		Data: &mutation,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if err := consensus.applyCommittedEntryLocked(raftpb.Entry{
+		Type:  raftpb.EntryNormal,
+		Index: 7,
+		Term:  2,
+		Data:  payload,
+	}); err != nil {
+		t.Fatalf("apply committed entry: %v", err)
+	}
+
+	if consensus.index != 7 || consensus.term != 2 {
+		t.Fatalf("expected raft position 7/2, got %d/%d", consensus.index, consensus.term)
+	}
+	if len(consensus.committed) != 1 {
+		t.Fatalf("expected committed entry to be recorded, got %d", len(consensus.committed))
+	}
+	committed := consensus.committed[0]
+	if committed.ID != 99 || committed.Data == nil {
+		t.Fatalf("unexpected committed proposal: %+v", committed)
+	}
+	if committed.Data.Commit.Index != 7 || committed.Data.Commit.Term != 2 || committed.Data.Seq != 7 {
+		t.Fatalf("unexpected committed data position: %+v", committed.Data)
+	}
+	if string(committed.Data.Mutation.Key) != "k" || string(committed.Data.Mutation.Value) != "v" {
+		t.Fatalf("unexpected committed data mutation: %+v", committed.Data.Mutation)
 	}
 }

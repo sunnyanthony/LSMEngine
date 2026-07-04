@@ -238,7 +238,7 @@ func TestTransferLeaderEnablesWrite(t *testing.T) {
 	}
 }
 
-func TestControlPlaneEtcdRaftSkeletonRejectsMutation(t *testing.T) {
+func TestControlPlaneEtcdRaftAppliesControlMutation(t *testing.T) {
 	store, err := New(Options{
 		DataDir: t.TempDir(),
 		CommitLog: &CommitLogOptions{
@@ -262,14 +262,19 @@ func TestControlPlaneEtcdRaftSkeletonRejectsMutation(t *testing.T) {
 	if got := store.ClusterStatus().CommitLog; got != string(CommitLogProviderEtcdRaft) {
 		t.Fatalf("expected etcd-raft provider, got %q", got)
 	}
-	if err := store.TransferLeader("users", "node-1"); err == nil {
-		t.Fatalf("expected mutation error")
-	} else if !strings.Contains(err.Error(), "not wired yet") {
-		t.Fatalf("expected not wired error, got %v", err)
+	if err := store.TransferLeader("users", "node-1"); err != nil {
+		t.Fatalf("transfer leader: %v", err)
+	}
+	shards := store.Shards()
+	if len(shards) != 1 {
+		t.Fatalf("expected one shard, got %d", len(shards))
+	}
+	if shards[0].Leader != "node-1" {
+		t.Fatalf("expected leader node-1, got %q", shards[0].Leader)
 	}
 }
 
-func TestDataWriteEtcdRaftSkeletonRejectsMutation(t *testing.T) {
+func TestDataWriteEtcdRaftAppliesMutation(t *testing.T) {
 	store, err := New(Options{
 		DataDir: t.TempDir(),
 		CommitLog: &CommitLogOptions{
@@ -290,10 +295,15 @@ func TestDataWriteEtcdRaftSkeletonRejectsMutation(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.Put([]byte("a"), []byte("b")); err == nil {
-		t.Fatalf("expected write error")
-	} else if !strings.Contains(err.Error(), "not wired yet") {
-		t.Fatalf("expected not wired error, got %v", err)
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, ok := store.Get([]byte("a"))
+	if !ok {
+		t.Fatalf("expected key to exist")
+	}
+	if string(got.Value) != "b" {
+		t.Fatalf("expected value b, got %q", string(got.Value))
 	}
 }
 

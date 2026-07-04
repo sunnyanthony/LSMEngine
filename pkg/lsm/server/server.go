@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	mux.HandleFunc("/stats", handler.handleStats)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
+	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
 	mux.HandleFunc("/kv/put", handler.handlePut)
@@ -143,6 +145,44 @@ func (h *handler) handleShards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.control.Shards())
+}
+
+type routingResponse struct {
+	Revision uint64         `json:"revision"`
+	Shards   []routingShard `json:"shards"`
+}
+
+type routingShard struct {
+	ID             string `json:"id"`
+	StartKeyBase64 string `json:"start_key_base64,omitempty"`
+	EndKeyBase64   string `json:"end_key_base64,omitempty"`
+	Leader         string `json:"leader"`
+}
+
+func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.control == nil {
+		http.NotFound(w, r)
+		return
+	}
+	status := h.control.ClusterStatus()
+	shards := h.control.Shards()
+	out := routingResponse{
+		Revision: status.Revision,
+		Shards:   make([]routingShard, 0, len(shards)),
+	}
+	for _, shard := range shards {
+		out.Shards = append(out.Shards, routingShard{
+			ID:             shard.ID,
+			StartKeyBase64: base64.StdEncoding.EncodeToString(shard.StartKey),
+			EndKeyBase64:   base64.StdEncoding.EncodeToString(shard.EndKey),
+			Leader:         shard.Leader,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {
@@ -304,7 +344,7 @@ func (h *handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.executeWrite(w, consistency, "put", func() error {
+	h.executeWrite(w, consistency, "put", key, func() error {
 		return h.writer.Put(key, value)
 	})
 }
@@ -332,7 +372,7 @@ func (h *handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.executeWrite(w, consistency, "delete", func() error {
+	h.executeWrite(w, consistency, "delete", key, func() error {
 		return h.writer.Delete(key)
 	})
 }
@@ -383,6 +423,7 @@ func (h *handler) executeWrite(
 	w http.ResponseWriter,
 	consistency lsm.WriteConsistency,
 	operation string,
+	key []byte,
 	apply func() error,
 ) {
 	if h.requests == nil {
@@ -396,8 +437,8 @@ func (h *handler) executeWrite(
 		return
 	}
 	if err := apply(); err != nil {
-		final := h.requests.Reject(status.RequestID, err)
-		http.Error(w, final.Error, writeErrorHTTPStatus(err))
+		h.requests.Reject(status.RequestID, err)
+		h.writeWriteError(w, key, err)
 		return
 	}
 	final := h.requests.Commit(status.RequestID)
@@ -521,6 +562,83 @@ func writeErrorHTTPStatus(err error) int {
 	default:
 		return http.StatusBadRequest
 	}
+}
+
+type writeErrorResponse struct {
+	Error     string          `json:"error"`
+	Code      string          `json:"code"`
+	Retryable bool            `json:"retryable"`
+	Route     *writeRouteHint `json:"route,omitempty"`
+}
+
+type writeRouteHint struct {
+	Revision uint64 `json:"revision"`
+	ShardID  string `json:"shard_id,omitempty"`
+	Leader   string `json:"leader,omitempty"`
+}
+
+func (h *handler) writeWriteError(w http.ResponseWriter, key []byte, err error) {
+	status := writeErrorHTTPStatus(err)
+	payload := writeErrorResponse{
+		Error:     err.Error(),
+		Code:      writeErrorCode(err),
+		Retryable: isRetryableWriteError(err),
+	}
+	if payload.Retryable {
+		if hint := h.routeHintForKey(key); hint != nil {
+			payload.Route = hint
+		}
+	}
+	writeJSON(w, status, payload)
+}
+
+func writeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, errs.ErrNotLeader):
+		return "not_leader"
+	case errors.Is(err, errs.ErrShardNotFound):
+		return "shard_not_found"
+	case errors.Is(err, errs.ErrBackpressure):
+		return "backpressure"
+	case errors.Is(err, errs.ErrClosed):
+		return "closed"
+	default:
+		return "bad_request"
+	}
+}
+
+func isRetryableWriteError(err error) bool {
+	return errors.Is(err, errs.ErrNotLeader) ||
+		errors.Is(err, errs.ErrShardNotFound) ||
+		errors.Is(err, errs.ErrBackpressure)
+}
+
+func (h *handler) routeHintForKey(key []byte) *writeRouteHint {
+	if h.control == nil {
+		return nil
+	}
+	status := h.control.ClusterStatus()
+	hint := &writeRouteHint{Revision: status.Revision}
+	shard, ok := findRouteShardByKey(h.control.Shards(), key)
+	if !ok {
+		return hint
+	}
+	hint.ShardID = shard.ID
+	hint.Leader = shard.Leader
+	return hint
+}
+
+func findRouteShardByKey(shards []lsm.ShardStatus, key []byte) (lsm.ShardStatus, bool) {
+	for _, shard := range shards {
+		if len(shard.StartKey) > 0 && bytes.Compare(key, shard.StartKey) < 0 {
+			continue
+		}
+		if len(shard.EndKey) > 0 && bytes.Compare(key, shard.EndKey) >= 0 {
+			continue
+		}
+		return shard, true
+	}
+	return lsm.ShardStatus{}, false
 }
 
 type writeRequestStore struct {

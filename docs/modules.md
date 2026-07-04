@@ -12,8 +12,11 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
 - `pkg/lsm/engine/commitlog.go`: control/data commit-log adapter and provider selection.
+  - `local`: single-node ordered commit, then local apply.
+  - `etcd-raft`: real Raft propose/commit foundation (cluster-of-one stage).
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
+- `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache + stale-route refresh/retry for writes).
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.
   - Tracks node-local control `revision` and applied `operation_id` fingerprints for optimistic concurrency plus bounded idempotent retry dedupe.

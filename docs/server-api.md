@@ -34,7 +34,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `expected_revision` is optional; mismatch returns `409 Conflict`.
 - Control mutations are executed through a commit-log adapter (`commitlog.provider`).
   - Stage-1 default: `local` (single-node ordered commit, then deterministic local apply).
-  - Stage-1 skeleton: `etcd-raft` is selectable but not wired yet.
+  - Stage-1 foundation: `etcd-raft` is wired for cluster-of-one propose/commit/apply; multi-node transport and membership lifecycle are deferred.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
 
