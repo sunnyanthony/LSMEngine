@@ -24,7 +24,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `Range(start, end, limit) -> stream<entry>`
 
 ### M1 control-plane HTTP
-- `GET /cluster/status`: node id, cluster id, storage mode, raft, shard count, draining, `revision`.
+- `GET /cluster/status`: node id, cluster id, storage mode, commit log provider, raft, shard count, draining, `revision`.
 - `GET /cluster/shards`: shard ids, key ranges, leader and replica roles.
 - `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>", "operation_id": "...", "expected_revision": 12 }`.
@@ -32,6 +32,9 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `POST /cluster/nodes/{id}/drain` with optional `{ "operation_id": "...", "expected_revision": 12 }`.
   - `operation_id` is optional; if reused with the same operation while retained in the server's recent-operation window, server returns success as an idempotent retry. The current window is bounded to the most recent 256 applied control mutations.
   - `expected_revision` is optional; mismatch returns `409 Conflict`.
+- Control mutations are executed through a commit-log adapter (`commitlog.provider`).
+  - Stage-1 default: `local` (single-node ordered commit, then deterministic local apply).
+  - Stage-1 skeleton: `etcd-raft` is selectable but not wired yet.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
 

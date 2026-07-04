@@ -46,6 +46,9 @@ func TestControlPlaneDefaults(t *testing.T) {
 	if status.ShardCount != 1 {
 		t.Fatalf("expected one default shard, got %d", status.ShardCount)
 	}
+	if status.CommitLog != string(CommitLogProviderLocal) {
+		t.Fatalf("expected local commit log provider, got %q", status.CommitLog)
+	}
 }
 
 func TestControlPlaneRejectsUnknownStorageMode(t *testing.T) {
@@ -55,6 +58,21 @@ func TestControlPlaneRejectsUnknownStorageMode(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestControlPlaneRejectsUnknownCommitLogProvider(t *testing.T) {
+	_, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Provider: "unknown",
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown commit log provider") {
+		t.Fatalf("expected unknown commit log provider error, got %v", err)
 	}
 }
 
@@ -217,6 +235,37 @@ func TestTransferLeaderEnablesWrite(t *testing.T) {
 	}
 	if err := store.Put([]byte("c"), []byte("1")); err != nil {
 		t.Fatalf("put after transfer: %v", err)
+	}
+}
+
+func TestControlPlaneEtcdRaftSkeletonRejectsMutation(t *testing.T) {
+	store, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderEtcdRaft,
+		},
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-0", "node-1"},
+				Leader:   "node-0",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if got := store.ClusterStatus().CommitLog; got != string(CommitLogProviderEtcdRaft) {
+		t.Fatalf("expected etcd-raft provider, got %q", got)
+	}
+	if err := store.TransferLeader("users", "node-1"); err == nil {
+		t.Fatalf("expected mutation error")
+	} else if !strings.Contains(err.Error(), "not wired yet") {
+		t.Fatalf("expected not wired error, got %v", err)
 	}
 }
 

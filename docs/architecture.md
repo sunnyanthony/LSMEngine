@@ -23,6 +23,7 @@ Goals:
 - Control plane: flush + compaction scheduling; works off metadata only and never mutates data-plane state directly.
 - M1 distributed surface: fixed shard metadata + manual control operations (leader transfer/split/rebalance/drain) exposed through server APIs.
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
+- M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
