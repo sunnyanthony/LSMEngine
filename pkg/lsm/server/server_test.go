@@ -45,6 +45,53 @@ type writeStubProvider struct {
 	putGate   chan struct{}
 }
 
+type writeControlStubProvider struct {
+	control *controlStubProvider
+	write   *writeStubProvider
+}
+
+func newWriteControlStubProvider() *writeControlStubProvider {
+	return &writeControlStubProvider{
+		control: newControlStubProvider(),
+		write:   newWriteStubProvider(),
+	}
+}
+
+func (p *writeControlStubProvider) Stats() lsm.Stats   { return p.write.Stats() }
+func (p *writeControlStubProvider) Health() lsm.Health { return p.write.Health() }
+func (p *writeControlStubProvider) ClusterStatus() lsm.ClusterStatus {
+	return p.control.ClusterStatus()
+}
+func (p *writeControlStubProvider) Shards() []lsm.ShardStatus { return p.control.Shards() }
+func (p *writeControlStubProvider) TransferLeader(shardID, target string) error {
+	return p.control.TransferLeader(shardID, target)
+}
+func (p *writeControlStubProvider) TriggerSplit(shardID string, splitKey []byte) error {
+	return p.control.TriggerSplit(shardID, splitKey)
+}
+func (p *writeControlStubProvider) TriggerRebalance(shardID, target string) error {
+	return p.control.TriggerRebalance(shardID, target)
+}
+func (p *writeControlStubProvider) PrepareDrain(nodeID string) error {
+	return p.control.PrepareDrain(nodeID)
+}
+func (p *writeControlStubProvider) TransferLeaderWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	return p.control.TransferLeaderWithOptions(shardID, target, opts)
+}
+func (p *writeControlStubProvider) TriggerSplitWithOptions(shardID string, splitKey []byte, opts lsm.ControlWriteOptions) error {
+	return p.control.TriggerSplitWithOptions(shardID, splitKey, opts)
+}
+func (p *writeControlStubProvider) TriggerRebalanceWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	return p.control.TriggerRebalanceWithOptions(shardID, target, opts)
+}
+func (p *writeControlStubProvider) PrepareDrainWithOptions(nodeID string, opts lsm.ControlWriteOptions) error {
+	return p.control.PrepareDrainWithOptions(nodeID, opts)
+}
+func (p *writeControlStubProvider) Put(key []byte, value []byte) error {
+	return p.write.Put(key, value)
+}
+func (p *writeControlStubProvider) Delete(key []byte) error { return p.write.Delete(key) }
+
 func newWriteStubProvider() *writeStubProvider {
 	return &writeStubProvider{
 		data: make(map[string][]byte),
@@ -334,6 +381,33 @@ func TestHandlerShards(t *testing.T) {
 	}
 }
 
+func TestHandlerClusterRoutes(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodGet, "/cluster/routes", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var routes routingResponse
+	if err := json.NewDecoder(rec.Body).Decode(&routes); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if routes.Revision != 0 {
+		t.Fatalf("expected revision 0, got %d", routes.Revision)
+	}
+	if len(routes.Shards) != 1 {
+		t.Fatalf("expected one route shard, got %d", len(routes.Shards))
+	}
+	if routes.Shards[0].ID != "users" {
+		t.Fatalf("expected users shard, got %s", routes.Shards[0].ID)
+	}
+	if routes.Shards[0].Leader != "node-a" {
+		t.Fatalf("expected leader node-a, got %s", routes.Shards[0].Leader)
+	}
+}
+
 func TestHandlerTransferLeader(t *testing.T) {
 	p := newControlStubProvider()
 	handler := NewHandler(p)
@@ -589,8 +663,12 @@ func TestHandlerPutAcceptedStatusLifecycle(t *testing.T) {
 }
 
 func TestHandlerDeleteLocalCommittedRejectsNotLeader(t *testing.T) {
-	p := newWriteStubProvider()
-	p.deleteErr = errs.ErrNotLeader
+	p := newWriteControlStubProvider()
+	p.write.deleteErr = errs.ErrNotLeader
+	p.control.mu.Lock()
+	p.control.state.status.Revision = 7
+	p.control.state.shards[0].Leader = "node-b"
+	p.control.mu.Unlock()
 	handler := NewHandler(p)
 	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","consistency":"local_committed"}`)
 	req := httptest.NewRequest(http.MethodPost, "/kv/delete", body)
@@ -599,7 +677,29 @@ func TestHandlerDeleteLocalCommittedRejectsNotLeader(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected status 409, got %d", rec.Code)
 	}
-	if !errors.Is(p.deleteErr, errs.ErrNotLeader) {
+	var out writeErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Code != "not_leader" {
+		t.Fatalf("expected code not_leader, got %s", out.Code)
+	}
+	if !out.Retryable {
+		t.Fatalf("expected retryable=true")
+	}
+	if out.Route == nil {
+		t.Fatalf("expected route hint")
+	}
+	if out.Route.Revision != 7 {
+		t.Fatalf("expected route revision 7, got %d", out.Route.Revision)
+	}
+	if out.Route.ShardID != "users" {
+		t.Fatalf("expected shard users, got %s", out.Route.ShardID)
+	}
+	if out.Route.Leader != "node-b" {
+		t.Fatalf("expected leader node-b, got %s", out.Route.Leader)
+	}
+	if !errors.Is(p.write.deleteErr, errs.ErrNotLeader) {
 		t.Fatalf("unexpected delete error")
 	}
 }

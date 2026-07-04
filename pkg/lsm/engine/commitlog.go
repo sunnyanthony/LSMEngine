@@ -2,9 +2,15 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
+	"time"
+
+	"go.etcd.io/etcd/raft/v3"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 // CommitLogProvider selects the commit-log backend.
@@ -109,18 +115,330 @@ func (c *localCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderLocal
 }
 
-type etcdRaftCommitLogConsensus struct{}
-
-func (c *etcdRaftCommitLogConsensus) CommitControl(_ context.Context, _ controlMutation) (controlCommittedEntry, error) {
-	return controlCommittedEntry{}, fmt.Errorf("commit log provider %q not wired yet", CommitLogProviderEtcdRaft)
+type raftCommitProposal struct {
+	ID      uint64           `json:"id"`
+	Kind    string           `json:"kind"`
+	Control *controlMutation `json:"control,omitempty"`
+	Data    *dataMutation    `json:"data,omitempty"`
 }
 
-func (c *etcdRaftCommitLogConsensus) CommitData(_ context.Context, _ dataMutation) (dataCommittedEntry, error) {
-	return dataCommittedEntry{}, fmt.Errorf("commit log provider %q not wired yet", CommitLogProviderEtcdRaft)
+type raftCommittedProposal struct {
+	ID      uint64
+	Kind    string
+	Control *controlCommittedEntry
+	Data    *dataCommittedEntry
+}
+
+type pendingRaftProposal struct {
+	done    bool
+	control *controlCommittedEntry
+	data    *dataCommittedEntry
+	err     error
+}
+
+type etcdRaftCommitLogConsensus struct {
+	mu sync.Mutex
+
+	nodeID      uint64
+	rawNode     *raft.RawNode
+	storage     *raft.MemoryStorage
+	proposalSeq uint64
+	pending     map[uint64]*pendingRaftProposal
+	committed   []raftCommittedProposal
+	index       uint64
+	term        uint64
+}
+
+const (
+	etcdRaftElectionTick   = 10
+	etcdRaftHeartbeatTick  = 1
+	etcdRaftApplyTimeout   = 5 * time.Second
+	etcdRaftAdvanceMaxStep = 2048
+)
+
+func newEtcdRaftCommitLogConsensus(opts Options) (*etcdRaftCommitLogConsensus, error) {
+	nodeName := strings.TrimSpace(opts.NodeID)
+	if nodeName == "" {
+		nodeName = "node-0"
+	}
+	nodeID := stableRaftNodeID(nodeName)
+	storage := raft.NewMemoryStorage()
+	rawNode, err := raft.NewRawNode(&raft.Config{
+		ID:              nodeID,
+		ElectionTick:    etcdRaftElectionTick,
+		HeartbeatTick:   etcdRaftHeartbeatTick,
+		Storage:         storage,
+		MaxSizePerMsg:   1 << 20,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("new etcd raft node: %w", err)
+	}
+	if err := rawNode.Bootstrap([]raft.Peer{{ID: nodeID}}); err != nil {
+		return nil, fmt.Errorf("bootstrap etcd raft node: %w", err)
+	}
+	c := &etcdRaftCommitLogConsensus{
+		nodeID:  nodeID,
+		rawNode: rawNode,
+		storage: storage,
+		pending: make(map[uint64]*pendingRaftProposal),
+	}
+	if err := c.advanceUntilStableLocked(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
+	defer cancel()
+	if err := c.ensureLeaderLocked(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *etcdRaftCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
+	cloned := cloneControlMutation(mutation)
+	pending, err := c.commitMutation(ctx, raftCommitProposal{
+		Kind:    "control",
+		Control: &cloned,
+	})
+	if err != nil {
+		return controlCommittedEntry{}, err
+	}
+	if pending.control == nil {
+		return controlCommittedEntry{}, fmt.Errorf("raft committed non-control entry")
+	}
+	return *pending.control, pending.err
+}
+
+func (c *etcdRaftCommitLogConsensus) CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error) {
+	cloned := cloneDataMutation(mutation)
+	pending, err := c.commitMutation(ctx, raftCommitProposal{
+		Kind: "data",
+		Data: &cloned,
+	})
+	if err != nil {
+		return dataCommittedEntry{}, err
+	}
+	if pending.data == nil {
+		return dataCommittedEntry{}, fmt.Errorf("raft committed non-data entry")
+	}
+	return *pending.data, pending.err
 }
 
 func (c *etcdRaftCommitLogConsensus) Provider() CommitLogProvider {
 	return CommitLogProviderEtcdRaft
+}
+
+func (c *etcdRaftCommitLogConsensus) commitMutation(
+	ctx context.Context,
+	proposal raftCommitProposal,
+) (*pendingRaftProposal, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rawNode == nil || c.storage == nil {
+		return nil, fmt.Errorf("etcd raft commit log is unavailable")
+	}
+
+	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
+	defer cancel()
+	if err := c.ensureLeaderLocked(runCtx); err != nil {
+		return nil, err
+	}
+
+	c.proposalSeq++
+	proposal.ID = c.proposalSeq
+	payload, err := json.Marshal(proposal)
+	if err != nil {
+		return nil, fmt.Errorf("marshal raft proposal: %w", err)
+	}
+
+	pending := &pendingRaftProposal{}
+	c.pending[proposal.ID] = pending
+	if err := c.rawNode.Propose(payload); err != nil {
+		delete(c.pending, proposal.ID)
+		return nil, fmt.Errorf("raft propose: %w", err)
+	}
+
+	for {
+		if pending.done {
+			return pending, nil
+		}
+		select {
+		case <-runCtx.Done():
+			delete(c.pending, proposal.ID)
+			return nil, fmt.Errorf("raft apply timeout: %w", runCtx.Err())
+		default:
+		}
+		if err := c.advanceUntilStableLocked(); err != nil {
+			delete(c.pending, proposal.ID)
+			return nil, err
+		}
+		if !pending.done {
+			c.rawNode.Tick()
+		}
+	}
+}
+
+func (c *etcdRaftCommitLogConsensus) ensureLeaderLocked(ctx context.Context) error {
+	if c.rawNode.Status().Lead == c.nodeID {
+		return nil
+	}
+	if err := c.rawNode.Campaign(); err != nil {
+		return fmt.Errorf("raft campaign: %w", err)
+	}
+	for {
+		if c.rawNode.Status().Lead == c.nodeID {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("raft leader election timeout: %w", ctx.Err())
+		default:
+		}
+		if err := c.advanceUntilStableLocked(); err != nil {
+			return err
+		}
+		c.rawNode.Tick()
+	}
+}
+
+func (c *etcdRaftCommitLogConsensus) advanceUntilStableLocked() error {
+	steps := 0
+	for c.rawNode.HasReady() {
+		if steps >= etcdRaftAdvanceMaxStep {
+			return fmt.Errorf("raft did not reach stable state in %d steps", etcdRaftAdvanceMaxStep)
+		}
+		if err := c.advanceOneReadyLocked(); err != nil {
+			return err
+		}
+		steps++
+	}
+	return nil
+}
+
+func (c *etcdRaftCommitLogConsensus) advanceOneReadyLocked() error {
+	rd := c.rawNode.Ready()
+	if !raft.IsEmptyHardState(rd.HardState) {
+		if err := c.storage.SetHardState(rd.HardState); err != nil {
+			return fmt.Errorf("raft storage set hard state: %w", err)
+		}
+	}
+	if err := c.storage.Append(rd.Entries); err != nil {
+		return fmt.Errorf("raft storage append: %w", err)
+	}
+	for _, msg := range rd.Messages {
+		if msg.To != c.nodeID {
+			continue
+		}
+		if err := c.rawNode.Step(msg); err != nil {
+			return fmt.Errorf("raft step self message: %w", err)
+		}
+	}
+	for _, entry := range rd.CommittedEntries {
+		if err := c.applyCommittedEntryLocked(entry); err != nil {
+			return err
+		}
+	}
+	c.rawNode.Advance(rd)
+	return nil
+}
+
+func (c *etcdRaftCommitLogConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error {
+	if entry.Index > 0 {
+		c.index = entry.Index
+	}
+	if entry.Term > 0 {
+		c.term = entry.Term
+	}
+	switch entry.Type {
+	case raftpb.EntryNormal:
+		if len(entry.Data) == 0 {
+			return nil
+		}
+		var proposal raftCommitProposal
+		if err := json.Unmarshal(entry.Data, &proposal); err != nil {
+			return fmt.Errorf("unmarshal raft proposal: %w", err)
+		}
+		committed, err := proposal.committedEntry(commitResult{Index: entry.Index, Term: entry.Term})
+		if err != nil {
+			return err
+		}
+		c.committed = append(c.committed, committed)
+		if pending, ok := c.pending[proposal.ID]; ok {
+			pending.control = committed.Control
+			pending.data = committed.Data
+			pending.done = true
+			delete(c.pending, proposal.ID)
+		}
+		return nil
+	case raftpb.EntryConfChange:
+		var cc raftpb.ConfChange
+		if err := cc.Unmarshal(entry.Data); err != nil {
+			return fmt.Errorf("unmarshal conf change: %w", err)
+		}
+		c.rawNode.ApplyConfChange(cc)
+		return nil
+	case raftpb.EntryConfChangeV2:
+		var cc raftpb.ConfChangeV2
+		if err := cc.Unmarshal(entry.Data); err != nil {
+			return fmt.Errorf("unmarshal conf change v2: %w", err)
+		}
+		c.rawNode.ApplyConfChange(cc)
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (p raftCommitProposal) committedEntry(commit commitResult) (raftCommittedProposal, error) {
+	out := raftCommittedProposal{
+		ID:   p.ID,
+		Kind: p.Kind,
+	}
+	switch p.Kind {
+	case "control":
+		if p.Control == nil {
+			return out, fmt.Errorf("raft control proposal missing mutation")
+		}
+		control := controlCommittedEntry{
+			Commit:   commit,
+			Mutation: cloneControlMutation(*p.Control),
+		}
+		out.Control = &control
+	case "data":
+		if p.Data == nil {
+			return out, fmt.Errorf("raft data proposal missing mutation")
+		}
+		data := dataCommittedEntry{
+			Commit:   commit,
+			Mutation: cloneDataMutation(*p.Data),
+			Seq:      commit.Index,
+		}
+		out.Data = &data
+	default:
+		return out, fmt.Errorf("unknown raft proposal kind %q", p.Kind)
+	}
+	return out, nil
+}
+
+func stableRaftNodeID(nodeID string) uint64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(nodeID))
+	id := hasher.Sum64()
+	if id == 0 {
+		return 1
+	}
+	return id
+}
+
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func newCommitLogConsensus(opts Options) (commitLogConsensus, error) {
@@ -134,20 +452,21 @@ func newCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 	case CommitLogProviderLocal:
 		return newLocalCommitLogConsensus(), nil
 	case CommitLogProviderEtcdRaft:
-		// Stage-1 skeleton: provider is selectable, wiring is deferred.
-		return &etcdRaftCommitLogConsensus{}, nil
+		return newEtcdRaftCommitLogConsensus(opts)
 	default:
 		return nil, fmt.Errorf("unknown commit log provider %q", provider)
 	}
 }
 
-func cloneControlMutation(mutation controlMutation) controlMutation {
-	mutation.Split = append([]byte(nil), mutation.Split...)
-	return mutation
+func cloneControlMutation(in controlMutation) controlMutation {
+	out := in
+	out.Split = append([]byte(nil), in.Split...)
+	return out
 }
 
-func cloneDataMutation(mutation dataMutation) dataMutation {
-	mutation.Key = append([]byte(nil), mutation.Key...)
-	mutation.Value = append([]byte(nil), mutation.Value...)
-	return mutation
+func cloneDataMutation(in dataMutation) dataMutation {
+	out := in
+	out.Key = append([]byte(nil), in.Key...)
+	out.Value = append([]byte(nil), in.Value...)
+	return out
 }
