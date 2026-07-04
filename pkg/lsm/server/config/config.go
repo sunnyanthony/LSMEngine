@@ -39,6 +39,7 @@ type RaftConfig struct {
 	Replicas          int           `yaml:"replicas"`
 	ElectionTimeout   time.Duration `yaml:"election_timeout"`
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+	Peers             []string      `yaml:"peers"`
 }
 
 // ShardConfig describes a fixed shard range in server YAML.

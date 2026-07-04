@@ -25,7 +25,8 @@ Goals:
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - M1 etcd-raft commit-log foundation: `commitlog.provider=etcd-raft` now executes control/data mutations through a real Raft propose/commit/apply path for cluster-of-one deployments.
-- M1 commit-log runtime observability: `ClusterStatus` includes `commit_log_runtime` (`mode/index/term/leader/replicas`) so control-plane health and progress can be inspected without parsing logs.
+- M1 raft peer transport foundation: when `raft.peers` has multiple members, etcd-raft can bootstrap static peer ids and route outbound raft messages through `CommitLogOptions.Transport`; inbound delivery, quorum-backed commits, durable raft log storage, and membership lifecycle remain deferred.
+- M1 commit-log runtime observability: `ClusterStatus` includes `commit_log_runtime` (`mode/index/term/leader/replicas`) so control-plane health and progress can be inspected without parsing logs. Multi-peer transport scaffolding reports `mode=raft_transport_foundation`, not real multi-node raft operation.
 - M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
 - M1 write consistency API surface: server supports `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
 - M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.
@@ -37,7 +38,7 @@ Goals:
 - IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: deferred from the engine surface until a later phase. Raft integration is currently cluster-of-one to keep one log model while multi-node networking is introduced incrementally.
+- Distributed transport and membership: outbound peer transport hooks are present, but inbound transport wiring, durable raft storage, membership lifecycle, quorum-backed commits, and data-plane replication remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## Boundary Audit (current focus)

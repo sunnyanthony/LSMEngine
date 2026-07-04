@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"lsmengine/pkg/lsm"
+	serverconfig "lsmengine/pkg/lsm/server/config"
 )
 
 func TestParseWriteConsistencyDefault(t *testing.T) {
@@ -35,5 +36,20 @@ func TestParseWriteConsistencyDefault(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestToRaftOptionsIncludesPeers(t *testing.T) {
+	got := toRaftOptions(serverconfig.RaftConfig{
+		Peers: []string{"node-a", "node-b", "node-c"},
+	})
+	if got == nil {
+		t.Fatalf("expected raft options")
+	}
+	if len(got.Peers) != 3 {
+		t.Fatalf("expected peers length 3, got %d", len(got.Peers))
+	}
+	if got.Peers[2] != "node-c" {
+		t.Fatalf("expected node-c peer, got %q", got.Peers[2])
 	}
 }

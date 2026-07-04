@@ -23,6 +23,9 @@ func TestServerConfigExampleLoads(t *testing.T) {
 	if cfg.Addr == "" {
 		t.Fatalf("expected addr in example config")
 	}
+	if len(cfg.Raft.Peers) == 0 {
+		t.Fatalf("expected raft peers in example config")
+	}
 }
 
 func repoRoot(t *testing.T) string {

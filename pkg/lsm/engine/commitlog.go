@@ -23,7 +23,16 @@ const (
 
 // CommitLogOptions controls commit-log execution.
 type CommitLogOptions struct {
-	Provider CommitLogProvider `json:"provider" yaml:"provider"`
+	Provider  CommitLogProvider    `json:"provider" yaml:"provider"`
+	Transport RaftMessageTransport `json:"-" yaml:"-"`
+}
+
+// RaftMessageTransport sends raft protocol messages to peer nodes.
+//
+// This foundation is intentionally outbound-only; inbound delivery wiring is
+// introduced in later branches.
+type RaftMessageTransport interface {
+	Send(ctx context.Context, messages []raftpb.Message) error
 }
 
 type controlMutation struct {
@@ -164,6 +173,7 @@ type etcdRaftCommitLogConsensus struct {
 	nodeID      uint64
 	rawNode     *raft.RawNode
 	storage     *raft.MemoryStorage
+	transport   RaftMessageTransport
 	proposalSeq uint64
 	pending     map[uint64]*pendingRaftProposal
 	committed   []raftCommittedProposal
@@ -177,6 +187,7 @@ const (
 	etcdRaftHeartbeatTick  = 1
 	etcdRaftApplyTimeout   = 5 * time.Second
 	etcdRaftAdvanceMaxStep = 2048
+	etcdRaftSendTimeout    = 2 * time.Second
 )
 
 func newEtcdRaftCommitLogConsensus(opts Options) (*etcdRaftCommitLogConsensus, error) {
@@ -185,6 +196,17 @@ func newEtcdRaftCommitLogConsensus(opts Options) (*etcdRaftCommitLogConsensus, e
 		nodeName = "node-0"
 	}
 	nodeID := stableRaftNodeID(nodeName)
+	peerIDs, err := resolveRaftPeerIDs(nodeName, opts.Raft)
+	if err != nil {
+		return nil, err
+	}
+	var transport RaftMessageTransport
+	if opts.CommitLog != nil {
+		transport = opts.CommitLog.Transport
+	}
+	if len(peerIDs) > 1 && transport == nil {
+		return nil, fmt.Errorf("raft transport is required when raft peers > 1")
+	}
 	storage := raft.NewMemoryStorage()
 	rawNode, err := raft.NewRawNode(&raft.Config{
 		ID:              nodeID,
@@ -198,23 +220,32 @@ func newEtcdRaftCommitLogConsensus(opts Options) (*etcdRaftCommitLogConsensus, e
 	if err != nil {
 		return nil, fmt.Errorf("new etcd raft node: %w", err)
 	}
-	if err := rawNode.Bootstrap([]raft.Peer{{ID: nodeID}}); err != nil {
+	bootstrapPeers := make([]raft.Peer, 0, len(peerIDs))
+	for _, id := range peerIDs {
+		bootstrapPeers = append(bootstrapPeers, raft.Peer{ID: id})
+	}
+	if err := rawNode.Bootstrap(bootstrapPeers); err != nil {
 		return nil, fmt.Errorf("bootstrap etcd raft node: %w", err)
 	}
 	c := &etcdRaftCommitLogConsensus{
-		nodeID:   nodeID,
-		rawNode:  rawNode,
-		storage:  storage,
-		pending:  make(map[uint64]*pendingRaftProposal),
-		replicas: 1,
-	}
-	if err := c.advanceUntilStableLocked(); err != nil {
-		return nil, err
+		nodeID:    nodeID,
+		rawNode:   rawNode,
+		storage:   storage,
+		transport: transport,
+		pending:   make(map[uint64]*pendingRaftProposal),
+		replicas:  len(peerIDs),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
 	defer cancel()
-	if err := c.ensureLeaderLocked(ctx); err != nil {
+	if err := c.advanceUntilStableLocked(ctx); err != nil {
 		return nil, err
+	}
+	// Multi-peer clusters may not have enough live peers yet during startup.
+	// We only force immediate self-election in cluster-of-one mode.
+	if len(peerIDs) == 1 {
+		if err := c.ensureLeaderLocked(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -262,7 +293,7 @@ func (c *etcdRaftCommitLogConsensus) RuntimeStatus() CommitLogRuntimeStatus {
 	}
 	mode := "raft_single_node"
 	if replicas > 1 {
-		mode = "raft_multi_node"
+		mode = "raft_transport_foundation"
 	}
 	status := CommitLogRuntimeStatus{
 		Mode:     mode,
@@ -318,7 +349,7 @@ func (c *etcdRaftCommitLogConsensus) commitMutation(
 			return nil, fmt.Errorf("raft apply timeout: %w", runCtx.Err())
 		default:
 		}
-		if err := c.advanceUntilStableLocked(); err != nil {
+		if err := c.advanceUntilStableLocked(runCtx); err != nil {
 			delete(c.pending, proposal.ID)
 			return nil, err
 		}
@@ -344,20 +375,25 @@ func (c *etcdRaftCommitLogConsensus) ensureLeaderLocked(ctx context.Context) err
 			return fmt.Errorf("raft leader election timeout: %w", ctx.Err())
 		default:
 		}
-		if err := c.advanceUntilStableLocked(); err != nil {
+		if err := c.advanceUntilStableLocked(ctx); err != nil {
 			return err
 		}
 		c.rawNode.Tick()
 	}
 }
 
-func (c *etcdRaftCommitLogConsensus) advanceUntilStableLocked() error {
+func (c *etcdRaftCommitLogConsensus) advanceUntilStableLocked(ctx context.Context) error {
 	steps := 0
 	for c.rawNode.HasReady() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if steps >= etcdRaftAdvanceMaxStep {
 			return fmt.Errorf("raft did not reach stable state in %d steps", etcdRaftAdvanceMaxStep)
 		}
-		if err := c.advanceOneReadyLocked(); err != nil {
+		if err := c.advanceOneReadyLocked(ctx); err != nil {
 			return err
 		}
 		steps++
@@ -365,7 +401,7 @@ func (c *etcdRaftCommitLogConsensus) advanceUntilStableLocked() error {
 	return nil
 }
 
-func (c *etcdRaftCommitLogConsensus) advanceOneReadyLocked() error {
+func (c *etcdRaftCommitLogConsensus) advanceOneReadyLocked(ctx context.Context) error {
 	rd := c.rawNode.Ready()
 	if !raft.IsEmptyHardState(rd.HardState) {
 		if err := c.storage.SetHardState(rd.HardState); err != nil {
@@ -375,12 +411,27 @@ func (c *etcdRaftCommitLogConsensus) advanceOneReadyLocked() error {
 	if err := c.storage.Append(rd.Entries); err != nil {
 		return fmt.Errorf("raft storage append: %w", err)
 	}
+	outbound := make([]raftpb.Message, 0, len(rd.Messages))
 	for _, msg := range rd.Messages {
 		if msg.To != c.nodeID {
+			if msg.To != 0 {
+				outbound = append(outbound, msg)
+			}
 			continue
 		}
 		if err := c.rawNode.Step(msg); err != nil {
 			return fmt.Errorf("raft step self message: %w", err)
+		}
+	}
+	if len(outbound) > 0 {
+		if c.transport == nil {
+			return fmt.Errorf("raft transport is not configured for peer messages")
+		}
+		sendCtx, cancel := withDefaultTimeout(ctx, etcdRaftSendTimeout)
+		err := c.transport.Send(sendCtx, outbound)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("raft transport send: %w", err)
 		}
 	}
 	for _, entry := range rd.CommittedEntries {
@@ -478,6 +529,46 @@ func stableRaftNodeID(nodeID string) uint64 {
 		return 1
 	}
 	return id
+}
+
+func resolveRaftPeerIDs(nodeName string, raftOpts *RaftOptions) ([]uint64, error) {
+	if raftOpts == nil || len(raftOpts.Peers) == 0 {
+		return []uint64{stableRaftNodeID(nodeName)}, nil
+	}
+	seenNames := make(map[string]struct{}, len(raftOpts.Peers))
+	peerNames := make([]string, 0, len(raftOpts.Peers))
+	localIncluded := false
+	for _, raw := range raftOpts.Peers {
+		peer := strings.TrimSpace(raw)
+		if peer == "" {
+			continue
+		}
+		if _, ok := seenNames[peer]; ok {
+			continue
+		}
+		seenNames[peer] = struct{}{}
+		peerNames = append(peerNames, peer)
+		if peer == nodeName {
+			localIncluded = true
+		}
+	}
+	if len(peerNames) == 0 {
+		return nil, fmt.Errorf("raft peers must contain at least one node")
+	}
+	if !localIncluded {
+		return nil, fmt.Errorf("raft peers must include local node %q", nodeName)
+	}
+	peerIDs := make([]uint64, 0, len(peerNames))
+	seenIDs := make(map[uint64]string, len(peerNames))
+	for _, peer := range peerNames {
+		id := stableRaftNodeID(peer)
+		if other, exists := seenIDs[id]; exists && other != peer {
+			return nil, fmt.Errorf("raft peer id collision between %q and %q", other, peer)
+		}
+		seenIDs[id] = peer
+		peerIDs = append(peerIDs, id)
+	}
+	return peerIDs, nil
 }
 
 func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
