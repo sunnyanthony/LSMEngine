@@ -408,7 +408,7 @@ func TestControlMutationRollsBackWhenStateSaveFails(t *testing.T) {
 		ExpectedRevision: &revision,
 	}
 	fs.failWrite = true
-	if err := store.TransferLeaderWithOptions("users", "node-b", opts); !errors.Is(err, errInjectedControlStateWrite) {
+	if err := store.TransferLeaderWithOptions("users", "node-c", opts); !errors.Is(err, errInjectedControlStateWrite) {
 		t.Fatalf("expected injected write failure, got %v", err)
 	}
 	if got := store.ClusterStatus().Revision; got != 0 {
@@ -421,17 +421,23 @@ func TestControlMutationRollsBackWhenStateSaveFails(t *testing.T) {
 	if shards[0].Leader != "node-a" {
 		t.Fatalf("expected leader rollback to node-a, got %q", shards[0].Leader)
 	}
+	if hasReplica(shards[0].Replicas, "node-c") {
+		t.Fatalf("expected rollback to remove implicitly added replica node-c")
+	}
 
 	fs.failWrite = false
-	if err := store.TransferLeaderWithOptions("users", "node-b", opts); err != nil {
+	if err := store.TransferLeaderWithOptions("users", "node-c", opts); err != nil {
 		t.Fatalf("retry after failed save: %v", err)
 	}
 	if got := store.ClusterStatus().Revision; got != 1 {
 		t.Fatalf("expected revision 1 after retry, got %d", got)
 	}
 	shards = store.Shards()
-	if shards[0].Leader != "node-b" {
-		t.Fatalf("expected retry to move leader to node-b, got %q", shards[0].Leader)
+	if shards[0].Leader != "node-c" {
+		t.Fatalf("expected retry to move leader to node-c, got %q", shards[0].Leader)
+	}
+	if !hasReplica(shards[0].Replicas, "node-c") {
+		t.Fatalf("expected retry to add replica node-c")
 	}
 }
 

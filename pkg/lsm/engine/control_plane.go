@@ -330,6 +330,7 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 	if !ok {
 		return errs.ErrShardNotFound
 	}
+	previous := c.snapshotStateLocked()
 	if !hasReplica(shard.Replicas, target) {
 		shard.Replicas = append(shard.Replicas, ReplicaStatus{
 			NodeID:  target,
@@ -337,7 +338,6 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 			Healthy: true,
 		})
 	}
-	previous := c.snapshotStateLocked()
 	shard.Leader = target
 	for i := range shard.Replicas {
 		if shard.Replicas[i].NodeID == target {
