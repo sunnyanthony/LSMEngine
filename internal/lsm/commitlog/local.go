@@ -3,6 +3,8 @@ package commitlog
 import (
 	"context"
 	"sync"
+
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type localConsensus struct {
@@ -48,6 +50,10 @@ func (c *localConsensus) ObserveCommittedIndex(index uint64) {
 	if index > c.index {
 		c.index = index
 	}
+}
+
+func (c *localConsensus) HandlePeerMessages(_ context.Context, _ []raftpb.Message) error {
+	return nil
 }
 
 func (c *localConsensus) Provider() Provider {

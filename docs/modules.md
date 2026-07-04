@@ -14,7 +14,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
 - `pkg/lsm/engine/commitlog.go`: control/data commit-log adapter and provider selection.
   - `local`: single-node ordered commit, then local apply.
-  - `etcd-raft`: real Raft propose/commit foundation for cluster-of-one, plus static peer bootstrap and outbound transport scaffolding.
+  - `etcd-raft`: real Raft propose/commit foundation for cluster-of-one, plus static peer bootstrap, outbound transport scaffolding, and inbound peer-message handling.
   - `factory`: optional injected provider factory (`CommitLogOptions.Factory`); custom providers must return committed entries before engine apply.
   - code layout: public contracts in `pkg/lsm/engine/commitlog_types.go`; built-in provider implementations in `internal/lsm/commitlog/*`; engine adapter/factory glue in `pkg/lsm/engine/commitlog.go` and `pkg/lsm/engine/commitlog_factory.go`.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.

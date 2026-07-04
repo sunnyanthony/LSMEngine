@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type testCommitLogFactory struct {
@@ -36,6 +38,8 @@ type testCommitLogConsensus struct {
 	controlCalls  int
 	dataCalls     int
 	commits       []string
+	peerCalls     int
+	peerMsgCount  int
 	provider      CommitLogProvider
 	runtimeStatus CommitLogRuntimeStatus
 }
@@ -63,6 +67,14 @@ func (c *testCommitLogConsensus) CommitData(_ context.Context, mutation CommitLo
 	}, nil
 }
 
+func (c *testCommitLogConsensus) HandlePeerMessages(_ context.Context, messages []raftpb.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.peerCalls++
+	c.peerMsgCount += len(messages)
+	return nil
+}
+
 func (c *testCommitLogConsensus) Provider() CommitLogProvider {
 	if c.provider == "" {
 		return "custom"
@@ -87,6 +99,18 @@ func (c *testCommitLogConsensus) Calls() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.commits...)
+}
+
+func (c *testCommitLogConsensus) PeerCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peerCalls
+}
+
+func (c *testCommitLogConsensus) PeerMessageCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peerMsgCount
 }
 
 func TestCommitLogFactoryOverridesProviderSelection(t *testing.T) {
@@ -159,5 +183,34 @@ func TestCommitLogFactoryNilConsensusFailsInitialization(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nil consensus") {
 		t.Fatalf("expected nil consensus error, got %v", err)
+	}
+}
+
+func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
+	consensus := &testCommitLogConsensus{provider: "custom-raft"}
+	factory := &testCommitLogFactory{consensus: consensus}
+
+	store, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Factory: factory,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.HandlePeerMessages(context.Background(), []raftpb.Message{
+		{Type: raftpb.MsgHeartbeat, From: 2, To: 1, Term: 1},
+		{Type: raftpb.MsgApp, From: 2, To: 1, Term: 1},
+	}); err != nil {
+		t.Fatalf("handle peer messages: %v", err)
+	}
+	if got := consensus.PeerCalls(); got != 1 {
+		t.Fatalf("expected one peer ingress call, got %d", got)
+	}
+	if got := consensus.PeerMessageCount(); got != 2 {
+		t.Fatalf("expected two peer messages, got %d", got)
 	}
 }

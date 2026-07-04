@@ -23,8 +23,8 @@ type CommitLogOptions struct {
 
 // RaftMessageTransport sends raft protocol messages to peer nodes.
 //
-// This foundation is intentionally outbound-only; inbound delivery wiring is
-// introduced in later branches.
+// This transport is outbound from the local raft node. Inbound delivery is
+// handled via CommitLogConsensus.HandlePeerMessages.
 type RaftMessageTransport interface {
 	Send(ctx context.Context, messages []raftpb.Message) error
 }
@@ -81,6 +81,7 @@ type CommitLogRuntimeStatus struct {
 type CommitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation CommitLogControlMutation) (CommitLogControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation CommitLogDataMutation) (CommitLogDataCommittedEntry, error)
+	HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error
 	Provider() CommitLogProvider
 	RuntimeStatus() CommitLogRuntimeStatus
 }
