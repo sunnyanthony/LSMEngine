@@ -330,6 +330,7 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 	if !ok {
 		return errs.ErrShardNotFound
 	}
+	previous := c.snapshotStateLocked()
 	if !hasReplica(shard.Replicas, target) {
 		shard.Replicas = append(shard.Replicas, ReplicaStatus{
 			NodeID:  target,
@@ -347,7 +348,7 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 	}
 	c.shards[shardID] = shard
 	c.noteOperationAppliedLocked(opts, transferLeaderFingerprint(shardID, target))
-	return c.saveLocked()
+	return c.saveLockedWithRollback(previous)
 }
 
 func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
@@ -381,6 +382,7 @@ func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, 
 		return fmt.Errorf("split key must be inside range")
 	}
 
+	previous := c.snapshotStateLocked()
 	left := shard
 	right := shard
 	left.ID = c.uniqueShardID(shardID + "-a")
@@ -401,10 +403,11 @@ func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, 
 	}
 	c.order = nextOrder
 	if err := c.rebuildRoutesLocked(); err != nil {
+		_ = c.applyState(previous)
 		return err
 	}
 	c.noteOperationAppliedLocked(opts, splitFingerprint(shardID, splitKey))
-	return c.saveLocked()
+	return c.saveLockedWithRollback(previous)
 }
 
 func (c *controlPlane) triggerRebalance(shardID, target string) error {
@@ -437,6 +440,7 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 	if err != nil || applied {
 		return err
 	}
+	targets := make(map[string]string)
 	for _, id := range c.order {
 		shard := c.shards[id]
 		if shard.Leader != nodeID {
@@ -452,6 +456,15 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 		if target == "" {
 			return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
 		}
+		targets[id] = target
+	}
+	previous := c.snapshotStateLocked()
+	for _, id := range c.order {
+		target, ok := targets[id]
+		if !ok {
+			continue
+		}
+		shard := c.shards[id]
 		shard.Leader = target
 		for i := range shard.Replicas {
 			if shard.Replicas[i].NodeID == target {
@@ -464,7 +477,7 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 	}
 	c.draining = true
 	c.noteOperationAppliedLocked(opts, prepareDrainFingerprint(nodeID))
-	return c.saveLocked()
+	return c.saveLockedWithRollback(previous)
 }
 
 func (c *controlPlane) shardForKeyLocked(key []byte) (ShardStatus, bool) {
@@ -575,6 +588,16 @@ func (c *controlPlane) saveLocked() error {
 	}
 	if err := c.fs.Rename(tmpPath, c.statePath); err != nil {
 		_ = c.fs.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func (c *controlPlane) saveLockedWithRollback(previous controlPlaneState) error {
+	if err := c.saveLocked(); err != nil {
+		if restoreErr := c.applyState(previous); restoreErr != nil {
+			return fmt.Errorf("save control state: %w; rollback control state: %v", err, restoreErr)
+		}
 		return err
 	}
 	return nil

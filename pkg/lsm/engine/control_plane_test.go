@@ -8,8 +8,23 @@ import (
 	"strings"
 	"testing"
 
+	"lsmengine/internal/lsm/iofs"
 	"lsmengine/pkg/lsm/errs"
 )
+
+var errInjectedControlStateWrite = errors.New("injected control state write failure")
+
+type failingControlStateFS struct {
+	iofs.OSFS
+	failWrite bool
+}
+
+func (f *failingControlStateFS) WriteFile(path string, data []byte, perm os.FileMode) error {
+	if f.failWrite && strings.HasSuffix(path, "control_state.json.tmp") {
+		return errInjectedControlStateWrite
+	}
+	return f.OSFS.WriteFile(path, data, perm)
+}
 
 func TestControlPlaneDefaults(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
@@ -365,6 +380,67 @@ func TestControlWriteOptionsOperationConflict(t *testing.T) {
 	}
 }
 
+func TestControlMutationRollsBackWhenStateSaveFails(t *testing.T) {
+	fs := &failingControlStateFS{}
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		IOFS:      fs,
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	revision := uint64(0)
+	opts := ControlWriteOptions{
+		OperationID:      "op-fail",
+		ExpectedRevision: &revision,
+	}
+	fs.failWrite = true
+	if err := store.TransferLeaderWithOptions("users", "node-c", opts); !errors.Is(err, errInjectedControlStateWrite) {
+		t.Fatalf("expected injected write failure, got %v", err)
+	}
+	if got := store.ClusterStatus().Revision; got != 0 {
+		t.Fatalf("expected revision rollback to 0, got %d", got)
+	}
+	shards := store.Shards()
+	if len(shards) != 1 {
+		t.Fatalf("expected one shard, got %d", len(shards))
+	}
+	if shards[0].Leader != "node-a" {
+		t.Fatalf("expected leader rollback to node-a, got %q", shards[0].Leader)
+	}
+	if hasReplica(shards[0].Replicas, "node-c") {
+		t.Fatalf("expected rollback to remove implicitly added replica node-c")
+	}
+
+	fs.failWrite = false
+	if err := store.TransferLeaderWithOptions("users", "node-c", opts); err != nil {
+		t.Fatalf("retry after failed save: %v", err)
+	}
+	if got := store.ClusterStatus().Revision; got != 1 {
+		t.Fatalf("expected revision 1 after retry, got %d", got)
+	}
+	shards = store.Shards()
+	if shards[0].Leader != "node-c" {
+		t.Fatalf("expected retry to move leader to node-c, got %q", shards[0].Leader)
+	}
+	if !hasReplica(shards[0].Replicas, "node-c") {
+		t.Fatalf("expected retry to add replica node-c")
+	}
+}
+
 func TestTriggerSplitAndDrain(t *testing.T) {
 	store, err := New(Options{
 		DataDir:   t.TempDir(),
@@ -402,6 +478,50 @@ func TestTriggerSplitAndDrain(t *testing.T) {
 	for _, shard := range store.Shards() {
 		if shard.Leader == "node-a" {
 			t.Fatalf("expected leader moved away from node-a for shard %q", shard.ID)
+		}
+	}
+}
+
+func TestPrepareDrainDoesNotPartiallyMutateWhenShardCannotMove(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users-a-m",
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+			{
+				ID:       "users-m-z",
+				StartKey: []byte("m"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	err = store.PrepareDrain("node-a")
+	if err == nil {
+		t.Fatalf("expected drain error")
+	}
+	if !strings.Contains(err.Error(), "no alternate healthy replica") {
+		t.Fatalf("expected alternate replica error, got %v", err)
+	}
+	if status := store.ClusterStatus(); status.Draining || status.Revision != 0 {
+		t.Fatalf("expected no drain/revision mutation, got draining=%v revision=%d", status.Draining, status.Revision)
+	}
+	for _, shard := range store.Shards() {
+		if shard.Leader != "node-a" {
+			t.Fatalf("expected shard %q leader to remain node-a, got %q", shard.ID, shard.Leader)
 		}
 	}
 }
