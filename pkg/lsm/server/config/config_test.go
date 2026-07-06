@@ -20,6 +20,9 @@ raft:
   election_timeout: "2s"
   heartbeat_interval: "500ms"
   peers: ["node-a", "node-b", "node-c"]
+  peer_urls:
+    node-b: "http://127.0.0.1:9091"
+    node-c: "http://127.0.0.1:9092"
 shards:
   - id: "users-a-m"
     start_key: "a"
@@ -76,6 +79,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.Peers[1] != "node-b" {
 		t.Fatalf("expected raft peer node-b, got %q", cfg.Raft.Peers[1])
+	}
+	if cfg.Raft.PeerURLs["node-c"] != "http://127.0.0.1:9092" {
+		t.Fatalf("expected node-c peer url, got %q", cfg.Raft.PeerURLs["node-c"])
 	}
 	if len(cfg.Shards) != 2 {
 		t.Fatalf("expected shard configs, got %d", len(cfg.Shards))
