@@ -85,16 +85,17 @@ type appliedOperationState struct {
 }
 
 type controlPlaneState struct {
-	Version     int                     `json:"version"`
-	NodeID      string                  `json:"node_id"`
-	ClusterID   string                  `json:"cluster_id"`
-	StorageMode StorageMode             `json:"storage_mode"`
-	Raft        RaftOptions             `json:"raft"`
-	Draining    bool                    `json:"draining"`
-	Revision    uint64                  `json:"revision"`
-	Order       []string                `json:"order"`
-	Shards      []ShardStatus           `json:"shards"`
-	AppliedOps  []appliedOperationState `json:"applied_ops,omitempty"`
+	Version               int                     `json:"version"`
+	NodeID                string                  `json:"node_id"`
+	ClusterID             string                  `json:"cluster_id"`
+	StorageMode           StorageMode             `json:"storage_mode"`
+	Raft                  RaftOptions             `json:"raft"`
+	Draining              bool                    `json:"draining"`
+	Revision              uint64                  `json:"revision"`
+	CommitLogAppliedIndex uint64                  `json:"commit_log_applied_index,omitempty"`
+	Order                 []string                `json:"order"`
+	Shards                []ShardStatus           `json:"shards"`
+	AppliedOps            []appliedOperationState `json:"applied_ops,omitempty"`
 }
 
 type shardRoute struct {
@@ -104,18 +105,19 @@ type shardRoute struct {
 }
 
 type controlPlane struct {
-	mu           sync.RWMutex
-	nodeID       string
-	clusterID    string
-	storageMode  StorageMode
-	raft         RaftOptions
-	draining     bool
-	revision     uint64
-	order        []string
-	shards       map[string]ShardStatus
-	routes       []shardRoute
-	appliedOps   map[string]appliedOperationState
-	appliedOrder []string
+	mu                    sync.RWMutex
+	nodeID                string
+	clusterID             string
+	storageMode           StorageMode
+	raft                  RaftOptions
+	draining              bool
+	revision              uint64
+	commitLogAppliedIndex uint64
+	order                 []string
+	shards                map[string]ShardStatus
+	routes                []shardRoute
+	appliedOps            map[string]appliedOperationState
+	appliedOrder          []string
 
 	fs        iofs.FS
 	statePath string
@@ -614,8 +616,169 @@ func (c *controlPlane) applyCommittedControlMutation(
 		_ = c.applyState(previous)
 		return err
 	}
+	c.markCommitLogAppliedLocked(entry.Commit.Index)
 	c.noteOperationAppliedLocked(opts, fingerprint)
 	return c.saveLockedWithRollback(previous)
+}
+
+func (c *controlPlane) applyReplicatedControlEntry(entry controlCommittedEntry) error {
+	if c == nil {
+		return errs.ErrShardNotFound
+	}
+	if entry.Commit.Index == 0 || entry.Commit.Term == 0 {
+		return fmt.Errorf("invalid committed control entry")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry.Commit.Index <= c.commitLogAppliedIndex {
+		return nil
+	}
+	previous := c.snapshotStateLocked()
+	if err := c.applyControlMutationPayloadLocked(entry.Mutation); err != nil {
+		_ = c.applyState(previous)
+		return err
+	}
+	c.markCommitLogAppliedLocked(entry.Commit.Index)
+	c.revision++
+	return c.saveLockedWithRollback(previous)
+}
+
+func (c *controlPlane) applyControlMutationPayloadLocked(mutation controlMutation) error {
+	switch mutation.Kind {
+	case "transfer-leader":
+		return c.applyTransferLeaderMutationLocked(mutation)
+	case "split":
+		return c.applySplitMutationLocked(mutation)
+	case "prepare-drain":
+		return c.applyPrepareDrainMutationLocked(mutation)
+	default:
+		return fmt.Errorf("unknown control mutation kind %q", mutation.Kind)
+	}
+}
+
+func (c *controlPlane) applyTransferLeaderMutationLocked(mutation controlMutation) error {
+	shardID := strings.TrimSpace(mutation.ShardID)
+	target := strings.TrimSpace(mutation.Target)
+	if shardID == "" || target == "" {
+		return errs.ErrShardNotFound
+	}
+	shard, ok := c.shards[shardID]
+	if !ok {
+		return errs.ErrShardNotFound
+	}
+	if !hasReplica(shard.Replicas, target) {
+		shard.Replicas = append(shard.Replicas, ReplicaStatus{
+			NodeID:  target,
+			Role:    "follower",
+			Healthy: true,
+		})
+	}
+	shard.Leader = target
+	for i := range shard.Replicas {
+		if shard.Replicas[i].NodeID == target {
+			shard.Replicas[i].Role = "leader"
+			continue
+		}
+		shard.Replicas[i].Role = "follower"
+	}
+	c.shards[shardID] = shard
+	return nil
+}
+
+func (c *controlPlane) applySplitMutationLocked(mutation controlMutation) error {
+	shardID := strings.TrimSpace(mutation.ShardID)
+	if shardID == "" {
+		return errs.ErrShardNotFound
+	}
+	splitKey := mutation.Split
+	shard, ok := c.shards[shardID]
+	if !ok {
+		return errs.ErrShardNotFound
+	}
+	if !keyInRange(splitKey, shard.StartKey, shard.EndKey) {
+		return fmt.Errorf("split key outside shard range")
+	}
+	if (len(shard.StartKey) > 0 && bytes.Equal(splitKey, shard.StartKey)) ||
+		(len(shard.EndKey) > 0 && bytes.Equal(splitKey, shard.EndKey)) {
+		return fmt.Errorf("split key must be inside range")
+	}
+	left := shard
+	right := shard
+	left.ID = c.uniqueShardID(shardID + "-a")
+	right.ID = c.uniqueShardID(shardID + "-b")
+	left.EndKey = append([]byte(nil), splitKey...)
+	right.StartKey = append([]byte(nil), splitKey...)
+	delete(c.shards, shardID)
+	c.shards[left.ID] = left
+	c.shards[right.ID] = right
+
+	nextOrder := make([]string, 0, len(c.order)+1)
+	for _, id := range c.order {
+		if id == shardID {
+			nextOrder = append(nextOrder, left.ID, right.ID)
+			continue
+		}
+		nextOrder = append(nextOrder, id)
+	}
+	c.order = nextOrder
+	return c.rebuildRoutesLocked()
+}
+
+func (c *controlPlane) applyPrepareDrainMutationLocked(mutation controlMutation) error {
+	nodeID := strings.TrimSpace(mutation.NodeID)
+	if nodeID == "" {
+		return errs.ErrShardNotFound
+	}
+	targets := make(map[string]string)
+	for _, id := range c.order {
+		shard := c.shards[id]
+		if shard.Leader != nodeID {
+			continue
+		}
+		target := ""
+		for _, replica := range shard.Replicas {
+			if replica.NodeID != nodeID && replica.Healthy {
+				target = replica.NodeID
+				break
+			}
+		}
+		if target == "" {
+			return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
+		}
+		targets[id] = target
+	}
+	for _, id := range c.order {
+		target, ok := targets[id]
+		if !ok {
+			continue
+		}
+		if err := c.applyTransferLeaderMutationLocked(controlMutation{
+			Kind:    "transfer-leader",
+			ShardID: id,
+			Target:  target,
+		}); err != nil {
+			return err
+		}
+	}
+	if nodeID == c.nodeID {
+		c.draining = true
+	}
+	return nil
+}
+
+func (c *controlPlane) commitLogApplied() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.commitLogAppliedIndex
+}
+
+func (c *controlPlane) markCommitLogAppliedLocked(index uint64) {
+	if index > c.commitLogAppliedIndex {
+		c.commitLogAppliedIndex = index
+	}
 }
 
 func (c *controlPlane) checkOperationPreconditionsLocked(opts ControlWriteOptions, fingerprint string) (bool, error) {
@@ -784,22 +947,24 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 		shards = append(shards, shard)
 	}
 	return controlPlaneState{
-		Version:     1,
-		NodeID:      c.nodeID,
-		ClusterID:   c.clusterID,
-		StorageMode: c.storageMode,
-		Raft:        c.raft,
-		Draining:    c.draining,
-		Revision:    c.revision,
-		Order:       append([]string(nil), c.order...),
-		Shards:      shards,
-		AppliedOps:  c.appliedOpsSnapshotLocked(),
+		Version:               1,
+		NodeID:                c.nodeID,
+		ClusterID:             c.clusterID,
+		StorageMode:           c.storageMode,
+		Raft:                  c.raft,
+		Draining:              c.draining,
+		Revision:              c.revision,
+		CommitLogAppliedIndex: c.commitLogAppliedIndex,
+		Order:                 append([]string(nil), c.order...),
+		Shards:                shards,
+		AppliedOps:            c.appliedOpsSnapshotLocked(),
 	}
 }
 
 func (c *controlPlane) applyState(state controlPlaneState) error {
 	c.draining = state.Draining
 	c.revision = state.Revision
+	c.commitLogAppliedIndex = state.CommitLogAppliedIndex
 	c.order = append([]string(nil), state.Order...)
 	c.shards = make(map[string]ShardStatus, len(state.Shards))
 	for _, shard := range state.Shards {

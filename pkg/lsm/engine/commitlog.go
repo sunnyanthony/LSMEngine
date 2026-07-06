@@ -16,6 +16,15 @@ type internalCommitLogIndexObserver interface {
 	ObserveCommittedIndex(index uint64)
 }
 
+type commitLogCommittedEntryObserver interface {
+	ObserveCommittedControl(entry controlCommittedEntry) error
+	ObserveCommittedData(entry dataCommittedEntry) error
+}
+
+type commitLogCommittedEntryObserverSetter interface {
+	SetCommittedEntryObserver(observer commitLogCommittedEntryObserver) error
+}
+
 func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
 	entry, err := c.inner.CommitControl(ctx, toInternalControlMutation(mutation))
 	if err != nil {
@@ -66,6 +75,17 @@ func (c *builtinCommitLogConsensus) ObserveCommittedIndex(index uint64) {
 	observer.ObserveCommittedIndex(index)
 }
 
+func (c *builtinCommitLogConsensus) SetCommittedEntryObserver(observer commitLogCommittedEntryObserver) error {
+	setter, ok := c.inner.(internalcommitlog.CommittedEntryObserverSetter)
+	if !ok {
+		return nil
+	}
+	if observer == nil {
+		return setter.SetCommittedEntryObserver(nil)
+	}
+	return setter.SetCommittedEntryObserver(internalCommittedEntryObserver{observer: observer})
+}
+
 func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (commitLogConsensus, error) {
 	cfg := internalcommitlog.Config{
 		Provider: internalcommitlog.Provider(provider),
@@ -93,6 +113,24 @@ func newEtcdRaftCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 
 type raftPeerTransportAdapter struct {
 	transport RaftMessageTransport
+}
+
+type internalCommittedEntryObserver struct {
+	observer commitLogCommittedEntryObserver
+}
+
+func (o internalCommittedEntryObserver) ObserveCommittedControl(entry internalcommitlog.ControlCommittedEntry) error {
+	if o.observer == nil {
+		return nil
+	}
+	return o.observer.ObserveCommittedControl(fromInternalControlCommittedEntry(entry))
+}
+
+func (o internalCommittedEntryObserver) ObserveCommittedData(entry internalcommitlog.DataCommittedEntry) error {
+	if o.observer == nil {
+		return nil
+	}
+	return o.observer.ObserveCommittedData(fromInternalDataCommittedEntry(entry))
 }
 
 func (a raftPeerTransportAdapter) Send(ctx context.Context, messages []raftpb.Message) error {

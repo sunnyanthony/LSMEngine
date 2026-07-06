@@ -25,6 +25,15 @@ type RaftMessageTransport interface {
 	Send(ctx context.Context, messages []raftpb.Message) error
 }
 
+type CommittedEntryObserver interface {
+	ObserveCommittedControl(entry ControlCommittedEntry) error
+	ObserveCommittedData(entry DataCommittedEntry) error
+}
+
+type CommittedEntryObserverSetter interface {
+	SetCommittedEntryObserver(observer CommittedEntryObserver) error
+}
+
 type ControlMutation struct {
 	Kind    string
 	ShardID string

@@ -166,8 +166,15 @@ func New(opts Options) (*LSM, error) {
 		cancel()
 		return nil, err
 	}
+	lsm.commitLogAppliedIndex = lsm.initialCommitLogAppliedIndex()
 	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
 		observer.ObserveCommittedIndex(lsm.seq)
+	}
+	if setter, ok := lsm.commitLog.(commitLogCommittedEntryObserverSetter); ok {
+		if err := setter.SetCommittedEntryObserver(lsmCommittedEntryObserver{l: lsm}); err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 
 	lsm.bg.Add(1)

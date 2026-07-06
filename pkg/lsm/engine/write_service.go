@@ -105,17 +105,35 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 }
 
 func (s *writeService) applyCommittedData(entry dataCommittedEntry) (uint64, error) {
+	s.l.commitApplyMu.Lock()
+	defer s.l.commitApplyMu.Unlock()
+	return s.applyCommittedDataLocked(entry)
+}
+
+func (s *writeService) applyCommittedDataLocked(entry dataCommittedEntry) (uint64, error) {
 	if entry.Commit.Index == 0 || entry.Commit.Term == 0 || entry.Seq == 0 {
 		return 0, errs.ErrBackpressure
 	}
+	if s.l.shouldSkipCommittedEntryLocked(entry.Commit.Index) {
+		return entry.Seq, nil
+	}
+	var (
+		seq uint64
+		err error
+	)
 	switch entry.Mutation.Kind {
 	case "put":
-		return s.appendPutToLocalStore(entry.Mutation.Key, entry.Mutation.Value, entry.Seq)
+		seq, err = s.appendPutToLocalStore(entry.Mutation.Key, entry.Mutation.Value, entry.Seq)
 	case "delete":
-		return s.appendDeleteToLocalStore(entry.Mutation.Key, entry.Seq)
+		seq, err = s.appendDeleteToLocalStore(entry.Mutation.Key, entry.Seq)
 	default:
 		return entry.Seq, errs.ErrBackpressure
 	}
+	if err != nil {
+		return seq, err
+	}
+	s.l.markCommitLogAppliedLocked(entry.Commit.Index)
+	return seq, nil
 }
 
 func (s *writeService) appendPutToLocalStore(key []byte, value []byte, seq uint64) (uint64, error) {
