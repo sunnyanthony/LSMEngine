@@ -42,6 +42,14 @@ Goals:
 - Distributed transport and membership: outbound peer transport and inbound raft message hooks are present, but network service wiring, durable raft storage, membership lifecycle, quorum-backed commits, and data-plane replication remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
+## External Dependency Boundaries
+- Third-party libraries must sit behind an LSM-owned adapter boundary when they influence core storage, replication, IO, or serving semantics.
+- Public engine concepts should be expressed in LSMEngine terms first: entries, commit positions, committed mutations, shard routes, table edits, and IO interfaces. Library-specific types should stay inside the adapter package unless the boundary is intentionally temporary and documented.
+- This keeps replacement options open: a third-party dependency can be upgraded, swapped, or replaced by an in-house implementation without rewriting unrelated engine, server, or storage code.
+- The IO layer is the model: WAL/SSTable/manifest code use the `internal/lsm/iofs` interfaces, while OS-specific backends such as `os`, async wrappers, or future `io_uring` implementations remain isolated behind that layer.
+- The commit-log/raft path should follow the same rule. Etcd-raft is an implementation detail of the built-in `etcd-raft` provider; engine code should depend on the commit-log contract (`CommitControl`, `CommitData`, committed entries, runtime status) rather than directly on etcd raft state-machine details.
+- Where a foundation branch temporarily exposes a library type at a boundary, the follow-up hardening task is to wrap it in an LSM-owned type before expanding the surface area. The current raft peer-message ingress/transport surface is the important case to revisit before declaring multi-node replication production-ready.
+
 ## Boundary Audit (current focus)
 - `pkg/lsm/engine` is still broad; future work splits responsibilities without widening the public API.
 - `internal/lsm/sstable` consolidated format logic; remaining depth is intentional (cache/bloom/config/storage).
