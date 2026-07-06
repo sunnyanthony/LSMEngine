@@ -100,3 +100,59 @@ func TestServerEtcdRaftCommitLogWriteAndControl(t *testing.T) {
 		t.Fatalf("expected not-leader status 409 after transfer, got %d (%s)", localRec.Code, localRec.Body.String())
 	}
 }
+
+func TestEtcdRaftCommitLogRestoresRuntimeAfterRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := lsm.New(lsm.Options{
+		DataDir: dataDir,
+		NodeID:  "node-a",
+		CommitLog: &lsm.CommitLogOptions{
+			Provider: lsm.CommitLogProviderEtcdRaft,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := store.Put([]byte("k"), []byte("v1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	statusBefore := store.ClusterStatus()
+	if statusBefore.CommitLogRuntime.Index == 0 {
+		t.Fatalf("expected commit log runtime index before restart")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	restarted, err := lsm.New(lsm.Options{
+		DataDir: dataDir,
+		NodeID:  "node-a",
+		CommitLog: &lsm.CommitLogOptions{
+			Provider: lsm.CommitLogProviderEtcdRaft,
+		},
+	})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer func() {
+		if err := restarted.Close(); err != nil {
+			t.Fatalf("close restarted: %v", err)
+		}
+	}()
+	if got, ok := restarted.Get([]byte("k")); !ok || string(got.Value) != "v1" {
+		t.Fatalf("expected restarted store to recover value v1, got %q found=%v", string(got.Value), ok)
+	}
+	statusAfter := restarted.ClusterStatus()
+	if statusAfter.CommitLogRuntime.Index < statusBefore.CommitLogRuntime.Index {
+		t.Fatalf("expected restored commit log index >= %d, got %d",
+			statusBefore.CommitLogRuntime.Index, statusAfter.CommitLogRuntime.Index)
+	}
+	if err := restarted.Put([]byte("k"), []byte("v2")); err != nil {
+		t.Fatalf("put after restart: %v", err)
+	}
+	statusAfterWrite := restarted.ClusterStatus()
+	if statusAfterWrite.CommitLogRuntime.Index <= statusBefore.CommitLogRuntime.Index {
+		t.Fatalf("expected commit log index to advance after restart, before=%d after=%d",
+			statusBefore.CommitLogRuntime.Index, statusAfterWrite.CommitLogRuntime.Index)
+	}
+}
