@@ -11,6 +11,7 @@ const (
 
 type Config struct {
 	Provider  Provider
+	DataDir   string
 	NodeID    string
 	Peers     []string
 	Transport PeerTransport
