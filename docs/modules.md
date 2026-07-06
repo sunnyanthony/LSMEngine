@@ -18,6 +18,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - `factory`: optional injected provider factory (`CommitLogOptions.Factory`); custom providers must return committed entries before engine apply.
   - code layout: public contracts in `pkg/lsm/engine/commitlog_types.go`; built-in provider implementations in `internal/lsm/commitlog/*`; engine adapter/factory glue in `pkg/lsm/engine/commitlog.go` and `pkg/lsm/engine/commitlog_factory.go`.
   - dependency boundary: public peer transport/ingress uses LSM-owned `RaftPeerMessage` envelopes. The builtin etcd-raft adapter encodes/decodes raftpb messages internally, so server/engine callers do not depend on etcd raft protocol structs.
+  - server transport: `pkg/lsm/server/raft_transport.go` provides an HTTP adapter that posts `RaftPeerMessage` envelopes to peer server endpoints; YAML `raft.peer_urls` maps configured node names to URLs and is converted through `lsm.RaftPeerID`.
   - storage boundary: `internal/lsm/commitlog/raft_storage.go` persists builtin etcd-raft hard state and log entries under `<data>/raft/`; future work can replace the file snapshot format with segmented raft WAL/snapshot storage behind the same provider layer.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).

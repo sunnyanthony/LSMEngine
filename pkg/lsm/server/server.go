@@ -4,6 +4,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -50,11 +51,15 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
+	if raft, ok := provider.(raftPeerMessageHandler); ok {
+		handler.raft = raft
+	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
+	mux.HandleFunc(RaftPeerMessagesPath, handler.handleRaftPeerMessages)
 	mux.HandleFunc("/cdc/events", handler.handleCDCEvents)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
@@ -79,8 +84,13 @@ type handler struct {
 	controlWithOptions      lsm.ControlProviderWithOptions
 	writer                  lsm.WriteProvider
 	cdc                     lsm.CDCProvider
+	raft                    raftPeerMessageHandler
 	requests                *writeRequestStore
 	writeConsistencyDefault lsm.WriteConsistency
+}
+
+type raftPeerMessageHandler interface {
+	HandlePeerMessages(ctx context.Context, messages []lsm.RaftPeerMessage) error
 }
 
 const defaultWriteRequestCapacity = 4096
@@ -183,6 +193,10 @@ type cdcEventResponse struct {
 	CommittedAt time.Time `json:"committed_at"`
 }
 
+type raftPeerMessagesRequest struct {
+	Messages []lsm.RaftPeerMessage `json:"messages"`
+}
+
 func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -276,6 +290,26 @@ func (h *handler) handleCDCEvents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) handleRaftPeerMessages(w http.ResponseWriter, r *http.Request) {
+	if h.raft == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req raftPeerMessagesRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if err := h.raft.HandlePeerMessages(r.Context(), req.Messages); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }
 
 func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {

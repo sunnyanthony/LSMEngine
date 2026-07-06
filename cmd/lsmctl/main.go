@@ -79,13 +79,17 @@ func serveCmd(args []string) {
 		*ioBackendStrict = cfg.IOBackendStrict
 	}
 
+	commitLogOpts, err := toCommitLogOptions(cfg.CommitLog, cfg.Raft)
+	if err != nil {
+		log.Fatalf("commitlog config: %v", err)
+	}
 	store, err := lsm.New(lsm.Options{
 		DataDir:            *dataDir,
 		NodeID:             cfg.NodeID,
 		ClusterID:          cfg.ClusterID,
 		StorageMode:        cfg.StorageMode,
 		ControlStatePath:   cfg.ControlStatePath,
-		CommitLog:          toCommitLogOptions(cfg.CommitLog),
+		CommitLog:          commitLogOpts,
 		Raft:               toRaftOptions(cfg.Raft),
 		ShardMap:           toShardMap(cfg.Shards),
 		IOBackend:          *ioBackend,
@@ -281,13 +285,34 @@ func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
 	}
 }
 
-func toCommitLogOptions(cfg serverconfig.CommitLogConfig) *lsm.CommitLogOptions {
+func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.RaftConfig) (*lsm.CommitLogOptions, error) {
 	if cfg.Provider == "" {
-		return nil
+		return nil, nil
 	}
-	return &lsm.CommitLogOptions{
+	opts := &lsm.CommitLogOptions{
 		Provider: lsm.CommitLogProvider(cfg.Provider),
 	}
+	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(raftCfg.PeerURLs) > 0 {
+		transport, err := server.NewRaftHTTPTransport(server.RaftHTTPTransportOptions{
+			PeerURLs: toRaftPeerURLMap(raftCfg.PeerURLs),
+		})
+		if err != nil {
+			return nil, err
+		}
+		opts.Transport = transport
+	}
+	return opts, nil
+}
+
+func toRaftPeerURLMap(in map[string]string) map[uint64]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[uint64]string, len(in))
+	for nodeID, endpoint := range in {
+		out[lsm.RaftPeerID(nodeID)] = endpoint
+	}
+	return out
 }
 
 func toShardMap(in []serverconfig.ShardConfig) []lsm.ShardConfig {

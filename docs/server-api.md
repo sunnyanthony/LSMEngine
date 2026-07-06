@@ -35,7 +35,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Control mutations are executed through a commit-log adapter (`commitlog.provider`).
   - Stage-1 default: `local` (single-node ordered commit, then deterministic local apply).
   - Stage-1 foundation: `etcd-raft` is wired for cluster-of-one propose/commit/apply.
-  - Static multi-peer bootstrap currently requires an outbound raft transport adapter (engine-side injection), and inbound peer-message handling is available via `HandlePeerMessages`. Both use LSM-owned `RaftPeerMessage` envelopes; etcd raftpb payloads remain a builtin provider implementation detail. The builtin provider persists raft hard state/log entries under `<data>/raft/`, but network service routing, production raft WAL/snapshots, quorum-backed commits, and membership lifecycle are deferred.
+  - Static multi-peer bootstrap can use server-mode HTTP peer delivery with `raft.peer_urls`, or embedded callers can inject `CommitLogOptions.Transport`. Inbound peer-message handling is available via `POST /cluster/raft/messages` and `HandlePeerMessages`. Both use LSM-owned `RaftPeerMessage` envelopes; etcd raftpb payloads remain a builtin provider implementation detail. The builtin provider persists raft hard state/log entries under `<data>/raft/`, but production raft WAL/snapshots, quorum-backed commits, and membership lifecycle are deferred.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
   - Embedded mode can inject a custom commit-log provider via `CommitLogOptions.Factory`; the provider contract is committed-entry first, not apply-callback based.
@@ -85,7 +85,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Control-plane persistence config:
   - `node_id`, `cluster_id`, `storage_mode`.
   - `control_state_path` (optional, defaults to `<data_dir>/control_state.json`).
-  - `raft.peers` (optional): static peer list used to bootstrap etcd-raft node IDs; if more than one peer is set, commit-log transport injection is required.
+  - `raft.peers` (optional): static peer list used to bootstrap etcd-raft node IDs.
+  - `raft.peer_urls` (optional): node-name to server URL map used by `lsmctl serve` to build the HTTP raft peer transport when `commitlog.provider=etcd-raft` and `raft.peers` has more than one node.
   - `shards` must be declared in route order with non-overlapping ranges; open-ended range is only allowed on the last shard.
   - Startup validates persisted identity; mismatch fails startup to prevent cross-cluster state reuse.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.

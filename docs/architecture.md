@@ -25,7 +25,7 @@ Goals:
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - M1 etcd-raft commit-log foundation: `commitlog.provider=etcd-raft` now executes control/data mutations through a real Raft propose/commit/apply path for cluster-of-one deployments.
-- M1 raft peer ingress/transport foundation: when `raft.peers` has multiple members, etcd-raft can bootstrap static peer ids, route outbound peer messages through `CommitLogOptions.Transport`, and accept inbound peer messages via `HandlePeerMessages`; the public transport/ingress surface uses LSM-owned `RaftPeerMessage` envelopes while etcd raftpb encoding stays inside the builtin provider adapter. Network service wiring, quorum-backed commits, production raft log segmentation/snapshots, and membership lifecycle remain deferred.
+- M1 raft peer ingress/transport foundation: when `raft.peers` has multiple members, etcd-raft can bootstrap static peer ids, route outbound peer messages through `CommitLogOptions.Transport`, and accept inbound peer messages via `HandlePeerMessages`. Server mode can wire HTTP peer delivery with `raft.peer_urls`, posting LSM-owned `RaftPeerMessage` envelopes to `/cluster/raft/messages`; etcd raftpb encoding stays inside the builtin provider adapter. Quorum-backed commits, production raft log segmentation/snapshots, and membership lifecycle remain deferred.
 - M1 raft storage foundation: the builtin etcd-raft provider persists raft hard state and log entries under `<data>/raft/`, restores runtime position after restart, and continues committed indexes instead of re-bootstraping from an empty in-memory raft log.
 - M1 commit-log runtime observability: `ClusterStatus` includes `commit_log_runtime` (`mode/index/term/leader/replicas`) so control-plane health and progress can be inspected without parsing logs. Multi-peer transport scaffolding reports `mode=raft_transport_foundation`, not real multi-node raft operation.
 - M1 commit-log extensibility: `CommitLogOptions.Factory` can inject a custom provider, but providers must return committed entries (`CommitControl` / `CommitData`) before the engine applies local state.
@@ -38,9 +38,10 @@ Goals:
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
 - IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
+- External dependency boundaries: third-party core libraries should sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example, and builtin etcd-raft stays behind the commit-log provider plus `RaftPeerMessage` envelope instead of exposing raftpb types.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: outbound peer transport and inbound raft message hooks are present, and the builtin raft provider now has a simple durable state file, but network service wiring, production raft WAL/snapshots, membership lifecycle, quorum-backed commits, and data-plane replication remain deferred for later phases.
+- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, and the builtin raft provider's simple durable state file are present, but production raft WAL/snapshots, membership lifecycle, quorum-backed commits, and data-plane replication remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## Boundary Audit (current focus)

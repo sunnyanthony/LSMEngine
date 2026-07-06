@@ -36,10 +36,11 @@ type CommitLogConfig struct {
 
 // RaftConfig captures control-plane raft settings.
 type RaftConfig struct {
-	Replicas          int           `yaml:"replicas"`
-	ElectionTimeout   time.Duration `yaml:"election_timeout"`
-	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
-	Peers             []string      `yaml:"peers"`
+	Replicas          int               `yaml:"replicas"`
+	ElectionTimeout   time.Duration     `yaml:"election_timeout"`
+	HeartbeatInterval time.Duration     `yaml:"heartbeat_interval"`
+	Peers             []string          `yaml:"peers"`
+	PeerURLs          map[string]string `yaml:"peer_urls"`
 }
 
 // ShardConfig describes a fixed shard range in server YAML.

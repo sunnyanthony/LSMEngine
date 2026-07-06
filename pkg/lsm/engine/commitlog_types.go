@@ -1,6 +1,10 @@
 package engine
 
-import "context"
+import (
+	"context"
+
+	"lsmengine/internal/lsm/raftid"
+)
 
 // CommitLogProvider selects the commit-log backend.
 type CommitLogProvider string
@@ -36,6 +40,11 @@ type RaftPeerMessage struct {
 // handled via CommitLogConsensus.HandlePeerMessages.
 type RaftMessageTransport interface {
 	Send(ctx context.Context, messages []RaftPeerMessage) error
+}
+
+// RaftPeerID returns the deterministic raft id used for a configured node name.
+func RaftPeerID(nodeID string) uint64 {
+	return raftid.StableNodeID(nodeID)
 }
 
 // CommitLogControlMutation is a control-plane state mutation that must go

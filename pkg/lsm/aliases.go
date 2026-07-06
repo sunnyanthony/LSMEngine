@@ -66,3 +66,7 @@ const (
 func New(opts Options) (*LSM, error) {
 	return engine.New(opts)
 }
+
+func RaftPeerID(nodeID string) uint64 {
+	return engine.RaftPeerID(nodeID)
+}

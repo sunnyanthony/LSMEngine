@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"lsmengine/internal/lsm/raftid"
 )
 
 type raftCommitProposal struct {
@@ -429,13 +429,7 @@ func (p raftCommitProposal) committedEntry(commit Commit) (raftCommittedProposal
 }
 
 func stableRaftNodeID(nodeID string) uint64 {
-	hasher := fnv.New64a()
-	_, _ = hasher.Write([]byte(nodeID))
-	id := hasher.Sum64()
-	if id == 0 {
-		return 1
-	}
-	return id
+	return raftid.StableNodeID(nodeID)
 }
 
 func resolveRaftPeerIDs(nodeName string, peers []string) ([]uint64, error) {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,13 @@ type cdcStubProvider struct {
 	}
 }
 
+type raftStubProvider struct {
+	stubProvider
+	mu       sync.Mutex
+	messages []lsm.RaftPeerMessage
+	err      error
+}
+
 func newWriteControlStubProvider() *writeControlStubProvider {
 	return &writeControlStubProvider{
 		control: newControlStubProvider(),
@@ -72,6 +80,21 @@ func (p *cdcStubProvider) ReadCDCEvents(shardID string, offset uint64, limit int
 	p.lastReq.offset = offset
 	p.lastReq.limit = limit
 	return p.result, nil
+}
+
+func (p *raftStubProvider) HandlePeerMessages(_ context.Context, messages []lsm.RaftPeerMessage) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.messages = append(p.messages, messages...)
+	return p.err
+}
+
+func (p *raftStubProvider) messagesCopy() []lsm.RaftPeerMessage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]lsm.RaftPeerMessage, len(p.messages))
+	copy(out, p.messages)
+	return out
 }
 
 func (p *writeControlStubProvider) Stats() lsm.Stats   { return p.write.Stats() }
@@ -478,6 +501,42 @@ func TestHandlerCDCEvents(t *testing.T) {
 	}
 	if out.Events[1].Tombstone != true {
 		t.Fatalf("expected second event tombstone=true")
+	}
+}
+
+func TestHandlerRaftPeerMessages(t *testing.T) {
+	provider := &raftStubProvider{}
+	handler := NewHandler(provider)
+	body := `{"messages":[{"from":1,"to":2,"term":3,"type":"MsgApp","payload":"AQID"}]}`
+	req := httptest.NewRequest(http.MethodPost, RaftPeerMessagesPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	messages := provider.messagesCopy()
+	if len(messages) != 1 {
+		t.Fatalf("expected one raft peer message, got %d", len(messages))
+	}
+	if messages[0].From != 1 || messages[0].To != 2 || messages[0].Type != "MsgApp" {
+		t.Fatalf("unexpected raft peer message: %+v", messages[0])
+	}
+	if string(messages[0].Payload) != string([]byte{1, 2, 3}) {
+		t.Fatalf("unexpected raft peer payload: %v", messages[0].Payload)
+	}
+}
+
+func TestHandlerRaftPeerMessagesUnavailable(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodPost, RaftPeerMessagesPath, strings.NewReader(`{"messages":[]}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
