@@ -1,10 +1,6 @@
 package engine
 
-import (
-	"context"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
-)
+import "context"
 
 // CommitLogProvider selects the commit-log backend.
 type CommitLogProvider string
@@ -21,12 +17,25 @@ type CommitLogOptions struct {
 	Factory   CommitLogFactory     `json:"-" yaml:"-"`
 }
 
-// RaftMessageTransport sends raft protocol messages to peer nodes.
+// RaftPeerMessage is an LSM-owned envelope for raft peer traffic.
+//
+// Payload is provider-specific encoded message data. Built-in providers keep
+// library-specific protocol details behind their adapters instead of exposing
+// those types through public APIs.
+type RaftPeerMessage struct {
+	From    uint64 `json:"from"`
+	To      uint64 `json:"to"`
+	Term    uint64 `json:"term,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Payload []byte `json:"payload,omitempty"`
+}
+
+// RaftMessageTransport sends raft peer messages to other nodes.
 //
 // This transport is outbound from the local raft node. Inbound delivery is
 // handled via CommitLogConsensus.HandlePeerMessages.
 type RaftMessageTransport interface {
-	Send(ctx context.Context, messages []raftpb.Message) error
+	Send(ctx context.Context, messages []RaftPeerMessage) error
 }
 
 // CommitLogControlMutation is a control-plane state mutation that must go
@@ -81,7 +90,7 @@ type CommitLogRuntimeStatus struct {
 type CommitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation CommitLogControlMutation) (CommitLogControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation CommitLogDataMutation) (CommitLogDataCommittedEntry, error)
-	HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error
+	HandlePeerMessages(ctx context.Context, messages []RaftPeerMessage) error
 	Provider() CommitLogProvider
 	RuntimeStatus() CommitLogRuntimeStatus
 }

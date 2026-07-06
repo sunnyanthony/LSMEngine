@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"go.etcd.io/etcd/raft/v3/raftpb"
 	"lsmengine/pkg/lsm"
 )
 
@@ -36,7 +35,7 @@ func (integrationCommitLogConsensus) CommitData(_ context.Context, mutation lsm.
 	}, nil
 }
 
-func (integrationCommitLogConsensus) HandlePeerMessages(_ context.Context, _ []raftpb.Message) error {
+func (integrationCommitLogConsensus) HandlePeerMessages(_ context.Context, _ []lsm.RaftPeerMessage) error {
 	return nil
 }
 
@@ -68,7 +67,7 @@ func (c *integrationPeerIngressConsensus) CommitData(_ context.Context, mutation
 	}, nil
 }
 
-func (c *integrationPeerIngressConsensus) HandlePeerMessages(_ context.Context, messages []raftpb.Message) error {
+func (c *integrationPeerIngressConsensus) HandlePeerMessages(_ context.Context, messages []lsm.RaftPeerMessage) error {
 	c.peerCalls.Add(1)
 	c.peerMsgs.Add(int64(len(messages)))
 	return nil
@@ -126,9 +125,9 @@ func TestServerCommitLogFactorySupportsPeerIngress(t *testing.T) {
 		}
 	}()
 
-	if err := store.HandlePeerMessages(context.Background(), []raftpb.Message{
-		{Type: raftpb.MsgHeartbeat, From: 2, To: 1, Term: 1},
-		{Type: raftpb.MsgApp, From: 2, To: 1, Term: 1},
+	if err := store.HandlePeerMessages(context.Background(), []lsm.RaftPeerMessage{
+		{Type: "MsgHeartbeat", From: 2, To: 1, Term: 1},
+		{Type: "MsgApp", From: 2, To: 1, Term: 1},
 	}); err != nil {
 		t.Fatalf("handle peer messages: %v", err)
 	}

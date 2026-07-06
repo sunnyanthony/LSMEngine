@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type testCommitLogFactory struct {
@@ -67,7 +65,7 @@ func (c *testCommitLogConsensus) CommitData(_ context.Context, mutation CommitLo
 	}, nil
 }
 
-func (c *testCommitLogConsensus) HandlePeerMessages(_ context.Context, messages []raftpb.Message) error {
+func (c *testCommitLogConsensus) HandlePeerMessages(_ context.Context, messages []RaftPeerMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.peerCalls++
@@ -201,9 +199,9 @@ func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.HandlePeerMessages(context.Background(), []raftpb.Message{
-		{Type: raftpb.MsgHeartbeat, From: 2, To: 1, Term: 1},
-		{Type: raftpb.MsgApp, From: 2, To: 1, Term: 1},
+	if err := store.HandlePeerMessages(context.Background(), []RaftPeerMessage{
+		{Type: "MsgHeartbeat", From: 2, To: 1, Term: 1},
+		{Type: "MsgApp", From: 2, To: 1, Term: 1},
 	}); err != nil {
 		t.Fatalf("handle peer messages: %v", err)
 	}
@@ -212,5 +210,24 @@ func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
 	}
 	if got := consensus.PeerMessageCount(); got != 2 {
 		t.Fatalf("expected two peer messages, got %d", got)
+	}
+}
+
+func TestLocalCommitLogPeerMessagesNoop(t *testing.T) {
+	store, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderLocal,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.HandlePeerMessages(context.Background(), []RaftPeerMessage{
+		{Type: "not-a-real-raft-message", From: 2, To: 1},
+	}); err != nil {
+		t.Fatalf("expected local peer ingress to no-op, got %v", err)
 	}
 }
