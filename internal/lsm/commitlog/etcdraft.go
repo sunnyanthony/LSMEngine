@@ -41,6 +41,7 @@ type etcdRaftConsensus struct {
 	rawNode     *raft.RawNode
 	storage     *raftPersistentStorage
 	transport   PeerTransport
+	observer    CommittedEntryObserver
 	proposalSeq uint64
 	pending     map[uint64]*pendingRaftProposal
 	committed   []raftCommittedProposal
@@ -215,6 +216,21 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 	lead := c.rawNode.Status().Lead
 	status.Leader = lead != 0 && lead == c.nodeID
 	return status
+}
+
+func (c *etcdRaftConsensus) SetCommittedEntryObserver(observer CommittedEntryObserver) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.observer = observer
+	if observer == nil {
+		return nil
+	}
+	for _, committed := range c.committed {
+		if err := c.notifyCommittedEntryLocked(committed); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *etcdRaftConsensus) commitMutation(
@@ -425,8 +441,9 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			pending.data = committed.Data
 			pending.done = true
 			delete(c.pending, proposal.ID)
+			return nil
 		}
-		return nil
+		return c.notifyCommittedEntryLocked(committed)
 	case raftpb.EntryConfChange:
 		var cc raftpb.ConfChange
 		if err := cc.Unmarshal(entry.Data); err != nil {
@@ -444,6 +461,19 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 	default:
 		return nil
 	}
+}
+
+func (c *etcdRaftConsensus) notifyCommittedEntryLocked(committed raftCommittedProposal) error {
+	if c.observer == nil {
+		return nil
+	}
+	if committed.Control != nil {
+		return c.observer.ObserveCommittedControl(*committed.Control)
+	}
+	if committed.Data != nil {
+		return c.observer.ObserveCommittedData(*committed.Data)
+	}
+	return nil
 }
 
 func (p raftCommitProposal) committedEntry(commit Commit) (raftCommittedProposal, error) {
