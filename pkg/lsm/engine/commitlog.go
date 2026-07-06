@@ -69,6 +69,7 @@ func (c *builtinCommitLogConsensus) ObserveCommittedIndex(index uint64) {
 func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (commitLogConsensus, error) {
 	cfg := internalcommitlog.Config{
 		Provider: internalcommitlog.Provider(provider),
+		DataDir:  opts.DataDir,
 		NodeID:   opts.NodeID,
 	}
 	if opts.Raft != nil {

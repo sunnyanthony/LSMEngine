@@ -39,7 +39,7 @@ type etcdRaftConsensus struct {
 
 	nodeID      uint64
 	rawNode     *raft.RawNode
-	storage     *raft.MemoryStorage
+	storage     *raftPersistentStorage
 	transport   RaftMessageTransport
 	proposalSeq uint64
 	pending     map[uint64]*pendingRaftProposal
@@ -63,6 +63,10 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		nodeName = "node-0"
 	}
 	nodeID := stableRaftNodeID(nodeName)
+	dataDir := strings.TrimSpace(cfg.DataDir)
+	if dataDir == "" {
+		return nil, fmt.Errorf("raft data dir is required")
+	}
 	peerIDs, err := resolveRaftPeerIDs(nodeName, cfg.Peers)
 	if err != nil {
 		return nil, err
@@ -71,7 +75,10 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if len(peerIDs) > 1 && transport == nil {
 		return nil, fmt.Errorf("raft transport is required when raft peers > 1")
 	}
-	storage := raft.NewMemoryStorage()
+	storage, loadedLog, err := newRaftPersistentStorage(dataDir, nodeID)
+	if err != nil {
+		return nil, err
+	}
 	rawNode, err := raft.NewRawNode(&raft.Config{
 		ID:              nodeID,
 		ElectionTick:    etcdRaftElectionTick,
@@ -84,12 +91,14 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new etcd raft node: %w", err)
 	}
-	bootstrapPeers := make([]raft.Peer, 0, len(peerIDs))
-	for _, id := range peerIDs {
-		bootstrapPeers = append(bootstrapPeers, raft.Peer{ID: id})
-	}
-	if err := rawNode.Bootstrap(bootstrapPeers); err != nil {
-		return nil, fmt.Errorf("bootstrap etcd raft node: %w", err)
+	if !loadedLog {
+		bootstrapPeers := make([]raft.Peer, 0, len(peerIDs))
+		for _, id := range peerIDs {
+			bootstrapPeers = append(bootstrapPeers, raft.Peer{ID: id})
+		}
+		if err := rawNode.Bootstrap(bootstrapPeers); err != nil {
+			return nil, fmt.Errorf("bootstrap etcd raft node: %w", err)
+		}
 	}
 	c := &etcdRaftConsensus{
 		nodeID:    nodeID,
@@ -98,6 +107,12 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		transport: transport,
 		pending:   make(map[uint64]*pendingRaftProposal),
 		replicas:  len(peerIDs),
+	}
+	if hardState, _, err := storage.InitialState(); err == nil {
+		c.index = hardState.Commit
+		c.term = hardState.Term
+	} else {
+		return nil, fmt.Errorf("read raft restored state: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
 	defer cancel()
@@ -299,6 +314,9 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 	}
 	if err := c.storage.Append(rd.Entries); err != nil {
 		return fmt.Errorf("raft storage append: %w", err)
+	}
+	if err := c.storage.Persist(); err != nil {
+		return fmt.Errorf("raft storage persist: %w", err)
 	}
 	outbound := make([]raftpb.Message, 0, len(rd.Messages))
 	for _, msg := range rd.Messages {

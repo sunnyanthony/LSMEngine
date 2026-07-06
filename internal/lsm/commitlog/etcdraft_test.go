@@ -33,6 +33,7 @@ func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
 		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
 		NodeID:    "node-a",
 		Peers:     []string{"node-a", "node-b"},
 		Transport: transport,
@@ -64,6 +65,7 @@ func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
 func TestEtcdRaftConsensusRequiresTransportForMultiPeer(t *testing.T) {
 	_, err := newEtcdRaftConsensus(Config{
 		Provider: ProviderEtcdRaft,
+		DataDir:  t.TempDir(),
 		NodeID:   "node-a",
 		Peers:    []string{"node-a", "node-b"},
 	})
@@ -75,10 +77,59 @@ func TestEtcdRaftConsensusRequiresTransportForMultiPeer(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftConsensusPersistsLogAcrossRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  dataDir,
+		NodeID:   "node-a",
+	})
+	if err != nil {
+		t.Fatalf("new first consensus: %v", err)
+	}
+	firstEntry, err := first.CommitData(context.Background(), DataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v1"),
+	})
+	if err != nil {
+		t.Fatalf("first commit: %v", err)
+	}
+	if firstEntry.Commit.Index == 0 || firstEntry.Commit.Term == 0 {
+		t.Fatalf("expected committed raft position, got %+v", firstEntry.Commit)
+	}
+
+	restarted, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  dataDir,
+		NodeID:   "node-a",
+	})
+	if err != nil {
+		t.Fatalf("restart consensus: %v", err)
+	}
+	status := restarted.RuntimeStatus()
+	if status.Index < firstEntry.Commit.Index {
+		t.Fatalf("expected restored index >= %d, got %d", firstEntry.Commit.Index, status.Index)
+	}
+	secondEntry, err := restarted.CommitData(context.Background(), DataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v2"),
+	})
+	if err != nil {
+		t.Fatalf("second commit: %v", err)
+	}
+	if secondEntry.Commit.Index <= firstEntry.Commit.Index {
+		t.Fatalf("expected restarted commit index to advance past %d, got %d",
+			firstEntry.Commit.Index, secondEntry.Commit.Index)
+	}
+}
+
 func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
 		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
 		NodeID:    "node-a",
 		Peers:     []string{"node-a", "node-b"},
 		Transport: transport,
@@ -102,6 +153,7 @@ func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 func TestEtcdRaftConsensusHandlePeerMessagesReturnsStepError(t *testing.T) {
 	consensus, err := newEtcdRaftConsensus(Config{
 		Provider: ProviderEtcdRaft,
+		DataDir:  t.TempDir(),
 		NodeID:   "node-a",
 	})
 	if err != nil {
