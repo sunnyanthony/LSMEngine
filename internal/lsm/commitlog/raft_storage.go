@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -15,19 +17,39 @@ type raftDiskState struct {
 	Entries   []raftpb.Entry   `json:"entries"`
 }
 
-type raftPersistentStorage struct {
-	*raft.MemoryStorage
-	path    string
-	entries []raftpb.Entry
+type raftHardStateDisk struct {
+	HardState raftpb.HardState `json:"hard_state"`
 }
 
+type raftEntrySegmentDisk struct {
+	FirstIndex uint64         `json:"first_index"`
+	LastIndex  uint64         `json:"last_index"`
+	Entries    []raftpb.Entry `json:"entries"`
+}
+
+type raftPersistentStorage struct {
+	*raft.MemoryStorage
+	dir           string
+	hardStatePath string
+	segmentsDir   string
+	legacyPath    string
+	entries       []raftpb.Entry
+	entriesDirty  bool
+}
+
+const raftEntriesPerSegment = 64
+
 func newRaftPersistentStorage(dataDir string, nodeID uint64) (*raftPersistentStorage, bool, error) {
-	path := filepath.Join(dataDir, "raft", fmt.Sprintf("commitlog-%016x.json", nodeID))
+	raftDir := filepath.Join(dataDir, "raft")
+	dir := filepath.Join(raftDir, fmt.Sprintf("commitlog-%016x", nodeID))
 	storage := &raftPersistentStorage{
 		MemoryStorage: raft.NewMemoryStorage(),
-		path:          path,
+		dir:           dir,
+		hardStatePath: filepath.Join(dir, "hard_state.json"),
+		segmentsDir:   filepath.Join(dir, "segments"),
+		legacyPath:    filepath.Join(raftDir, fmt.Sprintf("commitlog-%016x.json", nodeID)),
 	}
-	state, loaded, err := loadRaftDiskState(path)
+	state, loaded, err := storage.loadRaftDiskState()
 	if err != nil {
 		return nil, false, err
 	}
@@ -46,10 +68,91 @@ func newRaftPersistentStorage(dataDir string, nodeID uint64) (*raftPersistentSto
 		}
 		storage.entries = entries
 	}
-	return storage, len(state.Entries) > 0, nil
+	return storage, !raft.IsEmptyHardState(state.HardState) || len(state.Entries) > 0, nil
 }
 
-func loadRaftDiskState(path string) (raftDiskState, bool, error) {
+func (s *raftPersistentStorage) loadRaftDiskState() (raftDiskState, bool, error) {
+	state, loaded, err := loadSegmentedRaftDiskState(s.hardStatePath, s.segmentsDir)
+	if err != nil {
+		return raftDiskState{}, false, err
+	}
+	if loaded {
+		return state, true, nil
+	}
+	state, loaded, err = loadLegacyRaftDiskState(s.legacyPath)
+	if loaded {
+		s.entriesDirty = true
+	}
+	return state, loaded, err
+}
+
+func loadSegmentedRaftDiskState(hardStatePath string, segmentsDir string) (raftDiskState, bool, error) {
+	var state raftDiskState
+	loaded := false
+	data, err := os.ReadFile(hardStatePath)
+	if err == nil {
+		var hard raftHardStateDisk
+		if err := json.Unmarshal(data, &hard); err != nil {
+			return raftDiskState{}, false, fmt.Errorf("decode raft hard state: %w", err)
+		}
+		state.HardState = hard.HardState
+		loaded = true
+	} else if !os.IsNotExist(err) {
+		return raftDiskState{}, false, fmt.Errorf("read raft hard state: %w", err)
+	}
+	segments, err := loadRaftEntrySegments(segmentsDir)
+	if err != nil {
+		return raftDiskState{}, false, err
+	}
+	if len(segments) > 0 {
+		state.Entries = segments
+		loaded = true
+	}
+	return state, loaded, nil
+}
+
+func loadRaftEntrySegments(segmentsDir string) ([]raftpb.Entry, error) {
+	files, err := os.ReadDir(segmentsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read raft log segments: %w", err)
+	}
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		if file.IsDir() || !strings.HasPrefix(file.Name(), "segment-") || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		names = append(names, file.Name())
+	}
+	sort.Strings(names)
+	var entries []raftpb.Entry
+	for _, name := range names {
+		path := filepath.Join(segmentsDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read raft log segment %q: %w", name, err)
+		}
+		var segment raftEntrySegmentDisk
+		if err := json.Unmarshal(data, &segment); err != nil {
+			return nil, fmt.Errorf("decode raft log segment %q: %w", name, err)
+		}
+		if len(segment.Entries) == 0 {
+			continue
+		}
+		if segment.FirstIndex != segment.Entries[0].Index {
+			return nil, fmt.Errorf("raft log segment %q first index mismatch", name)
+		}
+		if segment.LastIndex != segment.Entries[len(segment.Entries)-1].Index {
+			return nil, fmt.Errorf("raft log segment %q last index mismatch", name)
+		}
+		entries = appendRaftEntries(entries, segment.Entries)
+	}
+	return entries, nil
+}
+
+func loadLegacyRaftDiskState(path string) (raftDiskState, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -77,6 +180,7 @@ func (s *raftPersistentStorage) Append(entries []raftpb.Entry) error {
 		return err
 	}
 	s.entries = appendRaftEntries(s.entries, cloned)
+	s.entriesDirty = true
 	return nil
 }
 
@@ -88,27 +192,106 @@ func (s *raftPersistentStorage) Persist() error {
 	if err != nil {
 		return fmt.Errorf("read raft initial state: %w", err)
 	}
-	state := raftDiskState{
-		HardState: hardState,
-		Entries:   cloneRaftEntries(s.entries),
+	if s.entriesDirty {
+		if err := os.MkdirAll(s.segmentsDir, 0o755); err != nil {
+			return fmt.Errorf("create raft state dir: %w", err)
+		}
+		writtenSegments, err := s.persistEntrySegments()
+		if err != nil {
+			return err
+		}
+		if err := s.removeStaleSegments(writtenSegments); err != nil {
+			return err
+		}
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	hard := raftHardStateDisk{HardState: hardState}
+	data, err := json.MarshalIndent(hard, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode raft state: %w", err)
+		return fmt.Errorf("encode raft hard state: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("create raft state dir: %w", err)
+	if err := writeAtomicSyncedFile(s.hardStatePath, data, 0o644); err != nil {
+		return fmt.Errorf("write raft hard state: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := writeSyncedFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write raft state: %w", err)
+	if s.entriesDirty {
+		if err := syncDir(s.segmentsDir); err != nil {
+			return fmt.Errorf("sync raft log segments dir: %w", err)
+		}
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("replace raft state: %w", err)
-	}
-	if err := syncDir(filepath.Dir(s.path)); err != nil {
+	if err := syncDir(s.dir); err != nil {
 		return fmt.Errorf("sync raft state dir: %w", err)
+	}
+	s.entriesDirty = false
+	return nil
+}
+
+func (s *raftPersistentStorage) persistEntrySegments() (map[string]struct{}, error) {
+	written := make(map[string]struct{})
+	entries := cloneRaftEntries(s.entries)
+	for start := 0; start < len(entries); start += raftEntriesPerSegment {
+		end := start + raftEntriesPerSegment
+		if end > len(entries) {
+			end = len(entries)
+		}
+		chunk := cloneRaftEntries(entries[start:end])
+		if len(chunk) == 0 {
+			continue
+		}
+		segment := raftEntrySegmentDisk{
+			FirstIndex: chunk[0].Index,
+			LastIndex:  chunk[len(chunk)-1].Index,
+			Entries:    chunk,
+		}
+		data, err := json.MarshalIndent(segment, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("encode raft log segment: %w", err)
+		}
+		name := raftSegmentFileName(segment.FirstIndex)
+		path := filepath.Join(s.segmentsDir, name)
+		if err := writeAtomicSyncedFile(path, data, 0o644); err != nil {
+			return nil, fmt.Errorf("write raft log segment %q: %w", name, err)
+		}
+		written[name] = struct{}{}
+	}
+	return written, nil
+}
+
+func (s *raftPersistentStorage) removeStaleSegments(written map[string]struct{}) error {
+	files, err := os.ReadDir(s.segmentsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read raft log segments for cleanup: %w", err)
+	}
+	for _, file := range files {
+		if file.IsDir() || !strings.HasPrefix(file.Name(), "segment-") || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		if _, ok := written[file.Name()]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.segmentsDir, file.Name())); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale raft log segment %q: %w", file.Name(), err)
+		}
+	}
+	return nil
+}
+
+func raftSegmentFileName(firstIndex uint64) string {
+	return fmt.Sprintf("segment-%020d.json", firstIndex)
+}
+
+func writeAtomicSyncedFile(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := writeSyncedFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	return nil
 }
