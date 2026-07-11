@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	internalcommitlog "lsmengine/internal/lsm/commitlog"
+	"lsmengine/pkg/lsm/errs"
 )
 
 type builtinCommitLogConsensus struct {
@@ -26,7 +29,7 @@ type commitLogCommittedEntryObserverSetter interface {
 func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
 	entry, err := c.inner.CommitControl(ctx, toInternalControlMutation(mutation))
 	if err != nil {
-		return controlCommittedEntry{}, err
+		return controlCommittedEntry{}, mapInternalCommitLogError(err)
 	}
 	return fromInternalControlCommittedEntry(entry), nil
 }
@@ -34,7 +37,7 @@ func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation 
 func (c *builtinCommitLogConsensus) CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error) {
 	entry, err := c.inner.CommitData(ctx, toInternalDataMutation(mutation))
 	if err != nil {
-		return dataCommittedEntry{}, err
+		return dataCommittedEntry{}, mapInternalCommitLogError(err)
 	}
 	return fromInternalDataCommittedEntry(entry), nil
 }
@@ -44,6 +47,17 @@ func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, mess
 		return nil
 	}
 	return c.inner.HandlePeerMessages(ctx, toInternalPeerMessages(messages))
+}
+
+func mapInternalCommitLogError(err error) error {
+	switch {
+	case errors.Is(err, internalcommitlog.ErrNotLeader):
+		return fmt.Errorf("%w: %v", errs.ErrNotLeader, err)
+	case errors.Is(err, internalcommitlog.ErrUnavailable):
+		return fmt.Errorf("%w: %v", errs.ErrCommitLogUnavailable, err)
+	default:
+		return err
+	}
 }
 
 func (c *builtinCommitLogConsensus) Provider() CommitLogProvider {

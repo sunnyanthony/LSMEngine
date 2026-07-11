@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,39 @@ func TestEtcdRaftConsensusRequiresTransportForMultiPeer(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "transport") {
 		t.Fatalf("expected transport error, got %v", err)
+	}
+}
+
+func TestEtcdRaftConsensusKnownRemoteLeaderRejectsLocalCommit(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		Peers:     []string{"node-a", "node-b", "node-c"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("new etcd raft consensus: %v", err)
+	}
+	remoteLeader := stableRaftNodeID("node-b")
+	messages, err := encodeRaftPeerMessages([]raftpb.Message{
+		{Type: raftpb.MsgHeartbeat, From: remoteLeader, To: consensus.nodeID, Term: 2, Commit: 3},
+	})
+	if err != nil {
+		t.Fatalf("encode peer messages: %v", err)
+	}
+	if err := consensus.HandlePeerMessages(context.Background(), messages); err != nil {
+		t.Fatalf("handle heartbeat: %v", err)
+	}
+
+	_, err = consensus.CommitData(context.Background(), DataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	})
+	if !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("expected ErrNotLeader, got %v", err)
 	}
 }
 
