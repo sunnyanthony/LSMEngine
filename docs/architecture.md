@@ -35,7 +35,7 @@ Goals:
 - M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
 - M1 write consistency API surface: server supports `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
 - M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.
-- M1 routing metadata/retry surface: server exposes route table snapshots (`/cluster/routes`) and write errors include retryable route hints (`revision/shard/leader`) for stale-route refresh and retry.
+- M1 routing metadata/retry surface: server exposes route table snapshots (`/cluster/routes`) and write errors include retryable route hints (`revision/shard/leader`); `server.Gateway` uses cached routes, route-hint updates, refresh fallback, and bounded write attempts for route-aware client writes.
 - M1 CDC foundation: server exposes node-local retained per-shard change events via `/cdc/events` with `offset/limit` and retention signaling (`dropped_before`).
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
@@ -44,7 +44,7 @@ Goals:
 - External dependency boundaries: third-party core libraries should sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example, and builtin etcd-raft stays behind the commit-log provider plus `RaftPeerMessage` envelope instead of exposing raftpb types.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, three-node smoke coverage, leader hints, and retryable commit-log availability errors are present, but production raft WAL/snapshots, membership lifecycle, and full client retry orchestration remain deferred for later phases.
+- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, three-node smoke coverage, leader hints, bounded gateway retries, and retryable commit-log availability errors are present, but production raft WAL/snapshots, membership lifecycle, and higher-level service discovery/load balancing remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## Boundary Audit (current focus)

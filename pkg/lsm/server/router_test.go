@@ -17,12 +17,14 @@ import (
 func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 	var leader atomic.Value
 	leader.Store("node-a")
+	var routeReads atomic.Int32
 	var writesA atomic.Int32
 	var writesB atomic.Int32
 
 	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/cluster/routes":
+			routeReads.Add(1)
 			currentLeader := leader.Load().(string)
 			revision := uint64(1)
 			if currentLeader == "node-b" {
@@ -122,6 +124,9 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 	}
 	if writesB.Load() != 1 {
 		t.Fatalf("expected one retried write to node-b, got %d", writesB.Load())
+	}
+	if routeReads.Load() != 1 {
+		t.Fatalf("expected retry to use route hint without refreshing routes, got %d route reads", routeReads.Load())
 	}
 }
 
@@ -239,6 +244,62 @@ func TestGatewayDeleteRoutesToLeader(t *testing.T) {
 	}
 	if nodeBDeleteCalls.Load() != 1 {
 		t.Fatalf("expected delete to be routed to node-b")
+	}
+}
+
+func TestGatewayStopsAfterMaxWriteAttempts(t *testing.T) {
+	var writes atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/routes":
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: 1,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==",
+						EndKeyBase64:   "eg==",
+						Leader:         "node-a",
+					},
+				},
+			})
+		case "/kv/put":
+			writes.Add(1)
+			writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
+				Error:     "commit log unavailable",
+				Code:      "commit_log_unavailable",
+				Retryable: true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient:       newInMemoryHTTPClient(map[string]http.Handler{"node-a": handler}),
+		MaxWriteAttempts: 3,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	_, err = gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	reqErr, ok := err.(*WriteRequestError)
+	if !ok {
+		t.Fatalf("expected WriteRequestError, got %T", err)
+	}
+	if reqErr.Response.Code != "commit_log_unavailable" {
+		t.Fatalf("expected commit_log_unavailable, got %s", reqErr.Response.Code)
+	}
+	if writes.Load() != 3 {
+		t.Fatalf("expected 3 bounded attempts, got %d", writes.Load())
 	}
 }
 

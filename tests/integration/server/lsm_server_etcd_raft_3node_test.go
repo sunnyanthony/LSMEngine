@@ -196,6 +196,40 @@ func TestEtcdRaftThreeNodeHTTPFollowerWriteReturnsLeaderHint(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftThreeNodeHTTPGatewayRoutesWriteToLeader(t *testing.T) {
+	cluster := newThreeNodeHTTPRaftCluster(t)
+	gateway, err := lsmserver.NewGateway(lsmserver.GatewayOptions{
+		BootstrapURL: cluster.urls["node-b"],
+		NodeEndpoints: map[string]string{
+			"node-a": cluster.urls["node-a"],
+			"node-b": cluster.urls["node-b"],
+			"node-c": cluster.urls["node-c"],
+		},
+		MaxWriteAttempts: 3,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	status, err := gateway.Put(context.Background(), []byte("gw"), []byte("routed"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("gateway put: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed status, got %+v", status)
+	}
+	for _, nodeID := range cluster.peers {
+		nodeID := nodeID
+		t.Run(nodeID, func(t *testing.T) {
+			eventually(t, 2*time.Second, func() bool {
+				entry, ok := cluster.stores[nodeID].Get([]byte("gw"))
+				return ok && string(entry.Value) == "routed"
+			})
+		})
+	}
+	assertNoAsyncRaftErrors(t, cluster.errCh)
+}
+
 type threeNodeHTTPRaftCluster struct {
 	peers  []string
 	urls   map[string]string
