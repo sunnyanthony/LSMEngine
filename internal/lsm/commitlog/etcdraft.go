@@ -281,7 +281,7 @@ func (c *etcdRaftConsensus) commitMutation(
 			c.mu.Lock()
 			delete(c.pending, proposal.ID)
 			c.mu.Unlock()
-			return nil, fmt.Errorf("raft apply timeout: %w", runCtx.Err())
+			return nil, fmt.Errorf("%w: raft apply timeout: %w", ErrUnavailable, runCtx.Err())
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -290,8 +290,12 @@ func (c *etcdRaftConsensus) commitMutation(
 func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rawNode.Status().Lead == c.nodeID {
+	status := c.rawNode.Status()
+	if status.Lead == c.nodeID {
 		return nil
+	}
+	if status.Lead != 0 {
+		return ErrNotLeader
 	}
 	if err := c.rawNode.Campaign(); err != nil {
 		return fmt.Errorf("raft campaign: %w", err)
@@ -306,7 +310,7 @@ func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("raft leader election timeout: %w", ctx.Err())
+			return fmt.Errorf("%w: raft leader election timeout: %w", ErrUnavailable, ctx.Err())
 		default:
 		}
 		if err := c.advanceUntilStableLocked(ctx); err != nil {
@@ -320,7 +324,7 @@ func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			c.mu.Lock()
-			return fmt.Errorf("raft leader election timeout: %w", ctx.Err())
+			return fmt.Errorf("%w: raft leader election timeout: %w", ErrUnavailable, ctx.Err())
 		case <-time.After(time.Millisecond):
 			c.mu.Lock()
 		}

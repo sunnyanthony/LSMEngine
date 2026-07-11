@@ -7,6 +7,8 @@ import "errors"
 var (
 	// ErrNotLeader indicates the node is not allowed to accept writes.
 	ErrNotLeader = errors.New("lsm: not leader")
+	// ErrCommitLogUnavailable indicates the replicated commit path is unavailable.
+	ErrCommitLogUnavailable = errors.New("lsm: commit log unavailable")
 	// ErrWALCorrupt signals a corrupted WAL record or block.
 	ErrWALCorrupt = errors.New("wal corrupt")
 	// ErrWALCorruptSegment indicates a segment with an invalid header.

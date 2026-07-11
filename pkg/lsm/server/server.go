@@ -680,6 +680,8 @@ func writeErrorHTTPStatus(err error) int {
 	switch {
 	case errors.Is(err, errs.ErrNotLeader):
 		return http.StatusConflict
+	case errors.Is(err, errs.ErrCommitLogUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, errs.ErrShardNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, errs.ErrBackpressure):
@@ -723,6 +725,8 @@ func writeErrorCode(err error) string {
 	switch {
 	case errors.Is(err, errs.ErrNotLeader):
 		return "not_leader"
+	case errors.Is(err, errs.ErrCommitLogUnavailable):
+		return "commit_log_unavailable"
 	case errors.Is(err, errs.ErrShardNotFound):
 		return "shard_not_found"
 	case errors.Is(err, errs.ErrBackpressure):
@@ -736,6 +740,7 @@ func writeErrorCode(err error) string {
 
 func isRetryableWriteError(err error) bool {
 	return errors.Is(err, errs.ErrNotLeader) ||
+		errors.Is(err, errs.ErrCommitLogUnavailable) ||
 		errors.Is(err, errs.ErrShardNotFound) ||
 		errors.Is(err, errs.ErrBackpressure)
 }

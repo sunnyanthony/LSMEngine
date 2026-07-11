@@ -836,6 +836,31 @@ func TestHandlerDeleteLocalCommittedRejectsNotLeader(t *testing.T) {
 	}
 }
 
+func TestHandlerPutLocalCommittedCommitLogUnavailable(t *testing.T) {
+	p := newWriteStubProvider()
+	p.putErr = errs.ErrCommitLogUnavailable
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("a")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("1")) + `","consistency":"local_committed"}`)
+	req := httptest.NewRequest(http.MethodPost, "/kv/put", body)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+	var out writeErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Code != "commit_log_unavailable" {
+		t.Fatalf("expected commit_log_unavailable code, got %s", out.Code)
+	}
+	if !out.Retryable {
+		t.Fatalf("expected retryable=true")
+	}
+}
+
 func TestHandlerRejectsLinearizableConsistency(t *testing.T) {
 	p := newWriteStubProvider()
 	handler := NewHandler(p)

@@ -29,6 +29,7 @@ Goals:
 - M1 raft storage foundation: the builtin etcd-raft provider persists raft hard state and log entries under `<data>/raft/`, restores runtime position after restart, and continues committed indexes instead of re-bootstraping from an empty in-memory raft log.
 - M1 follower apply foundation: builtin raft committed entries without a local pending proposal are observed by the engine and materialized into local control state or WAL/memtable state. Applied commit indexes are tracked so duplicate or restarted delivery can be skipped.
 - M1 3-node smoke coverage: integration tests now exercise a three-node etcd-raft write through both in-process peer delivery and HTTP peer delivery, proving a leader write can commit and materialize on followers in the foundation path.
+- M1 leader/error surface: builtin raft providers reject local proposals with `ErrNotLeader` when a different leader is known, and map leader-election/apply timeouts to `ErrCommitLogUnavailable` so server writes can return retryable routing or availability responses.
 - M1 commit-log runtime observability: `ClusterStatus` includes `commit_log_runtime` (`mode/index/term/leader/replicas`) so control-plane health and progress can be inspected without parsing logs. Multi-peer transport scaffolding reports `mode=raft_transport_foundation`, not real multi-node raft operation.
 - M1 commit-log extensibility: `CommitLogOptions.Factory` can inject a custom provider, but providers must return committed entries (`CommitControl` / `CommitData`) before the engine applies local state.
 - M1 data write commit path: Put/Delete mutations are also routed through the same commit-log adapter before local WAL/materialization.
@@ -43,7 +44,7 @@ Goals:
 - External dependency boundaries: third-party core libraries should sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example, and builtin etcd-raft stays behind the commit-log provider plus `RaftPeerMessage` envelope instead of exposing raftpb types.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, three-node smoke coverage, and the builtin raft provider's simple durable state file are present, but production raft WAL/snapshots, membership lifecycle, and hardened quorum/leader-routing behavior remain deferred for later phases.
+- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, three-node smoke coverage, leader hints, and retryable commit-log availability errors are present, but production raft WAL/snapshots, membership lifecycle, and full client retry orchestration remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## Boundary Audit (current focus)
