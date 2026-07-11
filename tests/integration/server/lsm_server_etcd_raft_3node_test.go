@@ -3,7 +3,10 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -135,16 +138,85 @@ func TestEtcdRaftThreeNodeWriteReplicatesToFollowers(t *testing.T) {
 }
 
 func TestEtcdRaftThreeNodeHTTPWriteReplicatesToFollowers(t *testing.T) {
+	cluster := newThreeNodeHTTPRaftCluster(t)
+
+	if err := cluster.stores["node-a"].Put([]byte("k"), []byte("v-http")); err != nil {
+		t.Fatalf("put on leader: %v", err)
+	}
+	for _, nodeID := range cluster.peers {
+		nodeID := nodeID
+		t.Run(nodeID, func(t *testing.T) {
+			eventually(t, 2*time.Second, func() bool {
+				entry, ok := cluster.stores[nodeID].Get([]byte("k"))
+				return ok && string(entry.Value) == "v-http"
+			})
+		})
+	}
+	assertNoAsyncRaftErrors(t, cluster.errCh)
+}
+
+func TestEtcdRaftThreeNodeHTTPFollowerWriteReturnsLeaderHint(t *testing.T) {
+	cluster := newThreeNodeHTTPRaftCluster(t)
+	if err := cluster.stores["node-a"].Put([]byte("seed"), []byte("v")); err != nil {
+		t.Fatalf("seed leader: %v", err)
+	}
+	eventually(t, 2*time.Second, func() bool {
+		entry, ok := cluster.stores["node-b"].Get([]byte("seed"))
+		return ok && string(entry.Value) == "v"
+	})
+
+	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("m")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("from-follower")) + `","consistency":"local_committed"}`)
+	resp, err := http.Post(cluster.urls["node-b"]+"/kv/put", "application/json", body)
+	if err != nil {
+		t.Fatalf("post follower write: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d", resp.StatusCode)
+	}
+	var out struct {
+		Code      string `json:"code"`
+		Retryable bool   `json:"retryable"`
+		Route     *struct {
+			ShardID string `json:"shard_id"`
+			Leader  string `json:"leader"`
+		} `json:"route"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode follower write error: %v", err)
+	}
+	if out.Code != "not_leader" {
+		t.Fatalf("expected not_leader code, got %s", out.Code)
+	}
+	if !out.Retryable {
+		t.Fatalf("expected retryable=true")
+	}
+	if out.Route == nil || out.Route.ShardID != "users" || out.Route.Leader != "node-a" {
+		t.Fatalf("unexpected route hint: %+v", out.Route)
+	}
+}
+
+type threeNodeHTTPRaftCluster struct {
+	peers  []string
+	urls   map[string]string
+	stores map[string]*lsm.LSM
+	errCh  chan error
+}
+
+func newThreeNodeHTTPRaftCluster(t *testing.T) threeNodeHTTPRaftCluster {
+	t.Helper()
 	peers := []string{"node-a", "node-b", "node-c"}
 	listeners := make(map[string]net.Listener, len(peers))
 	peerURLs := make(map[uint64]string, len(peers))
+	urls := make(map[string]string, len(peers))
 	for _, nodeID := range peers {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("listen %s: %v", nodeID, err)
 		}
 		listeners[nodeID] = listener
-		peerURLs[lsm.RaftPeerID(nodeID)] = "http://" + listener.Addr().String()
+		urls[nodeID] = "http://" + listener.Addr().String()
+		peerURLs[lsm.RaftPeerID(nodeID)] = urls[nodeID]
 	}
 
 	errCh := make(chan error, 32)
@@ -210,20 +282,12 @@ func TestEtcdRaftThreeNodeHTTPWriteReplicatesToFollowers(t *testing.T) {
 			}
 		}
 	})
-
-	if err := stores["node-a"].Put([]byte("k"), []byte("v-http")); err != nil {
-		t.Fatalf("put on leader: %v", err)
+	return threeNodeHTTPRaftCluster{
+		peers:  peers,
+		urls:   urls,
+		stores: stores,
+		errCh:  errCh,
 	}
-	for _, nodeID := range peers {
-		nodeID := nodeID
-		t.Run(nodeID, func(t *testing.T) {
-			eventually(t, 2*time.Second, func() bool {
-				entry, ok := stores[nodeID].Get([]byte("k"))
-				return ok && string(entry.Value) == "v-http"
-			})
-		})
-	}
-	assertNoAsyncRaftErrors(t, errCh)
 }
 
 func assertNoAsyncRaftErrors(t *testing.T, errCh <-chan error) {

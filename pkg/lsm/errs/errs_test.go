@@ -5,6 +5,7 @@ import "testing"
 func TestErrorsAreDistinct(t *testing.T) {
 	errs := []error{
 		ErrNotLeader,
+		ErrCommitLogUnavailable,
 		ErrWALCorrupt,
 		ErrWALCorruptSegment,
 		ErrWALMissingSegment,
