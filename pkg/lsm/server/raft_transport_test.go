@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 )
 
 func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	peerID := lsm.RaftPeerID("node-b")
-	var got raftPeerMessagesRequest
+	got := make(chan raftPeerMessagesRequest, 1)
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("expected POST, got %s", r.Method)
@@ -20,9 +21,11 @@ func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 		if r.URL.Path != RaftPeerMessagesPath {
 			t.Fatalf("expected path %s, got %s", RaftPeerMessagesPath, r.URL.Path)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+		var req raftPeerMessagesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
+		got <- req
 		writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 	}))
 	defer peer.Close()
@@ -39,14 +42,20 @@ func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if len(got.Messages) != 1 {
-		t.Fatalf("expected one message, got %d", len(got.Messages))
+	var req raftPeerMessagesRequest
+	select {
+	case req = <-got:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for raft peer request")
 	}
-	if got.Messages[0].To != peerID {
-		t.Fatalf("expected target %d, got %d", peerID, got.Messages[0].To)
+	if len(req.Messages) != 1 {
+		t.Fatalf("expected one message, got %d", len(req.Messages))
 	}
-	if string(got.Messages[0].Payload) != string([]byte{1, 2, 3}) {
-		t.Fatalf("unexpected payload: %v", got.Messages[0].Payload)
+	if req.Messages[0].To != peerID {
+		t.Fatalf("expected target %d, got %d", peerID, req.Messages[0].To)
+	}
+	if string(req.Messages[0].Payload) != string([]byte{1, 2, 3}) {
+		t.Fatalf("unexpected payload: %v", req.Messages[0].Payload)
 	}
 }
 
