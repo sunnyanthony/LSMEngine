@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,17 +39,19 @@ type pendingRaftProposal struct {
 type etcdRaftConsensus struct {
 	mu sync.Mutex
 
-	nodeID      uint64
-	rawNode     *raft.RawNode
-	storage     *raftPersistentStorage
-	transport   RaftMessageTransport
-	observer    CommittedEntryObserver
-	proposalSeq uint64
-	pending     map[uint64]*pendingRaftProposal
-	committed   []raftCommittedProposal
-	index       uint64
-	term        uint64
-	replicas    int
+	nodeID         uint64
+	rawNode        *raft.RawNode
+	storage        *raftPersistentStorage
+	transport      RaftMessageTransport
+	observer       CommittedEntryObserver
+	proposalSeq    uint64
+	pending        map[uint64]*pendingRaftProposal
+	committed      []raftCommittedProposal
+	index          uint64
+	term           uint64
+	snapshotPolicy SnapshotPolicy
+	snapshotIndex  uint64
+	replicas       int
 
 	lastErrorCode string
 	lastError     string
@@ -107,18 +110,24 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		}
 	}
 	c := &etcdRaftConsensus{
-		nodeID:    nodeID,
-		rawNode:   rawNode,
-		storage:   storage,
-		transport: transport,
-		pending:   make(map[uint64]*pendingRaftProposal),
-		replicas:  len(peerIDs),
+		nodeID:         nodeID,
+		rawNode:        rawNode,
+		storage:        storage,
+		transport:      transport,
+		snapshotPolicy: cfg.SnapshotPolicy,
+		pending:        make(map[uint64]*pendingRaftProposal),
+		replicas:       len(peerIDs),
 	}
 	if hardState, _, err := storage.InitialState(); err == nil {
 		c.index = hardState.Commit
 		c.term = hardState.Term
 	} else {
 		return nil, fmt.Errorf("read raft restored state: %w", err)
+	}
+	if snapshot, err := storage.Snapshot(); err == nil && !raft.IsEmptySnap(snapshot) {
+		c.snapshotIndex = snapshot.Metadata.Index
+	} else if err != nil && !errors.Is(err, raft.ErrSnapshotTemporarilyUnavailable) {
+		return nil, fmt.Errorf("read raft restored snapshot: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
 	defer cancel()
@@ -226,6 +235,7 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 		Mode:          mode,
 		Index:         c.index,
 		Term:          c.term,
+		SnapshotIndex: c.snapshotIndex,
 		Replicas:      replicas,
 		LastErrorCode: c.lastErrorCode,
 		LastError:     c.lastError,
@@ -424,6 +434,7 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		if err := c.storage.ApplySnapshot(rd.Snapshot); err != nil {
 			return fmt.Errorf("raft storage apply snapshot: %w", err)
 		}
+		c.snapshotIndex = rd.Snapshot.Metadata.Index
 	}
 	if !raft.IsEmptyHardState(rd.HardState) {
 		if err := c.storage.SetHardState(rd.HardState); err != nil {
@@ -463,6 +474,9 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		if err := c.applyCommittedEntryLocked(entry); err != nil {
 			return err
 		}
+	}
+	if err := c.maybeSnapshotLocked(); err != nil {
+		return err
 	}
 	c.rawNode.Advance(rd)
 	return nil
@@ -514,6 +528,66 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 	default:
 		return nil
 	}
+}
+
+func (c *etcdRaftConsensus) maybeSnapshotLocked() error {
+	policy := c.snapshotPolicy
+	if policy.AppliedEntries == 0 || c.index == 0 {
+		return nil
+	}
+	if c.index <= c.snapshotIndex || c.index-c.snapshotIndex < policy.AppliedEntries {
+		return nil
+	}
+	snapshotIndex := c.index
+	if policy.RetainEntries > 0 {
+		if c.index <= policy.RetainEntries {
+			return nil
+		}
+		snapshotIndex = c.index - policy.RetainEntries
+	}
+	if snapshotIndex <= c.snapshotIndex {
+		return nil
+	}
+	confState := c.raftConfStateLocked()
+	if _, err := c.storage.CreateSnapshot(snapshotIndex, &confState, nil); err != nil {
+		if errors.Is(err, raft.ErrSnapOutOfDate) {
+			return nil
+		}
+		return fmt.Errorf("raft storage create snapshot: %w", err)
+	}
+	if err := c.storage.Compact(snapshotIndex); err != nil {
+		if !errors.Is(err, raft.ErrCompacted) {
+			return fmt.Errorf("raft storage compact snapshot: %w", err)
+		}
+	}
+	if err := c.storage.Persist(); err != nil {
+		return fmt.Errorf("raft storage persist snapshot: %w", err)
+	}
+	c.snapshotIndex = snapshotIndex
+	return nil
+}
+
+func (c *etcdRaftConsensus) raftConfStateLocked() raftpb.ConfState {
+	status := c.rawNode.Status()
+	return raftpb.ConfState{
+		Voters:         sortedRaftIDs(status.Config.Voters[0]),
+		Learners:       sortedRaftIDs(status.Config.Learners),
+		VotersOutgoing: sortedRaftIDs(status.Config.Voters[1]),
+		LearnersNext:   sortedRaftIDs(status.Config.LearnersNext),
+		AutoLeave:      status.Config.AutoLeave,
+	}
+}
+
+func sortedRaftIDs(in map[uint64]struct{}) []uint64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]uint64, 0, len(in))
+	for id := range in {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func (c *etcdRaftConsensus) notifyCommittedEntryLocked(committed raftCommittedProposal) error {

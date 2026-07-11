@@ -5,6 +5,11 @@ storage_mode: "local"
 control_state_path: "./data/control_state.json"
 commitlog:
   provider: "local"
+  # snapshot_policy is only used by the builtin etcd-raft provider.
+  # It controls raft log snapshot/compaction, not full LSM state transfer.
+  # snapshot_policy:
+  #   applied_entries: 1024
+  #   retain_entries: 128
 raft:
   replicas: 3
   election_timeout: "2s"

@@ -15,11 +15,17 @@ const (
 )
 
 type Config struct {
-	Provider  Provider
-	DataDir   string
-	NodeID    string
-	Peers     []string
-	Transport RaftMessageTransport
+	Provider       Provider
+	DataDir        string
+	NodeID         string
+	Peers          []string
+	Transport      RaftMessageTransport
+	SnapshotPolicy SnapshotPolicy
+}
+
+type SnapshotPolicy struct {
+	AppliedEntries uint64
+	RetainEntries  uint64
 }
 
 type RaftMessageTransport interface {
@@ -69,6 +75,7 @@ type RuntimeStatus struct {
 	Mode           string
 	Index          uint64
 	Term           uint64
+	SnapshotIndex  uint64
 	Leader         bool
 	Replicas       int
 	WriteAvailable bool

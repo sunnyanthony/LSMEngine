@@ -11,6 +11,7 @@ type MissingSegmentPolicy = engine.MissingSegmentPolicy
 type StorageMode = engine.StorageMode
 type CommitLogProvider = engine.CommitLogProvider
 type CommitLogOptions = engine.CommitLogOptions
+type CommitLogSnapshotPolicy = engine.CommitLogSnapshotPolicy
 type CommitLogConsensus = engine.CommitLogConsensus
 type CommitLogFactory = engine.CommitLogFactory
 type CommitLogControlMutation = engine.CommitLogControlMutation

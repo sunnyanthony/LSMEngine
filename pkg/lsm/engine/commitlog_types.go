@@ -17,9 +17,21 @@ const (
 
 // CommitLogOptions controls commit-log provider selection and injection.
 type CommitLogOptions struct {
-	Provider  CommitLogProvider    `json:"provider" yaml:"provider"`
-	Transport RaftMessageTransport `json:"-" yaml:"-"`
-	Factory   CommitLogFactory     `json:"-" yaml:"-"`
+	Provider       CommitLogProvider       `json:"provider" yaml:"provider"`
+	Transport      RaftMessageTransport    `json:"-" yaml:"-"`
+	Factory        CommitLogFactory        `json:"-" yaml:"-"`
+	SnapshotPolicy CommitLogSnapshotPolicy `json:"snapshot_policy" yaml:"snapshot_policy"`
+}
+
+// CommitLogSnapshotPolicy controls provider-owned raft log snapshot/compaction.
+//
+// AppliedEntries disables automatic provider snapshots when zero. RetainEntries
+// keeps a tail of recent raft log entries after each snapshot. This is a raft
+// log policy only; full LSM state-machine snapshot generation remains a
+// separate engine-level responsibility.
+type CommitLogSnapshotPolicy struct {
+	AppliedEntries uint64 `json:"applied_entries" yaml:"applied_entries"`
+	RetainEntries  uint64 `json:"retain_entries" yaml:"retain_entries"`
 }
 
 // RaftPeerMessage is an LSM-owned envelope for raft peer traffic.
@@ -92,6 +104,7 @@ type CommitLogRuntimeStatus struct {
 	Mode           string     `json:"mode"`
 	Index          uint64     `json:"index"`
 	Term           uint64     `json:"term"`
+	SnapshotIndex  uint64     `json:"snapshot_index,omitempty"`
 	Leader         bool       `json:"leader"`
 	Replicas       int        `json:"replicas"`
 	WriteAvailable bool       `json:"write_available"`

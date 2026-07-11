@@ -15,6 +15,9 @@ storage_mode: "pvc"
 control_state_path: "/var/lib/lsm/control_state.json"
 commitlog:
   provider: "local"
+  snapshot_policy:
+    applied_entries: 1024
+    retain_entries: 128
 raft:
   replicas: 3
   election_timeout: "2s"
@@ -64,6 +67,12 @@ io_async_max_in_flight: 8
 	}
 	if cfg.CommitLog.Provider != "local" {
 		t.Fatalf("expected commit log provider, got %q", cfg.CommitLog.Provider)
+	}
+	if cfg.CommitLog.SnapshotPolicy.AppliedEntries != 1024 {
+		t.Fatalf("expected commit log snapshot applied entries, got %d", cfg.CommitLog.SnapshotPolicy.AppliedEntries)
+	}
+	if cfg.CommitLog.SnapshotPolicy.RetainEntries != 128 {
+		t.Fatalf("expected commit log snapshot retain entries, got %d", cfg.CommitLog.SnapshotPolicy.RetainEntries)
 	}
 	if cfg.Raft.Replicas != 3 {
 		t.Fatalf("expected raft replicas, got %d", cfg.Raft.Replicas)

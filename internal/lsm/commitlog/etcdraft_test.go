@@ -209,6 +209,75 @@ func TestEtcdRaftConsensusPersistsLogAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftConsensusSnapshotPolicyCompactsAppliedLog(t *testing.T) {
+	dataDir := t.TempDir()
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  dataDir,
+		NodeID:   "node-a",
+		SnapshotPolicy: SnapshotPolicy{
+			AppliedEntries: 2,
+			RetainEntries:  1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new consensus: %v", err)
+	}
+	var last DataCommittedEntry
+	for i := 0; i < 5; i++ {
+		last, err = consensus.CommitData(context.Background(), DataMutation{
+			Kind:  "put",
+			Key:   []byte("k"),
+			Value: []byte{byte('0' + i)},
+		})
+		if err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+	}
+	status := consensus.RuntimeStatus()
+	if status.SnapshotIndex == 0 {
+		t.Fatalf("expected snapshot index after policy threshold, got %+v", status)
+	}
+	if status.SnapshotIndex >= last.Commit.Index {
+		t.Fatalf("expected retained tail after snapshot, snapshot=%d last=%d",
+			status.SnapshotIndex, last.Commit.Index)
+	}
+	snapshot, err := consensus.storage.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.Metadata.Index != status.SnapshotIndex {
+		t.Fatalf("expected storage snapshot index %d, got %d",
+			status.SnapshotIndex, snapshot.Metadata.Index)
+	}
+	firstIndex, err := consensus.storage.FirstIndex()
+	if err != nil {
+		t.Fatalf("first index: %v", err)
+	}
+	if firstIndex != status.SnapshotIndex+1 {
+		t.Fatalf("expected compacted first index %d, got %d",
+			status.SnapshotIndex+1, firstIndex)
+	}
+
+	restarted, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  dataDir,
+		NodeID:   "node-a",
+		SnapshotPolicy: SnapshotPolicy{
+			AppliedEntries: 2,
+			RetainEntries:  1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("restart consensus: %v", err)
+	}
+	restartedStatus := restarted.RuntimeStatus()
+	if restartedStatus.SnapshotIndex != status.SnapshotIndex {
+		t.Fatalf("expected restored snapshot index %d, got %d",
+			status.SnapshotIndex, restartedStatus.SnapshotIndex)
+	}
+}
+
 func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{

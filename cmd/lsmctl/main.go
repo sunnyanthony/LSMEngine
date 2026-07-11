@@ -291,6 +291,10 @@ func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.R
 	}
 	opts := &lsm.CommitLogOptions{
 		Provider: lsm.CommitLogProvider(cfg.Provider),
+		SnapshotPolicy: lsm.CommitLogSnapshotPolicy{
+			AppliedEntries: cfg.SnapshotPolicy.AppliedEntries,
+			RetainEntries:  cfg.SnapshotPolicy.RetainEntries,
+		},
 	}
 	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(raftCfg.PeerURLs) > 0 {
 		transport, err := server.NewRaftHTTPTransport(server.RaftHTTPTransportOptions{
