@@ -19,12 +19,14 @@ const RaftPeerMessagesPath = "/cluster/raft/messages"
 type RaftHTTPTransportOptions struct {
 	PeerURLs   map[uint64]string
 	HTTPClient *http.Client
+	OnError    func(error)
 }
 
 // RaftHTTPTransport sends LSM-owned raft peer messages to peer server endpoints.
 type RaftHTTPTransport struct {
 	peerURLs map[uint64]string
 	client   *http.Client
+	onError  func(error)
 }
 
 // NewRaftHTTPTransport returns an outbound HTTP transport for raft peer messages.
@@ -47,10 +49,11 @@ func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, er
 	return &RaftHTTPTransport{
 		peerURLs: peerURLs,
 		client:   client,
+		onError:  opts.OnError,
 	}, nil
 }
 
-// Send groups messages by target raft id and posts them to the configured peer endpoint.
+// Send groups messages by target raft id and dispatches them to peer endpoints.
 func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMessage) error {
 	if len(messages) == 0 {
 		return nil
@@ -69,11 +72,44 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMes
 		grouped[message.To] = append(grouped[message.To], message)
 	}
 	for peerID, peerMessages := range grouped {
-		if err := t.sendToPeer(ctx, peerID, peerMessages); err != nil {
-			return err
-		}
+		cloned := cloneRaftPeerMessages(peerMessages)
+		go func(peerID uint64, messages []lsm.RaftPeerMessage) {
+			sendCtx, cancel := detachedRaftSendContext(ctx, 3*time.Second)
+			defer cancel()
+			if err := t.sendToPeer(sendCtx, peerID, messages); err != nil {
+				t.reportError(err)
+			}
+		}(peerID, cloned)
 	}
 	return nil
+}
+
+func (t *RaftHTTPTransport) reportError(err error) {
+	if err == nil || t == nil || t.onError == nil {
+		return
+	}
+	t.onError(err)
+}
+
+func detachedRaftSendContext(parent context.Context, fallback time.Duration) (context.Context, context.CancelFunc) {
+	if parent != nil {
+		if deadline, ok := parent.Deadline(); ok {
+			return context.WithDeadline(context.Background(), deadline)
+		}
+	}
+	return context.WithTimeout(context.Background(), fallback)
+}
+
+func cloneRaftPeerMessages(messages []lsm.RaftPeerMessage) []lsm.RaftPeerMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]lsm.RaftPeerMessage, len(messages))
+	for i := range messages {
+		out[i] = messages[i]
+		out[i].Payload = append([]byte(nil), messages[i].Payload...)
+	}
+	return out
 }
 
 func (t *RaftHTTPTransport) sendToPeer(

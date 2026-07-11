@@ -123,7 +123,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	// Multi-peer clusters may not have enough live peers yet during startup.
 	// We only force immediate self-election in cluster-of-one mode.
 	if len(peerIDs) == 1 {
-		if err := c.ensureLeaderLocked(ctx); err != nil {
+		if err := c.ensureLeader(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -233,22 +233,22 @@ func (c *etcdRaftConsensus) commitMutation(
 	ctx context.Context,
 	proposal raftCommitProposal,
 ) (*pendingRaftProposal, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.rawNode == nil || c.storage == nil {
-		return nil, fmt.Errorf("etcd raft commit log is unavailable")
-	}
-
 	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
 	defer cancel()
-	if err := c.ensureLeaderLocked(runCtx); err != nil {
+	if err := c.ensureLeader(runCtx); err != nil {
 		return nil, err
 	}
 
+	c.mu.Lock()
+	if c.rawNode == nil || c.storage == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("etcd raft commit log is unavailable")
+	}
 	c.proposalSeq++
 	proposal.ID = c.proposalSeq
 	payload, err := json.Marshal(proposal)
 	if err != nil {
+		c.mu.Unlock()
 		return nil, fmt.Errorf("marshal raft proposal: %w", err)
 	}
 
@@ -256,36 +256,50 @@ func (c *etcdRaftConsensus) commitMutation(
 	c.pending[proposal.ID] = pending
 	if err := c.rawNode.Propose(payload); err != nil {
 		delete(c.pending, proposal.ID)
+		c.mu.Unlock()
 		return nil, fmt.Errorf("raft propose: %w", err)
 	}
+	c.mu.Unlock()
 
 	for {
+		c.mu.Lock()
 		if pending.done {
+			c.mu.Unlock()
 			return pending, nil
-		}
-		select {
-		case <-runCtx.Done():
-			delete(c.pending, proposal.ID)
-			return nil, fmt.Errorf("raft apply timeout: %w", runCtx.Err())
-		default:
 		}
 		if err := c.advanceUntilStableLocked(runCtx); err != nil {
 			delete(c.pending, proposal.ID)
+			c.mu.Unlock()
 			return nil, err
 		}
 		if !pending.done {
 			c.rawNode.Tick()
 		}
+		c.mu.Unlock()
+		select {
+		case <-runCtx.Done():
+			c.mu.Lock()
+			delete(c.pending, proposal.ID)
+			c.mu.Unlock()
+			return nil, fmt.Errorf("raft apply timeout: %w", runCtx.Err())
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
-func (c *etcdRaftConsensus) ensureLeaderLocked(ctx context.Context) error {
+func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.rawNode.Status().Lead == c.nodeID {
 		return nil
 	}
 	if err := c.rawNode.Campaign(); err != nil {
 		return fmt.Errorf("raft campaign: %w", err)
 	}
+	return c.waitForLeaderLocked(ctx)
+}
+
+func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 	for {
 		if c.rawNode.Status().Lead == c.nodeID {
 			return nil
@@ -298,7 +312,18 @@ func (c *etcdRaftConsensus) ensureLeaderLocked(ctx context.Context) error {
 		if err := c.advanceUntilStableLocked(ctx); err != nil {
 			return err
 		}
+		if c.rawNode.Status().Lead == c.nodeID {
+			return nil
+		}
 		c.rawNode.Tick()
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			c.mu.Lock()
+			return fmt.Errorf("raft leader election timeout: %w", ctx.Err())
+		case <-time.After(time.Millisecond):
+			c.mu.Lock()
+		}
 	}
 }
 
