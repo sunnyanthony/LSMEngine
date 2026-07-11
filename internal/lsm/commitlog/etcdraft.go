@@ -420,6 +420,11 @@ func (c *etcdRaftConsensus) advanceUntilStableLocked(ctx context.Context) error 
 
 func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 	rd := c.rawNode.Ready()
+	if !raft.IsEmptySnap(rd.Snapshot) {
+		if err := c.storage.ApplySnapshot(rd.Snapshot); err != nil {
+			return fmt.Errorf("raft storage apply snapshot: %w", err)
+		}
+	}
 	if !raft.IsEmptyHardState(rd.HardState) {
 		if err := c.storage.SetHardState(rd.HardState); err != nil {
 			return fmt.Errorf("raft storage set hard state: %w", err)

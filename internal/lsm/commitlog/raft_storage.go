@@ -15,10 +15,15 @@ import (
 type raftDiskState struct {
 	HardState raftpb.HardState `json:"hard_state"`
 	Entries   []raftpb.Entry   `json:"entries"`
+	Snapshot  raftpb.Snapshot  `json:"snapshot,omitempty"`
 }
 
 type raftHardStateDisk struct {
 	HardState raftpb.HardState `json:"hard_state"`
+}
+
+type raftSnapshotDisk struct {
+	Snapshot raftpb.Snapshot `json:"snapshot"`
 }
 
 type raftEntrySegmentDisk struct {
@@ -31,10 +36,13 @@ type raftPersistentStorage struct {
 	*raft.MemoryStorage
 	dir           string
 	hardStatePath string
+	snapshotPath  string
 	segmentsDir   string
 	legacyPath    string
 	entries       []raftpb.Entry
 	entriesDirty  bool
+	snapshot      raftpb.Snapshot
+	snapshotDirty bool
 }
 
 const raftEntriesPerSegment = 64
@@ -46,6 +54,7 @@ func newRaftPersistentStorage(dataDir string, nodeID uint64) (*raftPersistentSto
 		MemoryStorage: raft.NewMemoryStorage(),
 		dir:           dir,
 		hardStatePath: filepath.Join(dir, "hard_state.json"),
+		snapshotPath:  filepath.Join(dir, "snapshot.json"),
 		segmentsDir:   filepath.Join(dir, "segments"),
 		legacyPath:    filepath.Join(raftDir, fmt.Sprintf("commitlog-%016x.json", nodeID)),
 	}
@@ -56,19 +65,26 @@ func newRaftPersistentStorage(dataDir string, nodeID uint64) (*raftPersistentSto
 	if !loaded {
 		return storage, false, nil
 	}
+	if !raft.IsEmptySnap(state.Snapshot) {
+		snapshot := cloneRaftSnapshot(state.Snapshot)
+		if err := storage.MemoryStorage.ApplySnapshot(snapshot); err != nil {
+			return nil, false, fmt.Errorf("restore raft snapshot: %w", err)
+		}
+		storage.snapshot = snapshot
+	}
 	if !raft.IsEmptyHardState(state.HardState) {
 		if err := storage.MemoryStorage.SetHardState(state.HardState); err != nil {
 			return nil, false, fmt.Errorf("restore raft hard state: %w", err)
 		}
 	}
 	if len(state.Entries) > 0 {
-		entries := cloneRaftEntries(state.Entries)
+		entries := entriesAfterSnapshot(state.Entries, state.Snapshot.Metadata.Index)
 		if err := storage.MemoryStorage.Append(entries); err != nil {
 			return nil, false, fmt.Errorf("restore raft entries: %w", err)
 		}
 		storage.entries = entries
 	}
-	return storage, !raft.IsEmptyHardState(state.HardState) || len(state.Entries) > 0, nil
+	return storage, !raft.IsEmptyHardState(state.HardState) || !raft.IsEmptySnap(state.Snapshot) || len(state.Entries) > 0, nil
 }
 
 func (s *raftPersistentStorage) loadRaftDiskState() (raftDiskState, bool, error) {
@@ -82,6 +98,9 @@ func (s *raftPersistentStorage) loadRaftDiskState() (raftDiskState, bool, error)
 	state, loaded, err = loadLegacyRaftDiskState(s.legacyPath)
 	if loaded {
 		s.entriesDirty = true
+		if !raft.IsEmptySnap(state.Snapshot) {
+			s.snapshotDirty = true
+		}
 	}
 	return state, loaded, err
 }
@@ -100,6 +119,15 @@ func loadSegmentedRaftDiskState(hardStatePath string, segmentsDir string) (raftD
 	} else if !os.IsNotExist(err) {
 		return raftDiskState{}, false, fmt.Errorf("read raft hard state: %w", err)
 	}
+	snapshotPath := filepath.Join(filepath.Dir(hardStatePath), "snapshot.json")
+	snapshot, snapshotLoaded, err := loadRaftSnapshot(snapshotPath)
+	if err != nil {
+		return raftDiskState{}, false, err
+	}
+	if snapshotLoaded {
+		state.Snapshot = snapshot
+		loaded = true
+	}
 	segments, err := loadRaftEntrySegments(segmentsDir)
 	if err != nil {
 		return raftDiskState{}, false, err
@@ -109,6 +137,21 @@ func loadSegmentedRaftDiskState(hardStatePath string, segmentsDir string) (raftD
 		loaded = true
 	}
 	return state, loaded, nil
+}
+
+func loadRaftSnapshot(path string) (raftpb.Snapshot, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return raftpb.Snapshot{}, false, nil
+		}
+		return raftpb.Snapshot{}, false, fmt.Errorf("read raft snapshot: %w", err)
+	}
+	var snapshot raftSnapshotDisk
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return raftpb.Snapshot{}, false, fmt.Errorf("decode raft snapshot: %w", err)
+	}
+	return cloneRaftSnapshot(snapshot.Snapshot), true, nil
 }
 
 func loadRaftEntrySegments(segmentsDir string) ([]raftpb.Entry, error) {
@@ -171,6 +214,37 @@ func (s *raftPersistentStorage) SetHardState(st raftpb.HardState) error {
 	return s.MemoryStorage.SetHardState(st)
 }
 
+func (s *raftPersistentStorage) ApplySnapshot(snapshot raftpb.Snapshot) error {
+	cloned := cloneRaftSnapshot(snapshot)
+	if err := s.MemoryStorage.ApplySnapshot(cloned); err != nil {
+		return err
+	}
+	s.snapshot = cloned
+	s.snapshotDirty = true
+	s.entries = nil
+	s.entriesDirty = true
+	return nil
+}
+
+func (s *raftPersistentStorage) CreateSnapshot(index uint64, confState *raftpb.ConfState, data []byte) (raftpb.Snapshot, error) {
+	snapshot, err := s.MemoryStorage.CreateSnapshot(index, confState, append([]byte(nil), data...))
+	if err != nil {
+		return raftpb.Snapshot{}, err
+	}
+	s.snapshot = cloneRaftSnapshot(snapshot)
+	s.snapshotDirty = true
+	return cloneRaftSnapshot(snapshot), nil
+}
+
+func (s *raftPersistentStorage) Compact(index uint64) error {
+	if err := s.MemoryStorage.Compact(index); err != nil {
+		return err
+	}
+	s.entries = compactRaftEntries(s.entries, index)
+	s.entriesDirty = true
+	return nil
+}
+
 func (s *raftPersistentStorage) Append(entries []raftpb.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -191,6 +265,16 @@ func (s *raftPersistentStorage) Persist() error {
 	hardState, _, err := s.InitialState()
 	if err != nil {
 		return fmt.Errorf("read raft initial state: %w", err)
+	}
+	if s.snapshotDirty {
+		snapshot := raftSnapshotDisk{Snapshot: cloneRaftSnapshot(s.snapshot)}
+		data, err := json.MarshalIndent(snapshot, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode raft snapshot: %w", err)
+		}
+		if err := writeAtomicSyncedFile(s.snapshotPath, data, 0o644); err != nil {
+			return fmt.Errorf("write raft snapshot: %w", err)
+		}
 	}
 	if s.entriesDirty {
 		if err := os.MkdirAll(s.segmentsDir, 0o755); err != nil {
@@ -221,6 +305,7 @@ func (s *raftPersistentStorage) Persist() error {
 		return fmt.Errorf("sync raft state dir: %w", err)
 	}
 	s.entriesDirty = false
+	s.snapshotDirty = false
 	return nil
 }
 
@@ -336,6 +421,44 @@ func cloneRaftEntries(entries []raftpb.Entry) []raftpb.Entry {
 		out[i].Data = append([]byte(nil), entries[i].Data...)
 	}
 	return out
+}
+
+func cloneRaftSnapshot(snapshot raftpb.Snapshot) raftpb.Snapshot {
+	out := snapshot
+	out.Data = append([]byte(nil), snapshot.Data...)
+	out.Metadata.ConfState.Voters = append([]uint64(nil), snapshot.Metadata.ConfState.Voters...)
+	out.Metadata.ConfState.Learners = append([]uint64(nil), snapshot.Metadata.ConfState.Learners...)
+	out.Metadata.ConfState.VotersOutgoing = append([]uint64(nil), snapshot.Metadata.ConfState.VotersOutgoing...)
+	out.Metadata.ConfState.LearnersNext = append([]uint64(nil), snapshot.Metadata.ConfState.LearnersNext...)
+	return out
+}
+
+func entriesAfterSnapshot(entries []raftpb.Entry, snapshotIndex uint64) []raftpb.Entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]raftpb.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Index <= snapshotIndex {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return cloneRaftEntries(out)
+}
+
+func compactRaftEntries(entries []raftpb.Entry, compactIndex uint64) []raftpb.Entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]raftpb.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Index <= compactIndex {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return cloneRaftEntries(out)
 }
 
 func appendRaftEntries(existing []raftpb.Entry, incoming []raftpb.Entry) []raftpb.Entry {

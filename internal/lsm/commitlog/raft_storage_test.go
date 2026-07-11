@@ -124,6 +124,102 @@ func TestRaftPersistentStorageRemovesStaleSegmentsOnOverwrite(t *testing.T) {
 	}
 }
 
+func TestRaftPersistentStoragePersistsSnapshotAndCompactedLog(t *testing.T) {
+	dataDir := t.TempDir()
+	nodeID := uint64(4)
+	storage, _, err := newRaftPersistentStorage(dataDir, nodeID)
+	if err != nil {
+		t.Fatalf("new storage: %v", err)
+	}
+	entries := testRaftEntries(1, 6)
+	if err := storage.Append(entries); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := storage.SetHardState(raftpb.HardState{Term: 2, Commit: 6}); err != nil {
+		t.Fatalf("set hard state: %v", err)
+	}
+	confState := &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
+	if _, err := storage.CreateSnapshot(4, confState, []byte("snapshot-data")); err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+	if err := storage.Compact(4); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if err := storage.Persist(); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "raft", "commitlog-0000000000000004", "snapshot.json")); err != nil {
+		t.Fatalf("expected snapshot file: %v", err)
+	}
+
+	restarted, loaded, err := newRaftPersistentStorage(dataDir, nodeID)
+	if err != nil {
+		t.Fatalf("restart storage: %v", err)
+	}
+	if !loaded {
+		t.Fatalf("expected restarted storage to load snapshot")
+	}
+	snapshot, err := restarted.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.Metadata.Index != 4 || snapshot.Metadata.Term != 1 || string(snapshot.Data) != "snapshot-data" {
+		t.Fatalf("unexpected restored snapshot: %+v", snapshot)
+	}
+	firstIndex, err := restarted.FirstIndex()
+	if err != nil {
+		t.Fatalf("first index: %v", err)
+	}
+	if firstIndex != 5 {
+		t.Fatalf("expected first index 5 after compacted snapshot, got %d", firstIndex)
+	}
+	restoredEntries, err := restarted.Entries(5, 7, 1<<20)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(restoredEntries) != 2 || restoredEntries[0].Index != 5 || restoredEntries[1].Index != 6 {
+		t.Fatalf("unexpected restored entries: %+v", restoredEntries)
+	}
+}
+
+func TestRaftPersistentStoragePersistsAppliedSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	nodeID := uint64(5)
+	storage, _, err := newRaftPersistentStorage(dataDir, nodeID)
+	if err != nil {
+		t.Fatalf("new storage: %v", err)
+	}
+	snapshot := raftpb.Snapshot{
+		Data: []byte("applied"),
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     10,
+			Term:      3,
+			ConfState: raftpb.ConfState{Voters: []uint64{1}},
+		},
+	}
+	if err := storage.ApplySnapshot(snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+	if err := storage.Persist(); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	restarted, loaded, err := newRaftPersistentStorage(dataDir, nodeID)
+	if err != nil {
+		t.Fatalf("restart storage: %v", err)
+	}
+	if !loaded {
+		t.Fatalf("expected applied snapshot to load")
+	}
+	restored, err := restarted.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if restored.Metadata.Index != 10 || restored.Metadata.Term != 3 || string(restored.Data) != "applied" {
+		t.Fatalf("unexpected applied snapshot restore: %+v", restored)
+	}
+}
+
 func testRaftEntries(first uint64, count int) []raftpb.Entry {
 	entries := make([]raftpb.Entry, count)
 	for i := range entries {
