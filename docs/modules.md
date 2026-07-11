@@ -27,7 +27,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
   - Also exposes CDC recent-events endpoint (`/cdc/events`).
-- `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache + stale-route refresh/retry for writes).
+- `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, and bounded write attempts).
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.
   - Tracks node-local control `revision` and applied `operation_id` fingerprints for optimistic concurrency plus bounded idempotent retry dedupe.

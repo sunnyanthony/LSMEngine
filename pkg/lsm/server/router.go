@@ -17,16 +17,20 @@ import (
 
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
-	BootstrapURL  string
-	NodeEndpoints map[string]string
-	HTTPClient    *http.Client
+	BootstrapURL      string
+	NodeEndpoints     map[string]string
+	HTTPClient        *http.Client
+	MaxWriteAttempts  int
+	WriteRetryBackoff time.Duration
 }
 
-// Gateway routes writes by shard metadata and retries on stale-route errors.
+// Gateway routes writes by shard metadata and performs bounded retries on retryable write errors.
 type Gateway struct {
 	bootstrapURL  string
 	nodeEndpoints map[string]string
 	client        *http.Client
+	maxAttempts   int
+	retryBackoff  time.Duration
 
 	mu     sync.RWMutex
 	routes cachedRoutes
@@ -82,14 +86,23 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 3 * time.Second}
 	}
+	maxAttempts := opts.MaxWriteAttempts
+	if maxAttempts < 0 {
+		return nil, fmt.Errorf("max write attempts must be non-negative")
+	}
+	if maxAttempts == 0 {
+		maxAttempts = 2
+	}
 	return &Gateway{
 		bootstrapURL:  bootstrapURL,
 		nodeEndpoints: endpoints,
 		client:        client,
+		maxAttempts:   maxAttempts,
+		retryBackoff:  opts.WriteRetryBackoff,
 	}, nil
 }
 
-// Put routes a key write to the current shard leader and retries once on stale routes.
+// Put routes a key write to the current shard leader.
 func (g *Gateway) Put(
 	ctx context.Context,
 	key []byte,
@@ -99,7 +112,7 @@ func (g *Gateway) Put(
 	return g.writeWithRetry(ctx, "put", key, value, consistency)
 }
 
-// Delete routes a delete to the current shard leader and retries once on stale routes.
+// Delete routes a delete to the current shard leader.
 func (g *Gateway) Delete(
 	ctx context.Context,
 	key []byte,
@@ -115,18 +128,63 @@ func (g *Gateway) writeWithRetry(
 	value []byte,
 	consistency lsm.WriteConsistency,
 ) (lsm.WriteRequestStatus, error) {
-	status, err := g.writeOnce(ctx, operation, key, value, consistency)
-	if err == nil {
-		return status, nil
+	for attempt := 1; attempt <= g.maxAttempts; attempt++ {
+		status, err := g.writeOnce(ctx, operation, key, value, consistency)
+		if err == nil {
+			return status, nil
+		}
+		var reqErr *WriteRequestError
+		if !errors.As(err, &reqErr) || !reqErr.Response.Retryable || attempt == g.maxAttempts {
+			return lsm.WriteRequestStatus{}, err
+		}
+		if retryErr := g.prepareWriteRetry(ctx, key, reqErr.Response.Route); retryErr != nil {
+			return lsm.WriteRequestStatus{}, err
+		}
+		if g.retryBackoff > 0 {
+			timer := time.NewTimer(g.retryBackoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return lsm.WriteRequestStatus{}, ctx.Err()
+			case <-timer.C:
+			}
+		}
 	}
-	var reqErr *WriteRequestError
-	if !errors.As(err, &reqErr) || !reqErr.Response.Retryable {
-		return lsm.WriteRequestStatus{}, err
+	return lsm.WriteRequestStatus{}, fmt.Errorf("write retry exhausted")
+}
+
+func (g *Gateway) prepareWriteRetry(ctx context.Context, key []byte, hint *writeRouteHint) error {
+	if g.applyRouteHint(key, hint) {
+		return nil
 	}
-	if refreshErr := g.refreshRoutes(ctx); refreshErr != nil {
-		return lsm.WriteRequestStatus{}, err
+	return g.refreshRoutes(ctx)
+}
+
+func (g *Gateway) applyRouteHint(key []byte, hint *writeRouteHint) bool {
+	if hint == nil || hint.Leader == "" {
+		return false
 	}
-	return g.writeOnce(ctx, operation, key, value, consistency)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if hint.Revision != 0 && hint.Revision < g.routes.revision {
+		return false
+	}
+	for i := range g.routes.shards {
+		shard := &g.routes.shards[i]
+		if hint.ShardID != "" {
+			if shard.id != hint.ShardID {
+				continue
+			}
+		} else if !routeContainsKey(*shard, key) {
+			continue
+		}
+		shard.leader = hint.Leader
+		if hint.Revision > g.routes.revision {
+			g.routes.revision = hint.Revision
+		}
+		return true
+	}
+	return false
 }
 
 func (g *Gateway) writeOnce(
@@ -213,10 +271,7 @@ func (g *Gateway) lookupLeader(key []byte) (string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	for _, shard := range g.routes.shards {
-		if len(shard.start) > 0 && bytes.Compare(key, shard.start) < 0 {
-			continue
-		}
-		if len(shard.end) > 0 && bytes.Compare(key, shard.end) >= 0 {
+		if !routeContainsKey(shard, key) {
 			continue
 		}
 		if shard.leader == "" {
@@ -225,6 +280,16 @@ func (g *Gateway) lookupLeader(key []byte) (string, bool) {
 		return shard.leader, true
 	}
 	return "", false
+}
+
+func routeContainsKey(shard cachedRouteShard, key []byte) bool {
+	if len(shard.start) > 0 && bytes.Compare(key, shard.start) < 0 {
+		return false
+	}
+	if len(shard.end) > 0 && bytes.Compare(key, shard.end) >= 0 {
+		return false
+	}
+	return true
 }
 
 func (g *Gateway) refreshRoutes(ctx context.Context) error {
