@@ -3,6 +3,7 @@ package commitlog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -48,6 +49,10 @@ type etcdRaftConsensus struct {
 	index       uint64
 	term        uint64
 	replicas    int
+
+	lastErrorCode string
+	lastError     string
+	lastErrorAt   time.Time
 }
 
 const (
@@ -137,10 +142,16 @@ func (c *etcdRaftConsensus) CommitControl(ctx context.Context, mutation ControlM
 		Control: &cloned,
 	})
 	if err != nil {
+		c.recordRuntimeError(err)
 		return ControlCommittedEntry{}, err
 	}
 	if pending.control == nil {
-		return ControlCommittedEntry{}, fmt.Errorf("raft committed non-control entry")
+		err := fmt.Errorf("raft committed non-control entry")
+		c.recordRuntimeError(err)
+		return ControlCommittedEntry{}, err
+	}
+	if pending.err != nil {
+		c.recordRuntimeError(pending.err)
 	}
 	return *pending.control, pending.err
 }
@@ -152,10 +163,16 @@ func (c *etcdRaftConsensus) CommitData(ctx context.Context, mutation DataMutatio
 		Data: &cloned,
 	})
 	if err != nil {
+		c.recordRuntimeError(err)
 		return DataCommittedEntry{}, err
 	}
 	if pending.data == nil {
-		return DataCommittedEntry{}, fmt.Errorf("raft committed non-data entry")
+		err := fmt.Errorf("raft committed non-data entry")
+		c.recordRuntimeError(err)
+		return DataCommittedEntry{}, err
+	}
+	if pending.err != nil {
+		c.recordRuntimeError(pending.err)
 	}
 	return *pending.data, pending.err
 }
@@ -164,7 +181,9 @@ func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []r
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.rawNode == nil || c.storage == nil {
-		return fmt.Errorf("etcd raft commit log is unavailable")
+		err := fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
+		c.recordRuntimeErrorLocked(err)
+		return err
 	}
 	if len(messages) == 0 {
 		return nil
@@ -176,9 +195,12 @@ func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []r
 			continue
 		}
 		if err := c.rawNode.Step(msg); err != nil {
-			return fmt.Errorf("raft step peer message: %w", err)
+			err := fmt.Errorf("raft step peer message: %w", err)
+			c.recordRuntimeErrorLocked(err)
+			return err
 		}
 		if err := c.advanceUntilStableLocked(runCtx); err != nil {
+			c.recordRuntimeErrorLocked(err)
 			return err
 		}
 	}
@@ -201,16 +223,30 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 		mode = "raft_transport_foundation"
 	}
 	status := RuntimeStatus{
-		Mode:     mode,
-		Index:    c.index,
-		Term:     c.term,
-		Replicas: replicas,
+		Mode:          mode,
+		Index:         c.index,
+		Term:          c.term,
+		Replicas:      replicas,
+		LastErrorCode: c.lastErrorCode,
+		LastError:     c.lastError,
+		LastErrorAt:   c.lastErrorAt,
 	}
-	if c.rawNode == nil {
+	if c.rawNode == nil || c.storage == nil {
+		status.Health = "unavailable"
 		return status
 	}
 	lead := c.rawNode.Status().Lead
-	status.Leader = lead != 0 && lead == c.nodeID
+	status.LeaderKnown = lead != 0
+	status.Leader = status.LeaderKnown && lead == c.nodeID
+	status.WriteAvailable = status.Leader
+	switch {
+	case status.Leader:
+		status.Health = "ready"
+	case status.LeaderKnown:
+		status.Health = "follower"
+	default:
+		status.Health = "no_leader"
+	}
 	return status
 }
 
@@ -290,6 +326,9 @@ func (c *etcdRaftConsensus) commitMutation(
 func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.rawNode == nil || c.storage == nil {
+		return fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
+	}
 	status := c.rawNode.Status()
 	if status.Lead == c.nodeID {
 		return nil
@@ -301,6 +340,35 @@ func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
 		return fmt.Errorf("raft campaign: %w", err)
 	}
 	return c.waitForLeaderLocked(ctx)
+}
+
+func (c *etcdRaftConsensus) recordRuntimeError(err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recordRuntimeErrorLocked(err)
+}
+
+func (c *etcdRaftConsensus) recordRuntimeErrorLocked(err error) {
+	if err == nil {
+		return
+	}
+	c.lastErrorCode = runtimeErrorCode(err)
+	c.lastError = err.Error()
+	c.lastErrorAt = time.Now().UTC()
+}
+
+func runtimeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrNotLeader):
+		return "not_leader"
+	case errors.Is(err, ErrUnavailable):
+		return "unavailable"
+	default:
+		return "error"
+	}
 }
 
 func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {

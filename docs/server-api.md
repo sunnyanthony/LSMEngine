@@ -24,7 +24,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `Range(start, end, limit) -> stream<entry>`
 
 ### M1 control-plane HTTP
-- `GET /cluster/status`: node id, cluster id, storage mode, commit log provider, commit-log runtime (`mode/index/term/leader/replicas`), raft, shard count, draining, `revision`.
+- `GET /cluster/status`: node id, cluster id, storage mode, commit log provider, commit-log runtime (`mode/index/term/leader/replicas/write_available/leader_known/health/last_error_*`), raft, shard count, draining, `revision`.
 - `GET /cluster/shards`: shard ids, key ranges, leader and replica roles.
 - `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>", "operation_id": "...", "expected_revision": 12 }`.

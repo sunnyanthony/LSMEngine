@@ -248,13 +248,23 @@ func fromInternalDataCommittedEntry(entry internalcommitlog.DataCommittedEntry) 
 }
 
 func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRuntimeStatus {
-	return CommitLogRuntimeStatus{
-		Mode:     s.Mode,
-		Index:    s.Index,
-		Term:     s.Term,
-		Leader:   s.Leader,
-		Replicas: s.Replicas,
+	status := CommitLogRuntimeStatus{
+		Mode:           s.Mode,
+		Index:          s.Index,
+		Term:           s.Term,
+		Leader:         s.Leader,
+		Replicas:       s.Replicas,
+		WriteAvailable: s.WriteAvailable,
+		LeaderKnown:    s.LeaderKnown,
+		Health:         s.Health,
+		LastErrorCode:  s.LastErrorCode,
+		LastError:      s.LastError,
 	}
+	if !s.LastErrorAt.IsZero() {
+		lastErrorAt := s.LastErrorAt
+		status.LastErrorAt = &lastErrorAt
+	}
+	return status
 }
 
 func fromInternalControlMutation(m internalcommitlog.ControlMutation) controlMutation {

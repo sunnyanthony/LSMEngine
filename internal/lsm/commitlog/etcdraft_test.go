@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
@@ -110,6 +111,53 @@ func TestEtcdRaftConsensusKnownRemoteLeaderRejectsLocalCommit(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNotLeader) {
 		t.Fatalf("expected ErrNotLeader, got %v", err)
+	}
+	status := consensus.RuntimeStatus()
+	if status.WriteAvailable {
+		t.Fatalf("expected follower write_available=false, got %+v", status)
+	}
+	if !status.LeaderKnown {
+		t.Fatalf("expected known remote leader, got %+v", status)
+	}
+	if status.Health != "follower" {
+		t.Fatalf("expected follower health, got %+v", status)
+	}
+	if status.LastErrorCode != "not_leader" || status.LastError == "" || status.LastErrorAt.IsZero() {
+		t.Fatalf("expected not leader diagnostic, got %+v", status)
+	}
+}
+
+func TestEtcdRaftConsensusElectionTimeoutRecordsUnavailableStatus(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		Peers:     []string{"node-a", "node-b", "node-c"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("new etcd raft consensus: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err = consensus.CommitData(ctx, DataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	})
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+	status := consensus.RuntimeStatus()
+	if status.WriteAvailable {
+		t.Fatalf("expected write_available=false, got %+v", status)
+	}
+	if status.Health != "no_leader" {
+		t.Fatalf("expected no_leader health, got %+v", status)
+	}
+	if status.LastErrorCode != "unavailable" || status.LastError == "" || status.LastErrorAt.IsZero() {
+		t.Fatalf("expected unavailable diagnostic, got %+v", status)
 	}
 }
 

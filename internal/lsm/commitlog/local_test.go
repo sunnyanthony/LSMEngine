@@ -23,4 +23,7 @@ func TestLocalConsensusHandlePeerMessagesNoop(t *testing.T) {
 	if status.Index != 0 {
 		t.Fatalf("expected noop ingress to keep index at 0, got %d", status.Index)
 	}
+	if !status.WriteAvailable || !status.LeaderKnown || status.Health != "ready" {
+		t.Fatalf("expected local runtime ready, got %+v", status)
+	}
 }

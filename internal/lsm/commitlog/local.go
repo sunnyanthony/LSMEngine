@@ -64,10 +64,13 @@ func (c *localConsensus) RuntimeStatus() RuntimeStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return RuntimeStatus{
-		Mode:     "local",
-		Index:    c.index,
-		Term:     c.term,
-		Leader:   true,
-		Replicas: 1,
+		Mode:           "local",
+		Index:          c.index,
+		Term:           c.term,
+		Leader:         true,
+		Replicas:       1,
+		WriteAvailable: true,
+		LeaderKnown:    true,
+		Health:         "ready",
 	}
 }
