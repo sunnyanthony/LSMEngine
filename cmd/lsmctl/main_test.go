@@ -56,7 +56,13 @@ func TestToRaftOptionsIncludesPeers(t *testing.T) {
 
 func TestToCommitLogOptionsBuildsRaftHTTPTransport(t *testing.T) {
 	got, err := toCommitLogOptions(
-		serverconfig.CommitLogConfig{Provider: string(lsm.CommitLogProviderEtcdRaft)},
+		serverconfig.CommitLogConfig{
+			Provider: string(lsm.CommitLogProviderEtcdRaft),
+			SnapshotPolicy: serverconfig.CommitLogSnapshotPolicy{
+				AppliedEntries: 1024,
+				RetainEntries:  128,
+			},
+		},
 		serverconfig.RaftConfig{
 			PeerURLs: map[string]string{"node-b": "http://127.0.0.1:9091"},
 		},
@@ -72,6 +78,9 @@ func TestToCommitLogOptionsBuildsRaftHTTPTransport(t *testing.T) {
 	}
 	if got.Transport == nil {
 		t.Fatalf("expected raft http transport")
+	}
+	if got.SnapshotPolicy.AppliedEntries != 1024 || got.SnapshotPolicy.RetainEntries != 128 {
+		t.Fatalf("unexpected snapshot policy: %+v", got.SnapshotPolicy)
 	}
 }
 

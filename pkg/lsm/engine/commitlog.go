@@ -97,6 +97,10 @@ func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (com
 		cfg.Peers = append([]string(nil), opts.Raft.Peers...)
 	}
 	if opts.CommitLog != nil {
+		cfg.SnapshotPolicy = internalcommitlog.SnapshotPolicy{
+			AppliedEntries: opts.CommitLog.SnapshotPolicy.AppliedEntries,
+			RetainEntries:  opts.CommitLog.SnapshotPolicy.RetainEntries,
+		}
 		if opts.CommitLog.Transport != nil {
 			cfg.Transport = internalPeerTransport{transport: opts.CommitLog.Transport}
 		}
@@ -186,6 +190,7 @@ func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRunti
 		Mode:           s.Mode,
 		Index:          s.Index,
 		Term:           s.Term,
+		SnapshotIndex:  s.SnapshotIndex,
 		Leader:         s.Leader,
 		Replicas:       s.Replicas,
 		WriteAvailable: s.WriteAvailable,
