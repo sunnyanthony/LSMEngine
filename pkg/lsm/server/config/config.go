@@ -31,7 +31,14 @@ type Config struct {
 
 // CommitLogConfig captures commit-log provider selection.
 type CommitLogConfig struct {
-	Provider string `yaml:"provider"`
+	Provider       string                  `yaml:"provider"`
+	SnapshotPolicy CommitLogSnapshotPolicy `yaml:"snapshot_policy"`
+}
+
+// CommitLogSnapshotPolicy controls provider-owned raft log snapshots.
+type CommitLogSnapshotPolicy struct {
+	AppliedEntries uint64 `yaml:"applied_entries"`
+	RetainEntries  uint64 `yaml:"retain_entries"`
 }
 
 // RaftConfig captures control-plane raft settings.
