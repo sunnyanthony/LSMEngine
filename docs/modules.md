@@ -22,7 +22,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - follower apply: `pkg/lsm/engine/commitlog_apply.go` observes builtin raft committed entries that do not belong to a local pending proposal and applies them to control state or WAL/memtable state.
   - smoke coverage: `tests/integration/server/lsm_server_etcd_raft_3node_test.go` verifies three-node leader writes replicate to followers through in-process and HTTP peer delivery.
   - error boundary: `internal/lsm/commitlog/errors.go` defines builtin provider errors; `pkg/lsm/engine/commitlog.go` maps them to public LSM errors before server write handlers translate them into retryable HTTP responses and route hints.
-  - storage boundary: `internal/lsm/commitlog/raft_storage.go` persists builtin etcd-raft hard state and log entries under `<data>/raft/`; future work can replace the file snapshot format with segmented raft WAL/snapshot storage behind the same provider layer.
+  - storage boundary: `internal/lsm/commitlog/raft_storage.go` persists builtin etcd-raft hard state and segmented log entries under `<data>/raft/commitlog-<node-id>/`; future snapshot/catch-up work stays behind the same provider layer.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress and operational health (`mode/index/term/leader/replicas/write_available/leader_known/health/last_error_*`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.

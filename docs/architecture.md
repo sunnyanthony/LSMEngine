@@ -25,8 +25,8 @@ Goals:
 - M1 control-plane persistence: control metadata is stored in `control_state.json` and restored on restart.
 - M1 control-plane commit path: mutations are routed through a commit-log adapter (default provider: `local`).
 - M1 etcd-raft commit-log foundation: `commitlog.provider=etcd-raft` now executes control/data mutations through a real Raft propose/commit/apply path for cluster-of-one deployments.
-- M1 raft peer ingress/transport foundation: when `raft.peers` has multiple members, etcd-raft can bootstrap static peer ids, route outbound peer messages through `CommitLogOptions.Transport`, and accept inbound peer messages via `HandlePeerMessages`. Server mode can wire HTTP peer delivery with `raft.peer_urls`, posting LSM-owned `RaftPeerMessage` envelopes to `/cluster/raft/messages`; etcd raftpb encoding stays inside the builtin provider adapter. Quorum-backed commits, production raft log segmentation/snapshots, and membership lifecycle remain deferred.
-- M1 raft storage foundation: the builtin etcd-raft provider persists raft hard state and log entries under `<data>/raft/`, restores runtime position after restart, and continues committed indexes instead of re-bootstraping from an empty in-memory raft log.
+- M1 raft peer ingress/transport foundation: when `raft.peers` has multiple members, etcd-raft can bootstrap static peer ids, route outbound peer messages through `CommitLogOptions.Transport`, and accept inbound peer messages via `HandlePeerMessages`. Server mode can wire HTTP peer delivery with `raft.peer_urls`, posting LSM-owned `RaftPeerMessage` envelopes to `/cluster/raft/messages`; etcd raftpb encoding stays inside the builtin provider adapter. Quorum-backed commits, raft snapshots/catch-up, and membership lifecycle remain deferred.
+- M1 raft storage foundation: the builtin etcd-raft provider persists raft hard state separately from segmented log entry files under `<data>/raft/commitlog-<node-id>/`, restores runtime position after restart, and continues committed indexes instead of re-bootstraping from an empty in-memory raft log. Legacy single-file `commitlog-<node-id>.json` state is still accepted for migration.
 - M1 follower apply foundation: builtin raft committed entries without a local pending proposal are observed by the engine and materialized into local control state or WAL/memtable state. Applied commit indexes are tracked so duplicate or restarted delivery can be skipped.
 - M1 3-node smoke coverage: integration tests now exercise a three-node etcd-raft write through both in-process peer delivery and HTTP peer delivery, proving a leader write can commit and materialize on followers in the foundation path.
 - M1 leader/error surface: builtin raft providers reject local proposals with `ErrNotLeader` when a different leader is known, and map leader-election/apply timeouts to `ErrCommitLogUnavailable` so server writes can return retryable routing or availability responses.
@@ -44,7 +44,7 @@ Goals:
 - External dependency boundaries: third-party core libraries should sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example, and builtin etcd-raft stays behind the commit-log provider plus `RaftPeerMessage` envelope instead of exposing raftpb types.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, three-node smoke coverage, leader hints, bounded gateway retries, and retryable commit-log availability errors are present, but production raft WAL/snapshots, membership lifecycle, and higher-level service discovery/load balancing remain deferred for later phases.
+- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, follower committed-entry apply, segmented raft log persistence, three-node smoke coverage, leader hints, bounded gateway retries, and retryable commit-log availability errors are present, but raft snapshots/catch-up, membership lifecycle, and higher-level service discovery/load balancing remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## Boundary Audit (current focus)
@@ -190,9 +190,10 @@ TODO (later discussion):
   - If file is missing: bootstrap from `ShardMap` (or default shard).
   - If file is invalid or identity mismatches (`cluster_id`/`node_id`): startup fails fast.
   - If shard layout is invalid (overlap, bad bounds, open-ended shard not last): startup fails fast.
-- `<data>/raft/commitlog-<node-id>.json`: builtin etcd-raft provider state file.
-  - Persists raft hard state and log entries atomically for the current foundation.
-  - This is a correctness foundation, not the final high-throughput raft WAL or snapshot format.
+- `<data>/raft/commitlog-<node-id>/hard_state.json`: builtin etcd-raft provider hard state.
+- `<data>/raft/commitlog-<node-id>/segments/segment-<first-index>.json`: builtin etcd-raft provider log entry segments.
+  - Legacy `<data>/raft/commitlog-<node-id>.json` state is read for migration.
+  - This is a segmented durability foundation; raft snapshots and catch-up are still planned.
 
 ## Configuration knobs
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.
