@@ -164,6 +164,27 @@ func TestEtcdRaftThreeNodeHTTPFollowerWriteReturnsLeaderHint(t *testing.T) {
 		entry, ok := cluster.stores["node-b"].Get([]byte("seed"))
 		return ok && string(entry.Value) == "v"
 	})
+	respStatus, err := http.Get(cluster.urls["node-b"] + "/cluster/status")
+	if err != nil {
+		t.Fatalf("get follower status: %v", err)
+	}
+	defer respStatus.Body.Close()
+	if respStatus.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", respStatus.StatusCode)
+	}
+	var followerStatus lsm.ClusterStatus
+	if err := json.NewDecoder(respStatus.Body).Decode(&followerStatus); err != nil {
+		t.Fatalf("decode follower status: %v", err)
+	}
+	if followerStatus.CommitLogRuntime.Health != "follower" {
+		t.Fatalf("expected follower commit-log health, got %+v", followerStatus.CommitLogRuntime)
+	}
+	if followerStatus.CommitLogRuntime.WriteAvailable {
+		t.Fatalf("expected follower write_available=false, got %+v", followerStatus.CommitLogRuntime)
+	}
+	if !followerStatus.CommitLogRuntime.LeaderKnown {
+		t.Fatalf("expected follower to know raft leader, got %+v", followerStatus.CommitLogRuntime)
+	}
 
 	body := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("m")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("from-follower")) + `","consistency":"local_committed"}`)
 	resp, err := http.Post(cluster.urls["node-b"]+"/kv/put", "application/json", body)

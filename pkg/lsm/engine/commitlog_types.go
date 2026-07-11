@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"lsmengine/internal/lsm/raftid"
 )
@@ -88,11 +89,17 @@ type CommitLogDataCommittedEntry struct {
 
 // CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
 type CommitLogRuntimeStatus struct {
-	Mode     string `json:"mode"`
-	Index    uint64 `json:"index"`
-	Term     uint64 `json:"term"`
-	Leader   bool   `json:"leader"`
-	Replicas int    `json:"replicas"`
+	Mode           string     `json:"mode"`
+	Index          uint64     `json:"index"`
+	Term           uint64     `json:"term"`
+	Leader         bool       `json:"leader"`
+	Replicas       int        `json:"replicas"`
+	WriteAvailable bool       `json:"write_available"`
+	LeaderKnown    bool       `json:"leader_known"`
+	Health         string     `json:"health"`
+	LastErrorCode  string     `json:"last_error_code,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
+	LastErrorAt    *time.Time `json:"last_error_at,omitempty"`
 }
 
 // CommitLogConsensus is the provider contract for commit-log implementations.
