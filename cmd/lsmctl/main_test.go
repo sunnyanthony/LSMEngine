@@ -813,6 +813,133 @@ func TestReplaceClusterNodePreflightRequiresReachableReplacement(t *testing.T) {
 	}
 }
 
+func TestPlanReplacementNodeSelectsUnavailableCandidate(t *testing.T) {
+	nodeA := httptest.NewServer(http.NotFoundHandler())
+	nodeAURL := nodeA.URL
+	nodeA.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-b",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "follower", Healthy: false},
+						{NodeID: "node-b", Role: "leader", Healthy: true},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	result, err := planReplacementNode(map[string]string{
+		"node-a": nodeAURL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+		"node-d": nodeD.URL,
+	}, replaceNodeOptions{
+		NewNode:         "node-d",
+		OperationPrefix: "repair-node-a-node-d",
+		DryRun:          true,
+	})
+	if err != nil {
+		t.Fatalf("plan replacement: %v", err)
+	}
+	if result.OldNode != "node-a" || result.Reason != "status-error" {
+		t.Fatalf("unexpected candidate: %+v", result)
+	}
+	if len(result.Shards) != 1 || result.Shards[0] != "users" {
+		t.Fatalf("unexpected shards: %+v", result.Shards)
+	}
+	if !containsString(result.DryRunCommand, "--dry-run") {
+		t.Fatalf("expected dry-run command, got %+v", result.DryRunCommand)
+	}
+	if containsString(result.ApplyCommand, "--dry-run") {
+		t.Fatalf("apply command must not include --dry-run: %+v", result.ApplyCommand)
+	}
+	if !containsString(result.ApplyCommand, "node-d="+nodeD.URL) {
+		t.Fatalf("expected replacement endpoint in command: %+v", result.ApplyCommand)
+	}
+}
+
+func TestPlanReplacementNodeRequiresExplicitOldNodeForMultipleCandidates(t *testing.T) {
+	nodeA := httptest.NewServer(http.NotFoundHandler())
+	nodeAURL := nodeA.URL
+	nodeA.Close()
+	nodeB := httptest.NewServer(http.NotFoundHandler())
+	nodeBURL := nodeB.URL
+	nodeB.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
+	_, err := planReplacementNode(map[string]string{
+		"node-a": nodeAURL,
+		"node-b": nodeBURL,
+		"node-d": nodeD.URL,
+	}, replaceNodeOptions{
+		NewNode: "node-d",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatalf("expected multiple candidate error")
+	}
+	if !strings.Contains(err.Error(), "multiple unavailable replacement candidates") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWriteKVPutClusterTransfersShardToCurrentWriteLeader(t *testing.T) {
 	var transferCalls atomic.Int32
 	var putCalls atomic.Int32
@@ -1042,6 +1169,15 @@ func TestParseBytesFlag(t *testing.T) {
 	if _, err := parseKeyFlag("", ""); err == nil {
 		t.Fatalf("expected required key error")
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestReadKVRemote(t *testing.T) {
