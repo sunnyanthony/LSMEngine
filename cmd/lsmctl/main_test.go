@@ -1024,6 +1024,48 @@ func TestPlanReplacementNodeSelectsUnavailableCandidate(t *testing.T) {
 	}
 }
 
+func TestReplaceNodeCommandArgsPreservesConfigEndpointSource(t *testing.T) {
+	args := replaceNodeCommandArgs(map[string]string{
+		"node-a": "http://internal-a:8080",
+		"node-b": "http://internal-b:8080",
+		"node-c": "http://internal-c:8080",
+		"node-d": "http://internal-d:8080",
+	}, replaceNodeOptions{
+		OldNode:         "node-a",
+		NewNode:         "node-d",
+		ShardIDs:        []string{"users"},
+		OperationPrefix: "repair-node-a-node-d",
+		DryRun:          true,
+		CommandEndpoints: replacementCommandEndpointSource{
+			ConfigPath: "/tmp/lsmctl.yaml",
+			Addr:       "http://127.0.0.1:8081",
+			Overrides: nodeEndpointFlags{
+				"node-d": "http://127.0.0.1:8083",
+			},
+		},
+	})
+	for _, want := range []string{
+		"--dry-run",
+		"--operation-prefix",
+		"repair-node-a-node-d",
+		"--config",
+		"/tmp/lsmctl.yaml",
+		"--addr",
+		"http://127.0.0.1:8081",
+		"--node-endpoint",
+		"node-d=http://127.0.0.1:8083",
+		"--shard",
+		"users",
+	} {
+		if !containsString(args, want) {
+			t.Fatalf("expected generated command to contain %q: %+v", want, args)
+		}
+	}
+	if containsString(args, "node-a=http://internal-a:8080") {
+		t.Fatalf("generated command should preserve config source instead of expanding resolved endpoints: %+v", args)
+	}
+}
+
 func TestPlanReplacementNodeRequiresExplicitOldNodeForMultipleCandidates(t *testing.T) {
 	nodeA := httptest.NewServer(http.NotFoundHandler())
 	nodeAURL := nodeA.URL
