@@ -71,6 +71,17 @@ func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
 			})
 		})
 	}
+
+	runLSMCTL(t, bin, "put", "--addr", urls["node-a"], "--key", "cli", "--value", "value")
+	eventually(t, 5*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-b"], "--key", "cli")
+		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=value"))
+	})
+	runLSMCTL(t, bin, "delete", "--addr", urls["node-a"], "--key", "cli")
+	eventually(t, 5*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "cli")
+		return bytes.Contains(out, []byte("found=false"))
+	})
 }
 
 type startedLSMProcess struct {
@@ -157,6 +168,18 @@ func startLSMProcess(t *testing.T, bin string, configPath string) *startedLSMPro
 		proc.done <- cmd.Wait()
 	}()
 	return proc
+}
+
+func runLSMCTL(t *testing.T, bin string, args ...string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lsmctl %v: %v\n%s", args, err, out)
+	}
+	return out
 }
 
 func (p *startedLSMProcess) stop(t *testing.T) {
