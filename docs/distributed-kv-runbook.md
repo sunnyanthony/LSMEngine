@@ -258,6 +258,17 @@ replacement service, runs `lsmctl replace-node --dry-run`, runs the real
 `lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, and
 verifies node-b/node-c/node-d can still commit and read data.
 
+Use the failed-node replacement smoke to verify the one-shot supervisor path:
+
+```bash
+examples/docker-compose-cluster/failed-replacement-smoke.sh
+```
+
+The script stops node-a before replacement, verifies node-b/node-c can still
+commit through quorum, starts node-d, runs `lsmctl replacement-plan`, runs
+`lsmctl replacement-apply`, and verifies node-d catches up to committed values
+from before and after the old node failed.
+
 ## Failure Expectations
 
 Expected behavior during common failures:

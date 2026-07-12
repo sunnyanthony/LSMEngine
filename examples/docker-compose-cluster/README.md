@@ -57,6 +57,18 @@ This starts node-a/node-b/node-c, writes a committed value, starts node-d with
 `lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, then
 verifies node-b/node-c/node-d can accept and read a new committed write.
 
+## Failed replacement smoke
+
+```bash
+examples/docker-compose-cluster/failed-replacement-smoke.sh
+```
+
+This starts node-a/node-b/node-c, writes committed values, stops node-a before
+replacement, starts node-d with `raft.join: true`, runs `lsmctl
+replacement-plan`, then runs `lsmctl replacement-apply`. It verifies node-d
+catches up to values committed before and after node-a stopped, then verifies
+node-b/node-c/node-d can accept and read a new committed write.
+
 ## Manual commands
 
 ```bash
