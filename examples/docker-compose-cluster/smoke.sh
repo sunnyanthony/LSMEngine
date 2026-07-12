@@ -110,6 +110,13 @@ eventually_lsmctl_get_contains() {
   return 1
 }
 
+node_endpoint_args() {
+  printf '%s\n' \
+    --node-endpoint "node-a=http://127.0.0.1:8080" \
+    --node-endpoint "node-b=http://127.0.0.1:8081" \
+    --node-endpoint "node-c=http://127.0.0.1:8082"
+}
+
 compose up -d --build
 
 for url in "${NODE_URLS[@]}"; do
@@ -124,6 +131,14 @@ eventually_lsmctl_get_contains "http://127.0.0.1:8081" compose "found=true" "val
 range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
 require_contains "$range_output" "key=compose"
 require_contains "$range_output" "value=ok"
+
+cluster_get_output="$(lsmctl get --cluster $(node_endpoint_args) --key compose)"
+require_contains "$cluster_get_output" "found=true"
+require_contains "$cluster_get_output" "value=ok"
+
+cluster_range_output="$(lsmctl range --cluster $(node_endpoint_args) --start compose --end composf --limit 1)"
+require_contains "$cluster_range_output" "key=compose"
+require_contains "$cluster_range_output" "value=ok"
 
 delete_url="$(eventually_lsmctl_write delete compose)"
 echo "committed delete through $delete_url"

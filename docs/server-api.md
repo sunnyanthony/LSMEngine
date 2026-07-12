@@ -87,8 +87,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 
 ## CLI Mode
 - `lsmctl serve --config <path>` starts server mode.
-- `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys.
-- `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds.
+- `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys. `--cluster` reads from the first reachable configured endpoint.
+- `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds. `--cluster` applies the same first-reachable endpoint fallback as `get`.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit server-mode writes with `accepted` consistency and return a request id for `write-status`.

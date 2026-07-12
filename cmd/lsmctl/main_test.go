@@ -1693,6 +1693,70 @@ func TestReadKVRemoteEndpointNotFoundReturnsError(t *testing.T) {
 	}
 }
 
+func TestReadKVFromClusterUsesFirstReachableEndpoint(t *testing.T) {
+	down := httptest.NewServer(http.NotFoundHandler())
+	downURL := down.URL
+	down.Close()
+
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(kvGetResult{
+			Found:       true,
+			KeyBase64:   base64.StdEncoding.EncodeToString([]byte("k")),
+			ValueBase64: base64.StdEncoding.EncodeToString([]byte("v")),
+			Seq:         9,
+		})
+	}))
+	defer okServer.Close()
+
+	got, err := readKVFromCluster(map[string]string{
+		"node-a": downURL,
+		"node-b": okServer.URL,
+	}, []byte("k"))
+	if err != nil {
+		t.Fatalf("cluster read: %v", err)
+	}
+	if !got.Found || got.Seq != 9 {
+		t.Fatalf("unexpected cluster get result: %+v", got)
+	}
+}
+
+func TestReadKVFromClusterSkipsNotFoundEndpoint(t *testing.T) {
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(kvGetResult{
+			Found:       true,
+			KeyBase64:   base64.StdEncoding.EncodeToString([]byte("k")),
+			ValueBase64: base64.StdEncoding.EncodeToString([]byte("fresh")),
+			Seq:         10,
+		})
+	}))
+	defer okServer.Close()
+
+	got, err := readKVFromCluster(map[string]string{
+		"node-a": missing.URL,
+		"node-b": okServer.URL,
+	}, []byte("k"))
+	if err != nil {
+		t.Fatalf("cluster read: %v", err)
+	}
+	if !got.Found || got.Seq != 10 {
+		t.Fatalf("unexpected cluster get result: %+v", got)
+	}
+}
+
 func TestReadKVRangeRemote(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/kv/range" {
@@ -1726,6 +1790,40 @@ func TestReadKVRangeRemote(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Limit != 2 {
 		t.Fatalf("unexpected range result: %+v", got)
+	}
+}
+
+func TestReadKVRangeFromClusterUsesFirstReachableEndpoint(t *testing.T) {
+	down := httptest.NewServer(http.NotFoundHandler())
+	downURL := down.URL
+	down.Close()
+
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/range" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(kvRangeResult{
+			Entries: []kvRangeEntry{
+				{
+					KeyBase64:   base64.StdEncoding.EncodeToString([]byte("k")),
+					ValueBase64: base64.StdEncoding.EncodeToString([]byte("v")),
+					Seq:         10,
+				},
+			},
+			Limit: 1,
+		})
+	}))
+	defer okServer.Close()
+
+	got, err := readKVRangeFromCluster(map[string]string{
+		"node-a": downURL,
+		"node-b": okServer.URL,
+	}, []byte("k"), []byte("l"), 1)
+	if err != nil {
+		t.Fatalf("cluster range: %v", err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Seq != 10 {
+		t.Fatalf("unexpected cluster range result: %+v", got)
 	}
 }
 
