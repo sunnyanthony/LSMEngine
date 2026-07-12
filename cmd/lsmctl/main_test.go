@@ -5,11 +5,32 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"syscall"
 	"testing"
 
 	"lsmengine/pkg/lsm"
 	serverconfig "lsmengine/pkg/lsm/server/config"
 )
+
+func TestServeSignalsIncludeContainerTermination(t *testing.T) {
+	signals := serveSignals()
+	if !containsSignal(signals, os.Interrupt) {
+		t.Fatalf("expected serve signals to include interrupt")
+	}
+	if !containsSignal(signals, syscall.SIGTERM) {
+		t.Fatalf("expected serve signals to include SIGTERM for container stop")
+	}
+}
+
+func containsSignal(signals []os.Signal, want os.Signal) bool {
+	for _, signal := range signals {
+		if signal == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestParseWriteConsistencyDefault(t *testing.T) {
 	tests := []struct {

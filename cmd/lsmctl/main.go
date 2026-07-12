@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"lsmengine/pkg/lsm"
@@ -134,7 +135,7 @@ func serveCmd(args []string) {
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), serveSignals()...)
 	defer stop()
 
 	go func() {
@@ -150,6 +151,10 @@ func serveCmd(args []string) {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+func serveSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
 func statsCmd(args []string) {
