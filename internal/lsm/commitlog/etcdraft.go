@@ -64,6 +64,7 @@ const (
 	etcdRaftElectionTick   = 10
 	etcdRaftHeartbeatTick  = 1
 	etcdRaftApplyTimeout   = 5 * time.Second
+	etcdRaftMemberTimeout  = 10 * time.Second
 	etcdRaftAdvanceMaxStep = 2048
 	etcdRaftSendTimeout    = 2 * time.Second
 )
@@ -247,7 +248,7 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 		return nil
 	}
 
-	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
+	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftMemberTimeout)
 	defer cancel()
 	if err := c.rawNode.ProposeConfChange(cc); err != nil {
 		err := fmt.Errorf("raft propose membership change: %w", err)
@@ -255,19 +256,38 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 		return err
 	}
 	for step := 0; step < etcdRaftAdvanceMaxStep; step++ {
-		if err := runCtx.Err(); err != nil {
-			err := fmt.Errorf("%w: raft membership change timed out: %v", ErrUnavailable, err)
-			c.recordRuntimeErrorLocked(err)
-			return err
-		}
 		if err := c.advanceUntilStableLocked(runCtx); err != nil {
+			if c.membershipChangeAppliedLocked(cc) {
+				return nil
+			}
 			c.recordRuntimeErrorLocked(err)
 			return err
 		}
 		if c.membershipChangeAppliedLocked(cc) {
 			return nil
 		}
+		if err := runCtx.Err(); err != nil {
+			if c.membershipChangeAppliedLocked(cc) {
+				return nil
+			}
+			err := fmt.Errorf("%w: raft membership change timed out: %v", ErrUnavailable, err)
+			c.recordRuntimeErrorLocked(err)
+			return err
+		}
 		c.rawNode.Tick()
+		c.mu.Unlock()
+		select {
+		case <-runCtx.Done():
+			c.mu.Lock()
+			if c.membershipChangeAppliedLocked(cc) {
+				return nil
+			}
+			err := fmt.Errorf("%w: raft membership change timed out: %v", ErrUnavailable, runCtx.Err())
+			c.recordRuntimeErrorLocked(err)
+			return err
+		case <-time.After(time.Millisecond):
+			c.mu.Lock()
+		}
 	}
 	err := fmt.Errorf("%w: raft membership change did not apply", ErrUnavailable)
 	c.recordRuntimeErrorLocked(err)

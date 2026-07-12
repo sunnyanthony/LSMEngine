@@ -50,6 +50,7 @@ type RaftConfig struct {
 	HeartbeatInterval time.Duration     `yaml:"heartbeat_interval"`
 	Peers             []string          `yaml:"peers"`
 	PeerURLs          map[string]string `yaml:"peer_urls"`
+	JoinPeerURLs      map[string]string `yaml:"join_peer_urls"`
 	Join              bool              `yaml:"join"`
 }
 
@@ -115,6 +116,18 @@ func Validate(cfg Config) error {
 		}
 		if _, ok := peers[peer]; !ok {
 			return fmt.Errorf("raft peer_urls contains unknown peer %q", peer)
+		}
+	}
+	for peer, rawURL := range cfg.Raft.JoinPeerURLs {
+		if strings.TrimSpace(peer) == "" {
+			return fmt.Errorf("raft join_peer_urls contains empty peer name")
+		}
+		if _, ok := peers[peer]; ok {
+			return fmt.Errorf("raft join_peer_urls contains existing peer %q", peer)
+		}
+		parsed, err := url.Parse(strings.TrimSpace(rawURL))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("raft join_peer_urls[%q] must be an absolute URL", peer)
 		}
 	}
 	return nil

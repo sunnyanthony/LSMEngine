@@ -27,6 +27,8 @@ raft:
   peer_urls:
     node-b: "http://127.0.0.1:9091"
     node-c: "http://127.0.0.1:9092"
+  join_peer_urls:
+    node-d: "http://127.0.0.1:9093"
 shards:
   - id: "users-a-m"
     start_key: "a"
@@ -95,6 +97,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.PeerURLs["node-c"] != "http://127.0.0.1:9092" {
 		t.Fatalf("expected node-c peer url, got %q", cfg.Raft.PeerURLs["node-c"])
+	}
+	if cfg.Raft.JoinPeerURLs["node-d"] != "http://127.0.0.1:9093" {
+		t.Fatalf("expected node-d join peer url, got %q", cfg.Raft.JoinPeerURLs["node-d"])
 	}
 	if len(cfg.Shards) != 2 {
 		t.Fatalf("expected shard configs, got %d", len(cfg.Shards))
@@ -195,6 +200,50 @@ func TestValidateEtcdRaftRejectsDuplicatePeer(t *testing.T) {
 	}
 	if err := Validate(cfg); err == nil {
 		t.Fatalf("expected duplicate peer validation error")
+	}
+}
+
+func TestValidateEtcdRaftAllowsJoinPeerURLs(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-a", "node-b"},
+			PeerURLs: map[string]string{
+				"node-a": "http://127.0.0.1:8080",
+				"node-b": "http://127.0.0.1:8081",
+			},
+			JoinPeerURLs: map[string]string{
+				"node-c": "http://127.0.0.1:8082",
+			},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestValidateEtcdRaftRejectsJoinPeerURLForExistingPeer(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-a", "node-b"},
+			PeerURLs: map[string]string{
+				"node-a": "http://127.0.0.1:8080",
+				"node-b": "http://127.0.0.1:8081",
+			},
+			JoinPeerURLs: map[string]string{
+				"node-b": "http://127.0.0.1:8081",
+			},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected join peer existing peer validation error")
 	}
 }
 

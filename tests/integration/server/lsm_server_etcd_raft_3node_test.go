@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -276,6 +277,122 @@ func TestEtcdRaftThreeNodeHTTPReplicatesMembershipChanges(t *testing.T) {
 		})
 	}
 	assertNoAsyncRaftErrors(t, cluster.errCh)
+}
+
+func TestEtcdRaftHTTPDynamicJoinReplicatesToNewNode(t *testing.T) {
+	initialPeers := []string{"node-a", "node-b"}
+	joinPeers := []string{"node-a", "node-b", "node-c"}
+	listeners := make(map[string]net.Listener, len(joinPeers))
+	urls := make(map[string]string, len(joinPeers))
+	peerURLs := make(map[uint64]string, len(joinPeers))
+	for _, nodeID := range joinPeers {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen %s: %v", nodeID, err)
+		}
+		listeners[nodeID] = listener
+		urls[nodeID] = "http://" + listener.Addr().String()
+		peerURLs[lsm.RaftPeerID(nodeID)] = urls[nodeID]
+	}
+
+	errCh := make(chan error, 32)
+	stores := make(map[string]*lsm.LSM, len(joinPeers))
+	servers := make(map[string]*http.Server, len(joinPeers))
+	startNode := func(nodeID string, peers []string, join bool) {
+		t.Helper()
+		transport, err := lsmserver.NewRaftHTTPTransport(lsmserver.RaftHTTPTransportOptions{
+			PeerURLs: peerURLs,
+			OnError: func(err error) {
+				select {
+				case errCh <- err:
+				default:
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("new http transport %s: %v", nodeID, err)
+		}
+		store, err := lsm.New(lsm.Options{
+			DataDir:   t.TempDir(),
+			NodeID:    nodeID,
+			ClusterID: "cluster-a",
+			CommitLog: &lsm.CommitLogOptions{
+				Provider:  lsm.CommitLogProviderEtcdRaft,
+				Transport: transport,
+			},
+			Raft: &lsm.RaftOptions{
+				Peers: peers,
+				Join:  join,
+			},
+			ShardMap: []lsm.ShardConfig{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Replicas: peers,
+					Leader:   "node-a",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("new %s: %v", nodeID, err)
+		}
+		stores[nodeID] = store
+		server := &http.Server{Handler: lsmserver.NewHandler(store)}
+		servers[nodeID] = server
+		listener := listeners[nodeID]
+		go func() {
+			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+				select {
+				case errCh <- fmt.Errorf("%s serve: %w", nodeID, err):
+				default:
+				}
+			}
+		}()
+	}
+	for _, nodeID := range initialPeers {
+		startNode(nodeID, initialPeers, false)
+	}
+	startNode("node-c", joinPeers, true)
+	t.Cleanup(func() {
+		for _, nodeID := range joinPeers {
+			if server := servers[nodeID]; server != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				_ = server.Shutdown(ctx)
+				cancel()
+			}
+			if store := stores[nodeID]; store != nil {
+				if err := store.Close(); err != nil {
+					t.Fatalf("close %s: %v", nodeID, err)
+				}
+			}
+		}
+	})
+
+	if err := stores["node-a"].Put([]byte("seed"), []byte("before-join")); err != nil {
+		t.Fatalf("seed leader: %v", err)
+	}
+	eventually(t, 2*time.Second, func() bool {
+		entry, ok := stores["node-b"].Get([]byte("seed"))
+		return ok && string(entry.Value) == "before-join"
+	})
+	resp, err := http.Post(urls["node-a"]+"/cluster/nodes/node-c/raft-add", "application/json", bytes.NewBufferString(`{}`))
+	if err != nil {
+		t.Fatalf("raft add node-c: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected raft-add status 200, got %d (%s)", resp.StatusCode, string(body))
+	}
+	if err := stores["node-a"].Put([]byte("joined"), []byte("after-join")); err != nil {
+		t.Fatalf("put after join: %v", err)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		entry, ok := stores["node-c"].Get([]byte("joined"))
+		return ok && string(entry.Value) == "after-join"
+	})
+	assertNoAsyncRaftErrors(t, errCh)
 }
 
 type threeNodeHTTPRaftCluster struct {
