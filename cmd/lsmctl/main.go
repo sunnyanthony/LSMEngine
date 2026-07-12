@@ -68,6 +68,8 @@ func main() {
 		replaceNodeCmd(os.Args[2:])
 	case "replacement-plan":
 		replacementPlanCmd(os.Args[2:])
+	case "replacement-apply":
+		replacementApplyCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -79,7 +81,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -398,12 +400,18 @@ type replacementPlanResult struct {
 	Statuses      clusterStatusResult        `json:"statuses"`
 }
 
+type replacementApplyResult struct {
+	Plan   replacementPlanResult `json:"plan"`
+	Result replaceNodeResult     `json:"result"`
+}
+
 type replaceNodeOptions struct {
-	OldNode         string
-	NewNode         string
-	ShardIDs        []string
-	OperationPrefix string
-	DryRun          bool
+	OldNode                 string
+	NewNode                 string
+	ShardIDs                []string
+	OperationPrefix         string
+	DryRun                  bool
+	AllowUnavailableOldNode bool
 }
 
 func getCmd(args []string) {
@@ -892,6 +900,7 @@ func replaceNodeCmd(args []string) {
 	newNode := fs.String("new-node", "", "replacement node id")
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
 	dryRun := fs.Bool("dry-run", false, "preflight and print the replacement plan without submitting mutations")
+	allowUnavailableOldNode := fs.Bool("allow-unavailable-old-node", false, "complete replacement drain when old node status is unreachable after shard leadership has moved")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing --old-node")
 	var nodeEndpoints nodeEndpointFlags
@@ -915,11 +924,12 @@ func replaceNodeCmd(args []string) {
 		log.Fatal("replace-node requires raft.peer_urls in config, --addr, or --node-endpoint")
 	}
 	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
-		OldNode:         *oldNode,
-		NewNode:         *newNode,
-		ShardIDs:        []string(shardIDs),
-		OperationPrefix: *operationPrefix,
-		DryRun:          *dryRun,
+		OldNode:                 *oldNode,
+		NewNode:                 *newNode,
+		ShardIDs:                []string(shardIDs),
+		OperationPrefix:         *operationPrefix,
+		DryRun:                  *dryRun,
+		AllowUnavailableOldNode: *allowUnavailableOldNode,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -972,6 +982,48 @@ func replacementPlanCmd(args []string) {
 		return
 	}
 	writeReplacementPlan(os.Stdout, result)
+}
+
+func replacementApplyCmd(args []string) {
+	fs := flag.NewFlagSet("replacement-apply", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	oldNode := fs.String("old-node", "", "node id to replace; if omitted, exactly one unavailable node is selected")
+	newNode := fs.String("new-node", "", "replacement node id")
+	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
+	var shardIDs stringListFlags
+	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing selected old node")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if strings.TrimSpace(*newNode) == "" {
+		log.Fatal("--new-node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatal("replacement-apply requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	result, err := applyPlannedReplacement(endpoints, replaceNodeOptions{
+		OldNode:         *oldNode,
+		NewNode:         *newNode,
+		ShardIDs:        []string(shardIDs),
+		OperationPrefix: *operationPrefix,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeReplacementApply(os.Stdout, result)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -1316,6 +1368,15 @@ func drainClusterNode(
 	target string,
 	opts controlRequestOptions,
 ) (drainNodeResult, error) {
+	return drainClusterNodeWithOptions(endpoints, target, opts, false)
+}
+
+func drainClusterNodeWithOptions(
+	endpoints map[string]string,
+	target string,
+	opts controlRequestOptions,
+	allowUnavailableTarget bool,
+) (drainNodeResult, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return drainNodeResult{}, fmt.Errorf("target node required")
@@ -1347,7 +1408,7 @@ func drainClusterNode(
 				Endpoint:    endpoint,
 			}
 		}
-		if completed, next, err := readDrainNodeResult(result.Endpoint, endpoints, result); err == nil {
+		if completed, next, err := readDrainNodeResult(result.Endpoint, endpoints, result, allowUnavailableTarget); err == nil {
 			result = next
 			if completed {
 				return result, nil
@@ -1370,6 +1431,7 @@ func readDrainNodeResult(
 	controlEndpoint string,
 	endpoints map[string]string,
 	result drainNodeResult,
+	allowUnavailableTarget bool,
 ) (bool, drainNodeResult, error) {
 	var shards []lsm.ShardStatus
 	if err := getJSON(controlEndpoint+"/cluster/shards", &shards); err != nil {
@@ -1381,10 +1443,10 @@ func readDrainNodeResult(
 	}
 	result.Shards = shards
 	result.Statuses = statuses
-	return drainComplete(result), result, nil
+	return drainComplete(result, allowUnavailableTarget), result, nil
 }
 
-func drainComplete(result drainNodeResult) bool {
+func drainComplete(result drainNodeResult, allowUnavailableTarget bool) bool {
 	for _, shard := range result.Shards {
 		if shard.Leader == result.Target {
 			return false
@@ -1393,6 +1455,9 @@ func drainComplete(result drainNodeResult) bool {
 	for _, node := range result.Statuses.Nodes {
 		if node.Node != result.Target {
 			continue
+		}
+		if allowUnavailableTarget && (node.Error != "" || node.Status == nil) {
+			return true
 		}
 		return node.Status != nil && node.Status.Draining
 	}
@@ -1435,7 +1500,7 @@ func resumeClusterNode(
 				Endpoint:    endpoint,
 			}
 		}
-		if _, next, err := readDrainNodeResult(result.Endpoint, endpoints, result); err == nil {
+		if _, next, err := readDrainNodeResult(result.Endpoint, endpoints, result, false); err == nil {
 			result = next
 			if resumeComplete(result) {
 				return result, nil
@@ -1638,9 +1703,12 @@ func replaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (r
 		}
 		result.Steps = append(result.Steps, step)
 	}
-	drain, err := drainClusterNode(endpoints, plan.oldNode, controlRequestOptions{
-		OperationID: prefix + "-drain-" + plan.oldNode,
-	})
+	drain, err := drainClusterNodeWithOptions(
+		endpoints,
+		plan.oldNode,
+		controlRequestOptions{OperationID: prefix + "-drain-" + plan.oldNode},
+		opts.AllowUnavailableOldNode,
+	)
 	if err != nil {
 		return result, err
 	}
@@ -1834,6 +1902,33 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 	}, nil
 }
 
+func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
+	plan, err := planReplacementNode(endpoints, replaceNodeOptions{
+		OldNode:         opts.OldNode,
+		NewNode:         opts.NewNode,
+		ShardIDs:        opts.ShardIDs,
+		OperationPrefix: opts.OperationPrefix,
+		DryRun:          true,
+	})
+	if err != nil {
+		return replacementApplyResult{}, err
+	}
+	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
+		OldNode:                 plan.OldNode,
+		NewNode:                 plan.NewNode,
+		ShardIDs:                opts.ShardIDs,
+		OperationPrefix:         opts.OperationPrefix,
+		AllowUnavailableOldNode: true,
+	})
+	if err != nil {
+		return replacementApplyResult{Plan: plan, Result: result}, err
+	}
+	return replacementApplyResult{
+		Plan:   plan,
+		Result: result,
+	}, nil
+}
+
 func selectReplacementCandidate(statuses clusterStatusResult, newNode string) (string, string, error) {
 	var candidates []clusterStatusNodeResult
 	reasons := make(map[string]string)
@@ -2023,6 +2118,17 @@ func writeReplacementPlan(w io.Writer, result replacementPlanResult) {
 	fmt.Fprintf(w, "dry_run_command=%s\n", strings.Join(result.DryRunCommand, " "))
 	fmt.Fprintf(w, "apply_command=%s\n", strings.Join(result.ApplyCommand, " "))
 	writeClusterStatuses(w, result.Statuses)
+}
+
+func writeReplacementApply(w io.Writer, result replacementApplyResult) {
+	fmt.Fprintf(
+		w,
+		"planned_old_node=%s planned_new_node=%s reason=%s\n",
+		result.Plan.OldNode,
+		result.Plan.NewNode,
+		result.Plan.Reason,
+	)
+	writeReplaceNodeResult(w, result.Result)
 }
 
 func writeMembershipActionResult(w io.Writer, result membershipActionResult) {

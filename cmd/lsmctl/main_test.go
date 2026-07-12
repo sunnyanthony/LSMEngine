@@ -276,6 +276,30 @@ func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {
 	}
 }
 
+func TestDrainCompleteCanAllowUnavailableReplacementTarget(t *testing.T) {
+	result := drainNodeResult{
+		Target: "node-a",
+		Shards: []lsm.ShardStatus{
+			{ID: "users", Leader: "node-b"},
+		},
+		Statuses: clusterStatusResult{
+			Nodes: []clusterStatusNodeResult{
+				{Node: "node-a", Endpoint: "http://127.0.0.1:8080", Error: "connection refused"},
+			},
+		},
+	}
+	if drainComplete(result, false) {
+		t.Fatalf("strict drain should require target draining status")
+	}
+	if !drainComplete(result, true) {
+		t.Fatalf("replacement drain should allow unavailable target after leadership moved")
+	}
+	result.Shards[0].Leader = "node-a"
+	if drainComplete(result, true) {
+		t.Fatalf("replacement drain should not complete while target still leads a shard")
+	}
+}
+
 func TestResumeClusterNodeSubmitsToWriteLeaderAndWaitsForResume(t *testing.T) {
 	var resumeCalls atomic.Int32
 
@@ -937,6 +961,124 @@ func TestPlanReplacementNodeRequiresExplicitOldNodeForMultipleCandidates(t *test
 	}
 	if !strings.Contains(err.Error(), "multiple unavailable replacement candidates") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyPlannedReplacementExecutesSelectedCandidate(t *testing.T) {
+	var raftAddCalls atomic.Int32
+	var raftRemoveCalls atomic.Int32
+	var addReplicaCalls atomic.Int32
+	var drainCalls atomic.Int32
+	var removeReplicaCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.NotFoundHandler())
+	nodeAURL := nodeA.URL
+	nodeA.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			replicas := []lsm.ReplicaStatus{
+				{NodeID: "node-a", Role: "follower", Healthy: false},
+				{NodeID: "node-b", Role: "leader", Healthy: true},
+			}
+			if addReplicaCalls.Load() > 0 {
+				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-d", Role: "follower", Healthy: true})
+			}
+			if removeReplicaCalls.Load() > 0 {
+				next := replicas[:0]
+				for _, replica := range replicas {
+					if replica.NodeID != "node-a" {
+						next = append(next, replica)
+					}
+				}
+				replicas = next
+			}
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:       "users",
+					Leader:   "node-b",
+					Replicas: replicas,
+				},
+			})
+		case "/cluster/nodes/node-d/raft-add":
+			raftAddCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/add-replica":
+			addReplicaCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/drain":
+			drainCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/remove-replica":
+			removeReplicaCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/raft-remove":
+			raftRemoveCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	result, err := applyPlannedReplacement(map[string]string{
+		"node-a": nodeAURL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+		"node-d": nodeD.URL,
+	}, replaceNodeOptions{
+		NewNode:         "node-d",
+		OperationPrefix: "repair-node-a-node-d",
+	})
+	if err != nil {
+		t.Fatalf("apply replacement: %v", err)
+	}
+	if result.Plan.OldNode != "node-a" || result.Plan.Reason != "status-error" {
+		t.Fatalf("unexpected plan: %+v", result.Plan)
+	}
+	if result.Result.OldNode != "node-a" || result.Result.NewNode != "node-d" {
+		t.Fatalf("unexpected result: %+v", result.Result)
+	}
+	if raftAddCalls.Load() != 1 || addReplicaCalls.Load() != 1 || drainCalls.Load() != 1 || removeReplicaCalls.Load() != 1 || raftRemoveCalls.Load() != 1 {
+		t.Fatalf("unexpected call counts raftAdd=%d add=%d drain=%d remove=%d raftRemove=%d",
+			raftAddCalls.Load(), addReplicaCalls.Load(), drainCalls.Load(), removeReplicaCalls.Load(), raftRemoveCalls.Load())
 	}
 }
 
