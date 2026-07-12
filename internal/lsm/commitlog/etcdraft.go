@@ -73,6 +73,8 @@ const (
 	etcdRaftAdvanceMaxStep = 2048
 	etcdRaftSendTimeout    = 2 * time.Second
 	etcdRaftTickInterval   = 100 * time.Millisecond
+	etcdRaftTickJitterStep = 10 * time.Millisecond
+	etcdRaftTickJitterSlot = 7
 )
 
 func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
@@ -399,7 +401,7 @@ func (c *etcdRaftConsensus) Close() error {
 func (c *etcdRaftConsensus) startBackgroundLoop() {
 	go func() {
 		defer close(c.doneCh)
-		initialDelay := time.Duration(c.nodeID%9+1) * (etcdRaftTickInterval / 10)
+		initialDelay := c.backgroundInitialDelay()
 		timer := time.NewTimer(initialDelay)
 		select {
 		case <-c.stopCh:
@@ -409,7 +411,7 @@ func (c *etcdRaftConsensus) startBackgroundLoop() {
 			return
 		case <-timer.C:
 		}
-		ticker := time.NewTicker(etcdRaftTickInterval)
+		ticker := time.NewTicker(c.backgroundTickInterval())
 		defer ticker.Stop()
 		for {
 			select {
@@ -420,6 +422,14 @@ func (c *etcdRaftConsensus) startBackgroundLoop() {
 			}
 		}
 	}()
+}
+
+func (c *etcdRaftConsensus) backgroundInitialDelay() time.Duration {
+	return time.Duration(c.nodeID%9+1) * (etcdRaftTickInterval / 10)
+}
+
+func (c *etcdRaftConsensus) backgroundTickInterval() time.Duration {
+	return etcdRaftTickInterval + time.Duration(c.nodeID%etcdRaftTickJitterSlot)*etcdRaftTickJitterStep
 }
 
 func (c *etcdRaftConsensus) backgroundTick() {

@@ -323,6 +323,64 @@ func TestEtcdRaftThreeProcessMinorityPartitionRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftThreeProcessRollingRestartSmoke(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := buildLSMCTLBinary(t, tempDir)
+
+	peers := []string{"node-a", "node-b", "node-c"}
+	urls := reserveNodeURLs(t, peers)
+	processes := make(map[string]*startedLSMProcess, len(peers))
+	configPaths := make(map[string]string, len(peers))
+	for _, nodeID := range peers {
+		configPath := writeProcessConfig(t, tempDir, processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     peers,
+			ShardReplicas: peers,
+			PeerURLs:      urlsForPeers(peers, urls),
+			WriteTimeout:  "8s",
+		})
+		configPaths[nodeID] = configPath
+		processes[nodeID] = startLSMProcess(t, bin, configPath)
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			logStartedProcesses(t, processes)
+		}
+		for _, nodeID := range []string{"node-c", "node-b", "node-a"} {
+			if proc := processes[nodeID]; proc != nil {
+				proc.stop(t)
+			}
+		}
+	})
+
+	for _, nodeID := range peers {
+		waitHTTPStatus(t, urls[nodeID]+"/healthz", http.StatusOK, 5*time.Second)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		return putKVOnCurrentWriteLeader(t, urls, peers, []byte("rolling-before"), []byte("all-up"))
+	})
+
+	for i, restartedNode := range peers {
+		processes[restartedNode].stop(t)
+		processes[restartedNode] = nil
+		liveNodes := peersExcept(peers, restartedNode)
+		key := []byte(fmt.Sprintf("rolling-step-%d", i))
+		value := []byte(fmt.Sprintf("value-%s", restartedNode))
+		eventually(t, 10*time.Second, func() bool {
+			return putKVOnCurrentWriteLeader(t, urls, liveNodes, key, value)
+		})
+		processes[restartedNode] = startLSMProcess(t, bin, configPaths[restartedNode])
+		waitHTTPStatus(t, urls[restartedNode]+"/healthz", http.StatusOK, 5*time.Second)
+		for _, nodeID := range peers {
+			nodeID := nodeID
+			eventually(t, 15*time.Second, func() bool {
+				got, ok, err := getKVValue(urls[nodeID], key)
+				return err == nil && ok && bytes.Equal(got, value)
+			})
+		}
+	}
+}
+
 func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	tempDir := t.TempDir()
 	bin := buildLSMCTLBinary(t, tempDir)
@@ -553,6 +611,16 @@ func urlsForPeers(peers []string, urls map[string]string) map[string]string {
 	out := make(map[string]string, len(peers))
 	for _, peer := range peers {
 		out[peer] = urls[peer]
+	}
+	return out
+}
+
+func peersExcept(peers []string, excluded string) []string {
+	out := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		if peer != excluded {
+			out = append(out, peer)
+		}
 	}
 	return out
 }
