@@ -1,6 +1,14 @@
 package engine
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"go.etcd.io/etcd/raft/v3/raftpb"
+)
 
 func TestStateSnapshotRestoresVisibleDataAndControlToEmptyEngine(t *testing.T) {
 	opts := func(dir string) Options {
@@ -110,6 +118,62 @@ func TestStateSnapshotRestoreRejectsNonEmptyEngine(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftSnapshotPersistsLSMStatePayloadAfterEngineApply(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := New(Options{
+		DataDir:               dataDir,
+		NodeID:                "node-a",
+		ClusterID:             "cluster-dev",
+		CompactionL0Threshold: 0,
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderEtcdRaft,
+			SnapshotPolicy: CommitLogSnapshotPolicy{
+				AppliedEntries: 1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer db.Close()
+	if err := db.Put([]byte("alpha"), []byte("1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	snapshotPath := filepath.Join(
+		dataDir,
+		"raft",
+		fmt.Sprintf("commitlog-%016x", RaftPeerID("node-a")),
+		"snapshot.json",
+	)
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read raft snapshot: %v", err)
+	}
+	var disk struct {
+		Snapshot raftpb.Snapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatalf("decode raft snapshot: %v", err)
+	}
+	if disk.Snapshot.Metadata.Index != db.commitLogAppliedIndex {
+		t.Fatalf("expected snapshot index %d, got %d", db.commitLogAppliedIndex, disk.Snapshot.Metadata.Index)
+	}
+	if len(disk.Snapshot.Data) == 0 {
+		t.Fatalf("expected raft snapshot data to contain LSM state payload")
+	}
+	var payload lsmStateSnapshot
+	if err := json.Unmarshal(disk.Snapshot.Data, &payload); err != nil {
+		t.Fatalf("decode lsm snapshot payload: %v", err)
+	}
+	if payload.CommitLogAppliedIndex != db.commitLogAppliedIndex {
+		t.Fatalf("expected payload applied index %d, got %d", db.commitLogAppliedIndex, payload.CommitLogAppliedIndex)
+	}
+	if !stateSnapshotHasEntry(payload, "alpha", "1") {
+		t.Fatalf("expected payload to include alpha=1, got %+v", payload.Entries)
+	}
+}
+
 func stateSnapshotShardHasReplica(shards []ShardStatus, shardID string, nodeID string) bool {
 	for _, shard := range shards {
 		if shard.ID != shardID {
@@ -119,6 +183,15 @@ func stateSnapshotShardHasReplica(shards []ShardStatus, shardID string, nodeID s
 			if replica.NodeID == nodeID {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func stateSnapshotHasEntry(snapshot lsmStateSnapshot, key string, value string) bool {
+	for _, entry := range snapshot.Entries {
+		if string(entry.Key) == key && string(entry.Value) == value && !entry.Tombstone {
+			return true
 		}
 	}
 	return false

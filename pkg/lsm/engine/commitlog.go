@@ -27,6 +27,14 @@ type commitLogCommittedEntryObserverSetter interface {
 	SetCommittedEntryObserver(observer commitLogCommittedEntryObserver) error
 }
 
+type commitLogStateSnapshotter interface {
+	CaptureStateSnapshot(index uint64) ([]byte, error)
+}
+
+type commitLogStateSnapshotterSetter interface {
+	SetStateSnapshotter(snapshotter commitLogStateSnapshotter) error
+}
+
 func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
 	entry, err := c.inner.CommitControl(ctx, toInternalControlMutation(mutation))
 	if err != nil {
@@ -99,6 +107,17 @@ func (c *builtinCommitLogConsensus) SetCommittedEntryObserver(observer commitLog
 	return setter.SetCommittedEntryObserver(internalCommittedEntryObserver{observer: observer})
 }
 
+func (c *builtinCommitLogConsensus) SetStateSnapshotter(snapshotter commitLogStateSnapshotter) error {
+	setter, ok := c.inner.(internalcommitlog.StateSnapshotterSetter)
+	if !ok {
+		return nil
+	}
+	if snapshotter == nil {
+		return setter.SetStateSnapshotter(nil)
+	}
+	return setter.SetStateSnapshotter(internalStateSnapshotter{snapshotter: snapshotter})
+}
+
 func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (commitLogConsensus, error) {
 	cfg := internalcommitlog.Config{
 		Provider: internalcommitlog.Provider(provider),
@@ -134,6 +153,17 @@ type raftPeerTransportAdapter struct {
 
 type internalCommittedEntryObserver struct {
 	observer commitLogCommittedEntryObserver
+}
+
+type internalStateSnapshotter struct {
+	snapshotter commitLogStateSnapshotter
+}
+
+func (s internalStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) {
+	if s.snapshotter == nil {
+		return nil, nil
+	}
+	return s.snapshotter.CaptureStateSnapshot(index)
 }
 
 func (o internalCommittedEntryObserver) ObserveCommittedControl(entry internalcommitlog.ControlCommittedEntry) error {

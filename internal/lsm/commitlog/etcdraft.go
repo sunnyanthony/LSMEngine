@@ -44,6 +44,7 @@ type etcdRaftConsensus struct {
 	storage        *raftPersistentStorage
 	transport      RaftMessageTransport
 	observer       CommittedEntryObserver
+	snapshotter    StateSnapshotter
 	proposalSeq    uint64
 	pending        map[uint64]*pendingRaftProposal
 	committed      []raftCommittedProposal
@@ -275,6 +276,13 @@ func (c *etcdRaftConsensus) SetCommittedEntryObserver(observer CommittedEntryObs
 	return nil
 }
 
+func (c *etcdRaftConsensus) SetStateSnapshotter(snapshotter StateSnapshotter) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshotter = snapshotter
+	return nil
+}
+
 func (c *etcdRaftConsensus) commitMutation(
 	ctx context.Context,
 	proposal raftCommitProposal,
@@ -475,8 +483,10 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := c.maybeSnapshotLocked(); err != nil {
-		return err
+	if c.snapshotter == nil {
+		if err := c.maybeSnapshotLocked(c.index); err != nil {
+			return err
+		}
 	}
 	c.rawNode.Advance(rd)
 	return nil
@@ -510,7 +520,13 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			delete(c.pending, proposal.ID)
 			return nil
 		}
-		return c.notifyCommittedEntryLocked(committed)
+		if err := c.notifyCommittedEntryLocked(committed); err != nil {
+			return err
+		}
+		if c.snapshotter != nil {
+			return c.maybeSnapshotLocked(entry.Index)
+		}
+		return nil
 	case raftpb.EntryConfChange:
 		var cc raftpb.ConfChange
 		if err := cc.Unmarshal(entry.Data); err != nil {
@@ -530,32 +546,61 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 	}
 }
 
-func (c *etcdRaftConsensus) maybeSnapshotLocked() error {
+func (c *etcdRaftConsensus) ObserveCommittedIndex(index uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.snapshotter == nil {
+		return
+	}
+	if c.index > 0 && index > c.index {
+		index = c.index
+	}
+	if err := c.maybeSnapshotLocked(index); err != nil {
+		c.recordRuntimeErrorLocked(err)
+	}
+}
+
+func (c *etcdRaftConsensus) maybeSnapshotLocked(appliedIndex uint64) error {
 	policy := c.snapshotPolicy
-	if policy.AppliedEntries == 0 || c.index == 0 {
+	if policy.AppliedEntries == 0 || appliedIndex == 0 {
 		return nil
 	}
-	if c.index <= c.snapshotIndex || c.index-c.snapshotIndex < policy.AppliedEntries {
+	if appliedIndex <= c.snapshotIndex || appliedIndex-c.snapshotIndex < policy.AppliedEntries {
 		return nil
 	}
-	snapshotIndex := c.index
-	if policy.RetainEntries > 0 {
-		if c.index <= policy.RetainEntries {
+	snapshotIndex := appliedIndex
+	compactIndex := snapshotIndex
+	var data []byte
+	if c.snapshotter != nil {
+		if policy.RetainEntries > 0 {
+			if snapshotIndex <= policy.RetainEntries {
+				return nil
+			}
+			compactIndex = snapshotIndex - policy.RetainEntries
+		}
+		payload, err := c.snapshotter.CaptureStateSnapshot(snapshotIndex)
+		if err != nil {
+			return fmt.Errorf("capture raft state snapshot: %w", err)
+		}
+		data = append([]byte(nil), payload...)
+	} else if policy.RetainEntries > 0 {
+		if appliedIndex <= policy.RetainEntries {
 			return nil
 		}
-		snapshotIndex = c.index - policy.RetainEntries
+		snapshotIndex = appliedIndex - policy.RetainEntries
+		compactIndex = snapshotIndex
 	}
 	if snapshotIndex <= c.snapshotIndex {
 		return nil
 	}
 	confState := c.raftConfStateLocked()
-	if _, err := c.storage.CreateSnapshot(snapshotIndex, &confState, nil); err != nil {
+	if _, err := c.storage.CreateSnapshot(snapshotIndex, &confState, data); err != nil {
 		if errors.Is(err, raft.ErrSnapOutOfDate) {
 			return nil
 		}
 		return fmt.Errorf("raft storage create snapshot: %w", err)
 	}
-	if err := c.storage.Compact(snapshotIndex); err != nil {
+	if err := c.storage.Compact(compactIndex); err != nil {
 		if !errors.Is(err, raft.ErrCompacted) {
 			return fmt.Errorf("raft storage compact snapshot: %w", err)
 		}

@@ -38,14 +38,16 @@ func (l *LSM) applyCommittedDataFromLog(entry dataCommittedEntry) error {
 		return errs.ErrBackpressure
 	}
 	l.commitApplyMu.Lock()
-	defer l.commitApplyMu.Unlock()
 	if l.shouldSkipCommittedEntryLocked(entry.Commit.Index) {
+		l.commitApplyMu.Unlock()
 		return nil
 	}
 	seq, err := l.writer.applyCommittedDataLocked(entry)
 	if err != nil {
+		l.commitApplyMu.Unlock()
 		return err
 	}
+	l.commitApplyMu.Unlock()
 	switch entry.Mutation.Kind {
 	case "put":
 		l.recordCDCEvent("put", entry.Mutation.Key, entry.Mutation.Value, seq, false)
@@ -60,14 +62,16 @@ func (l *LSM) applyCommittedControlFromLog(entry controlCommittedEntry) error {
 		return errs.ErrShardNotFound
 	}
 	l.commitApplyMu.Lock()
-	defer l.commitApplyMu.Unlock()
 	if l.shouldSkipCommittedEntryLocked(entry.Commit.Index) {
+		l.commitApplyMu.Unlock()
 		return nil
 	}
 	if err := l.control.applyReplicatedControlEntry(entry); err != nil {
+		l.commitApplyMu.Unlock()
 		return err
 	}
 	l.markCommitLogAppliedLocked(entry.Commit.Index)
+	l.commitApplyMu.Unlock()
 	return nil
 }
 
@@ -88,4 +92,15 @@ func (l *LSM) markCommitLogAppliedLocked(index uint64) {
 	if index > l.commitLogAppliedIndex {
 		l.commitLogAppliedIndex = index
 	}
+}
+
+func (l *LSM) observeCommitLogAppliedIndex(index uint64) {
+	if l == nil || index == 0 {
+		return
+	}
+	observer, ok := l.commitLog.(commitLogIndexObserver)
+	if !ok {
+		return
+	}
+	observer.ObserveCommittedIndex(index)
 }

@@ -17,12 +17,30 @@ type lsmStateSnapshot struct {
 	Control               *controlPlaneState `json:"control,omitempty"`
 }
 
+type lsmStateSnapshotter struct {
+	l *LSM
+}
+
+func (s lsmStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) {
+	if s.l == nil {
+		return nil, fmt.Errorf("nil lsm")
+	}
+	return s.l.exportStateSnapshotAt(index)
+}
+
 func (l *LSM) exportStateSnapshot() ([]byte, error) {
+	return l.exportStateSnapshotAt(0)
+}
+
+func (l *LSM) exportStateSnapshotAt(index uint64) ([]byte, error) {
 	if l == nil {
 		return nil, fmt.Errorf("nil lsm")
 	}
 	l.commitApplyMu.Lock()
 	defer l.commitApplyMu.Unlock()
+	if index != 0 && l.commitLogAppliedIndex != index {
+		return nil, fmt.Errorf("state snapshot index %d does not match applied index %d", index, l.commitLogAppliedIndex)
+	}
 
 	snapshot := lsmStateSnapshot{
 		Version:               lsmStateSnapshotVersion,

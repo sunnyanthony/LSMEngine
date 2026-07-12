@@ -41,6 +41,14 @@ type CommittedEntryObserverSetter interface {
 	SetCommittedEntryObserver(observer CommittedEntryObserver) error
 }
 
+type StateSnapshotter interface {
+	CaptureStateSnapshot(index uint64) ([]byte, error)
+}
+
+type StateSnapshotterSetter interface {
+	SetStateSnapshotter(snapshotter StateSnapshotter) error
+}
+
 type ControlMutation struct {
 	Kind    string
 	ShardID string

@@ -3,6 +3,7 @@ package commitlog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,15 @@ func (r *recordingRaftTransport) messagesCopy() []raftpb.Message {
 	out := make([]raftpb.Message, len(r.messages))
 	copy(out, r.messages)
 	return out
+}
+
+type recordingStateSnapshotter struct {
+	indexes []uint64
+}
+
+func (r *recordingStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) {
+	r.indexes = append(r.indexes, index)
+	return []byte(fmt.Sprintf("state-%d", index)), nil
 }
 
 func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
@@ -275,6 +285,61 @@ func TestEtcdRaftConsensusSnapshotPolicyCompactsAppliedLog(t *testing.T) {
 	if restartedStatus.SnapshotIndex != status.SnapshotIndex {
 		t.Fatalf("expected restored snapshot index %d, got %d",
 			status.SnapshotIndex, restartedStatus.SnapshotIndex)
+	}
+}
+
+func TestEtcdRaftConsensusStateSnapshotterUsesObservedAppliedIndex(t *testing.T) {
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  t.TempDir(),
+		NodeID:   "node-a",
+		SnapshotPolicy: SnapshotPolicy{
+			AppliedEntries: 2,
+			RetainEntries:  1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new consensus: %v", err)
+	}
+	snapshotter := &recordingStateSnapshotter{}
+	if err := consensus.SetStateSnapshotter(snapshotter); err != nil {
+		t.Fatalf("set state snapshotter: %v", err)
+	}
+
+	entry, err := consensus.CommitData(context.Background(), DataMutation{
+		Kind:  "put",
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	})
+	if err != nil {
+		t.Fatalf("commit data: %v", err)
+	}
+	if status := consensus.RuntimeStatus(); status.SnapshotIndex != 0 {
+		t.Fatalf("expected no snapshot before applied index observation, got %+v", status)
+	}
+	if len(snapshotter.indexes) != 0 {
+		t.Fatalf("expected snapshotter to be idle before observation, got %v", snapshotter.indexes)
+	}
+
+	consensus.ObserveCommittedIndex(entry.Commit.Index)
+	if len(snapshotter.indexes) != 1 || snapshotter.indexes[0] != entry.Commit.Index {
+		t.Fatalf("expected snapshotter index %d, got %v", entry.Commit.Index, snapshotter.indexes)
+	}
+	status := consensus.RuntimeStatus()
+	if status.SnapshotIndex != entry.Commit.Index {
+		t.Fatalf("expected snapshot index %d, got %+v", entry.Commit.Index, status)
+	}
+	snapshot, err := consensus.storage.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got := string(snapshot.Data); got != fmt.Sprintf("state-%d", entry.Commit.Index) {
+		t.Fatalf("expected LSM snapshot payload for index %d, got %q", entry.Commit.Index, got)
+	}
+
+	consensus.ObserveCommittedIndex(entry.Commit.Index)
+	if len(snapshotter.indexes) != 1 {
+		t.Fatalf("expected duplicate observation to avoid recapturing snapshot, got %v", snapshotter.indexes)
 	}
 }
 
