@@ -63,7 +63,7 @@ Internal engine components (subject to change):
 ## Monitoring
 - Embed HTTP handlers: `pkg/lsm/server` exposes `/healthz`, `/stats`, and control endpoints.
 - Control endpoints: `/cluster/status`, `/cluster/shards`, `/cluster/shards/{id}/{transfer-leader|split|rebalance}`, `/cluster/nodes/{id}/drain`.
-- CLI (single-run or via server): `cmd/lsmctl` with `serve`, `get`, `range`, `put`, `delete`, `write-status`, `stats`, `health`.
+- CLI (single-run or via server): `cmd/lsmctl` with `serve`, `get`, `range`, `put`, `delete`, `async-put`, `async-delete`, `write-status`, `stats`, `health`.
 - Control writes support optional optimistic concurrency + idempotency (`expected_revision`, `operation_id`).
 
 ## Control-plane state file (M1)

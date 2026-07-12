@@ -249,6 +249,36 @@ func TestWriteKVPutRemote(t *testing.T) {
 	}
 }
 
+func TestWriteKVPutRemoteAccepted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/put" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var req kvWriteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Consistency != lsm.WriteConsistencyAccepted {
+			t.Fatalf("unexpected consistency: %+v", req)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.WriteRequestStatus{
+			RequestID:   "req-async",
+			Operation:   "put",
+			Consistency: lsm.WriteConsistencyAccepted,
+			State:       lsm.WriteRequestPending,
+		})
+	}))
+	defer server.Close()
+
+	got, err := writeKVPut(server.URL, "", []byte("k"), []byte("v"), lsm.WriteConsistencyAccepted)
+	if err != nil {
+		t.Fatalf("put kv: %v", err)
+	}
+	if got.RequestID != "req-async" || got.State != lsm.WriteRequestPending {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+}
+
 func TestWriteKVDeleteRemote(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/kv/delete" {
