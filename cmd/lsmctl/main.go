@@ -703,9 +703,12 @@ func clusterStatusCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("cluster-status requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("cluster-status requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	statuses, err := readClusterStatuses(endpoints)
 	if err != nil {
@@ -741,9 +744,12 @@ func drainNodeCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("drain-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("drain-node requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
 	if *expectedRevision != 0 {
@@ -784,9 +790,12 @@ func resumeNodeCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("resume-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("resume-node requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
 	if *expectedRevision != 0 {
@@ -833,9 +842,12 @@ func membershipNodeCmd(command string, args []string, action string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatalf("%s requires raft.peer_urls in config, --addr, or --node-endpoint", command)
+		log.Fatalf("%s requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint", command)
 	}
 	result, err := changeRaftMembership(endpoints, action, *node)
 	if err != nil {
@@ -886,9 +898,12 @@ func shardReplicaCmd(command string, args []string, action string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatalf("%s requires raft.peer_urls in config, --addr, or --node-endpoint", command)
+		log.Fatalf("%s requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint", command)
 	}
 	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
 	if *expectedRevision != 0 {
@@ -933,9 +948,12 @@ func replaceNodeCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("replace-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("replace-node requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
 		OldNode:                 *oldNode,
@@ -977,9 +995,12 @@ func replacementPlanCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("replacement-plan requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("replacement-plan requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	result, err := planReplacementNode(endpoints, replaceNodeOptions{
 		OldNode:         *oldNode,
@@ -1020,9 +1041,12 @@ func replacementApplyCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(endpoints) == 0 {
-		log.Fatal("replacement-apply requires raft.peer_urls in config, --addr, or --node-endpoint")
+		log.Fatal("replacement-apply requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	result, err := applyPlannedReplacement(endpoints, replaceNodeOptions{
 		OldNode:         *oldNode,
@@ -2514,9 +2538,12 @@ func clusterWriteOptionsFromConfig(
 	if !enabled {
 		return clusterWriteOptions{}, nil
 	}
-	endpoints := clusterNodeEndpointsFromConfig(cfg, addr, overrides)
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, addr, overrides)
+	if err != nil {
+		return clusterWriteOptions{}, err
+	}
 	if len(endpoints) == 0 {
-		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls in config, --addr, or --node-endpoint")
+		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	return clusterWriteOptions{
 		Enabled:       true,
@@ -2528,16 +2555,33 @@ func clusterNodeEndpointsFromConfig(
 	cfg serverconfig.Config,
 	addr string,
 	overrides nodeEndpointFlags,
-) map[string]string {
+) (map[string]string, error) {
 	endpoints := make(map[string]string)
+	if strings.TrimSpace(cfg.Raft.PeerURLFile) != "" {
+		peerFileEndpoints, err := serverconfig.LoadPeerURLFile(cfg.Raft.PeerURLFile)
+		if err != nil {
+			return nil, err
+		}
+		for nodeID, endpoint := range peerFileEndpoints {
+			if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
+				endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+			}
+		}
+	}
 	for nodeID, endpoint := range cfg.Raft.PeerURLs {
 		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+			nodeID = strings.TrimSpace(nodeID)
+			if _, exists := endpoints[nodeID]; !exists {
+				endpoints[nodeID] = normalizeHTTPBaseURL(endpoint)
+			}
 		}
 	}
 	for nodeID, endpoint := range cfg.Raft.JoinPeerURLs {
 		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+			nodeID = strings.TrimSpace(nodeID)
+			if _, exists := endpoints[nodeID]; !exists {
+				endpoints[nodeID] = normalizeHTTPBaseURL(endpoint)
+			}
 		}
 	}
 	if strings.TrimSpace(addr) != "" {
@@ -2552,7 +2596,7 @@ func clusterNodeEndpointsFromConfig(
 			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
 		}
 	}
-	return endpoints
+	return endpoints, nil
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {

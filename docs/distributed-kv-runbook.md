@@ -91,6 +91,13 @@ node if needed, and then sends the write there. Without `--cluster`, direct CLI
 users should retry against the current leader shown by `lsmctl cluster-status`
 or `/cluster/status` if a write is sent to a follower.
 
+Cluster/operator commands can also load node endpoints from `--config` when the
+server config contains `raft.peer_url_file`, `raft.peer_urls`, or
+`raft.join_peer_urls`. Endpoint files are useful when an operator or supervisor
+updates node-to-URL discovery data independently of the running server process;
+explicit `--addr` and repeated `--node-endpoint` flags still override config
+values for one-off commands.
+
 ## Rolling Restart Check
 
 The integration suite covers this workflow with real `lsmctl serve` processes:
@@ -175,9 +182,10 @@ This is still a static bootstrap path. `lsmctl raft-add-node`,
 `lsmctl shard-remove-replica` provide manual membership primitives for
 operators. `lsmctl replace-node` composes those primitives for a planned
 replacement when the replacement node is already running and reachable.
-`raft.peer_url_file` can provide operator-managed endpoint updates for future
-joiners without restarting existing nodes. Automated membership repair and
-process supervision remain outside this path.
+`raft.peer_url_file` can provide operator-managed endpoint updates for both
+server peer transport and `lsmctl` operator commands without restarting existing
+nodes. Automated membership repair and process supervision remain outside this
+path.
 
 Supervisor/operator preflight:
 

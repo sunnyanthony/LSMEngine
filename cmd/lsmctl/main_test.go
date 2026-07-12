@@ -109,9 +109,64 @@ func TestClusterWriteOptionsFromConfigMergesPeerURLsAndOverrides(t *testing.T) {
 }
 
 func TestClusterNodeEndpointsFromConfigUsesAddrFallback(t *testing.T) {
-	got := clusterNodeEndpointsFromConfig(serverconfig.Config{}, "127.0.0.1:8080", nil)
+	got, err := clusterNodeEndpointsFromConfig(serverconfig.Config{}, "127.0.0.1:8080", nil)
+	if err != nil {
+		t.Fatalf("cluster endpoints: %v", err)
+	}
 	if got["addr"] != "http://127.0.0.1:8080" {
 		t.Fatalf("expected addr fallback endpoint, got %+v", got)
+	}
+}
+
+func TestClusterNodeEndpointsFromConfigLoadsPeerURLFile(t *testing.T) {
+	path := t.TempDir() + "/peers.yaml"
+	if err := os.WriteFile(path, []byte(`
+node-a: "http://file-a:8080/"
+node-c: "http://file-c:8080"
+`), 0o644); err != nil {
+		t.Fatalf("write peer url file: %v", err)
+	}
+	got, err := clusterNodeEndpointsFromConfig(serverconfig.Config{
+		NodeID: "node-a",
+		Raft: serverconfig.RaftConfig{
+			PeerURLFile: path,
+			PeerURLs: map[string]string{
+				"node-a": "http://static-a:8080",
+				"node-b": "http://static-b:8080",
+			},
+			JoinPeerURLs: map[string]string{
+				"node-d": "http://static-d:8080",
+			},
+		},
+	}, "http://127.0.0.1:8080", nodeEndpointFlags{
+		"node-c": "http://127.0.0.1:8082",
+	})
+	if err != nil {
+		t.Fatalf("cluster endpoints: %v", err)
+	}
+	want := map[string]string{
+		"node-a": "http://127.0.0.1:8080",
+		"node-b": "http://static-b:8080",
+		"node-c": "http://127.0.0.1:8082",
+		"node-d": "http://static-d:8080",
+	}
+	for nodeID, endpoint := range want {
+		if got[nodeID] != endpoint {
+			t.Fatalf("expected %s endpoint %q, got %q in %+v", nodeID, endpoint, got[nodeID], got)
+		}
+	}
+}
+
+func TestClusterNodeEndpointsFromConfigRejectsInvalidPeerURLFile(t *testing.T) {
+	path := t.TempDir() + "/peers.yaml"
+	if err := os.WriteFile(path, []byte(`node-a: "127.0.0.1:8080"`), 0o644); err != nil {
+		t.Fatalf("write peer url file: %v", err)
+	}
+	_, err := clusterNodeEndpointsFromConfig(serverconfig.Config{
+		Raft: serverconfig.RaftConfig{PeerURLFile: path},
+	}, "", nil)
+	if err == nil {
+		t.Fatalf("expected invalid peer url file error")
 	}
 }
 
