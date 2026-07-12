@@ -142,6 +142,70 @@ func TestStateSnapshotRestoreRejectsMismatchedRaftIndex(t *testing.T) {
 	}
 }
 
+func TestRaftStateSnapshotResetsNonEmptyEngine(t *testing.T) {
+	opts := func(dir string) Options {
+		return Options{DataDir: dir, CompactionL0Threshold: 0}
+	}
+
+	source, err := New(opts(t.TempDir()))
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	defer source.Close()
+	if err := source.Put([]byte("keep"), []byte("snapshot")); err != nil {
+		t.Fatalf("put keep source: %v", err)
+	}
+	if err := source.Put([]byte("stale"), []byte("temp")); err != nil {
+		t.Fatalf("put stale source: %v", err)
+	}
+	if err := source.Delete([]byte("stale")); err != nil {
+		t.Fatalf("delete stale source: %v", err)
+	}
+	payload, err := source.exportStateSnapshot()
+	if err != nil {
+		t.Fatalf("export snapshot: %v", err)
+	}
+
+	targetDir := t.TempDir()
+	target, err := New(opts(targetDir))
+	if err != nil {
+		t.Fatalf("new target: %v", err)
+	}
+	if err := target.Put([]byte("keep"), []byte("old")); err != nil {
+		t.Fatalf("put keep target: %v", err)
+	}
+	if err := target.Put([]byte("stale"), []byte("local")); err != nil {
+		t.Fatalf("put stale target: %v", err)
+	}
+	if err := target.applyRaftStateSnapshot(source.commitLogAppliedIndex, payload); err != nil {
+		t.Fatalf("apply raft snapshot: %v", err)
+	}
+	if entry, ok := target.Get([]byte("keep")); !ok || string(entry.Value) != "snapshot" {
+		t.Fatalf("expected keep=snapshot after reset, got %q found=%v", string(entry.Value), ok)
+	}
+	if _, ok := target.Get([]byte("stale")); ok {
+		t.Fatalf("expected stale key removed after reset")
+	}
+	if target.commitLogAppliedIndex != source.commitLogAppliedIndex {
+		t.Fatalf("expected applied index %d, got %d", source.commitLogAppliedIndex, target.commitLogAppliedIndex)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatalf("close target: %v", err)
+	}
+
+	restarted, err := New(opts(targetDir))
+	if err != nil {
+		t.Fatalf("restart target: %v", err)
+	}
+	defer restarted.Close()
+	if entry, ok := restarted.Get([]byte("keep")); !ok || string(entry.Value) != "snapshot" {
+		t.Fatalf("expected restarted keep=snapshot, got %q found=%v", string(entry.Value), ok)
+	}
+	if _, ok := restarted.Get([]byte("stale")); ok {
+		t.Fatalf("expected stale key removed after restart")
+	}
+}
+
 func TestEtcdRaftSnapshotPersistsLSMStatePayloadAfterEngineApply(t *testing.T) {
 	dataDir := t.TempDir()
 	db, err := New(Options{
