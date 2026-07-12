@@ -57,6 +57,14 @@ func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, mess
 	return c.inner.HandlePeerMessages(ctx, toInternalPeerMessages(messages))
 }
 
+func (c *builtinCommitLogConsensus) ChangeMembership(ctx context.Context, change commitLogMembershipChange) error {
+	changer, ok := c.inner.(internalcommitlog.MembershipChanger)
+	if !ok {
+		return nil
+	}
+	return mapInternalCommitLogError(changer.ChangeMembership(ctx, toInternalMembershipChange(change)))
+}
+
 func mapInternalCommitLogError(err error) error {
 	switch {
 	case errors.Is(err, internalcommitlog.ErrNotLeader):
@@ -173,6 +181,21 @@ func (a commitLogPeerTransportAdapter) Send(ctx context.Context, messages []inte
 		return nil
 	}
 	return a.transport.Send(ctx, fromInternalPeerMessages(messages))
+}
+
+func toInternalMembershipChange(change commitLogMembershipChange) internalcommitlog.MembershipChange {
+	out := internalcommitlog.MembershipChange{
+		NodeID: change.NodeID,
+	}
+	switch change.Type {
+	case CommitLogMembershipChangeAddNode:
+		out.Type = internalcommitlog.MembershipChangeAddNode
+	case CommitLogMembershipChangeRemoveNode:
+		out.Type = internalcommitlog.MembershipChangeRemoveNode
+	default:
+		out.Type = internalcommitlog.MembershipChangeType(change.Type)
+	}
+	return out
 }
 
 func cloneCommitLogPeerMessages(messages []CommitLogPeerMessage) []CommitLogPeerMessage {
