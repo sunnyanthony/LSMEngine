@@ -13,6 +13,7 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 - SSTable FlowObserver + FlowMetrics hooks for read-path visibility.
 - M1 control-plane surface: fixed shard map metadata + management APIs.
 - M1 control-plane state persistence: shard layout/leader/drain state survive restart via `control_state.json`.
+- Static three-node distributed KV foundation: etcd-raft commit log, HTTP peer transport, follower apply, CLI KV commands, Docker Compose/kind smokes, and restart/partition integration coverage.
 - Shard layout guardrails: ranges are validated at startup (ordered, non-overlapping, open-ended range only as last shard).
 - Backpressure returns `ErrBackpressure` instead of synchronous flush when the flush queue is full.
 - Close drains flush queues best-effort within `CloseTimeout`; new writes return `ErrClosed`.
@@ -30,6 +31,7 @@ go test ./...
 Design docs:
 - `docs/design.md` (index)
 - `docs/architecture.md`
+- `docs/distributed-kv-runbook.md`
 - `docs/memtable.md`
 - `docs/sstable.md`
 - `docs/wal.md`
