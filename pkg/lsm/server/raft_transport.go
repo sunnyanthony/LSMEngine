@@ -17,37 +17,35 @@ const RaftPeerMessagesPath = "/cluster/raft/messages"
 
 // RaftHTTPTransportOptions configures outbound raft peer delivery over HTTP.
 type RaftHTTPTransportOptions struct {
-	PeerURLs   map[uint64]string
-	HTTPClient *http.Client
-	OnError    func(error)
+	PeerURLs     map[uint64]string
+	PeerResolver RaftPeerResolver
+	HTTPClient   *http.Client
+	OnError      func(error)
 }
 
 // RaftHTTPTransport sends LSM-owned raft peer messages to peer server endpoints.
 type RaftHTTPTransport struct {
-	peerURLs map[uint64]string
+	resolver RaftPeerResolver
 	client   *http.Client
 	onError  func(error)
 }
 
 // NewRaftHTTPTransport returns an outbound HTTP transport for raft peer messages.
 func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, error) {
-	if len(opts.PeerURLs) == 0 {
-		return nil, fmt.Errorf("raft peer urls required")
-	}
-	peerURLs := make(map[uint64]string, len(opts.PeerURLs))
-	for id, rawURL := range opts.PeerURLs {
-		endpoint := strings.TrimSuffix(strings.TrimSpace(rawURL), "/")
-		if id == 0 || endpoint == "" {
-			return nil, fmt.Errorf("invalid raft peer url mapping")
+	resolver := opts.PeerResolver
+	if resolver == nil {
+		staticResolver, err := NewStaticRaftPeerResolver(opts.PeerURLs)
+		if err != nil {
+			return nil, err
 		}
-		peerURLs[id] = endpoint
+		resolver = staticResolver
 	}
 	client := opts.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 3 * time.Second}
 	}
 	return &RaftHTTPTransport{
-		peerURLs: peerURLs,
+		resolver: resolver,
 		client:   client,
 		onError:  opts.OnError,
 	}, nil
@@ -58,7 +56,7 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMes
 	if len(messages) == 0 {
 		return nil
 	}
-	if t == nil || t.client == nil {
+	if t == nil || t.client == nil || t.resolver == nil {
 		return fmt.Errorf("raft http transport is unavailable")
 	}
 	grouped := make(map[uint64][]lsm.RaftPeerMessage)
@@ -66,20 +64,21 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMes
 		if message.To == 0 {
 			return fmt.Errorf("raft peer message missing target")
 		}
-		if _, ok := t.peerURLs[message.To]; !ok {
-			return fmt.Errorf("raft peer url not configured for node id %d", message.To)
-		}
 		grouped[message.To] = append(grouped[message.To], message)
 	}
 	for peerID, peerMessages := range grouped {
+		endpoint, err := t.resolver.ResolveRaftPeer(ctx, peerID)
+		if err != nil {
+			return err
+		}
 		cloned := cloneRaftPeerMessages(peerMessages)
-		go func(peerID uint64, messages []lsm.RaftPeerMessage) {
+		go func(peerID uint64, endpoint string, messages []lsm.RaftPeerMessage) {
 			sendCtx, cancel := detachedRaftSendContext(ctx, 3*time.Second)
 			defer cancel()
-			if err := t.sendToPeer(sendCtx, peerID, messages); err != nil {
+			if err := t.sendToPeer(sendCtx, peerID, endpoint, messages); err != nil {
 				t.reportError(err)
 			}
-		}(peerID, cloned)
+		}(peerID, endpoint, cloned)
 	}
 	return nil
 }
@@ -115,13 +114,14 @@ func cloneRaftPeerMessages(messages []lsm.RaftPeerMessage) []lsm.RaftPeerMessage
 func (t *RaftHTTPTransport) sendToPeer(
 	ctx context.Context,
 	peerID uint64,
+	endpoint string,
 	messages []lsm.RaftPeerMessage,
 ) error {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(raftPeerMessagesRequest{Messages: messages}); err != nil {
 		return fmt.Errorf("marshal raft peer messages: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.peerURLs[peerID]+RaftPeerMessagesPath, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+RaftPeerMessagesPath, &body)
 	if err != nil {
 		return fmt.Errorf("build raft peer request: %w", err)
 	}

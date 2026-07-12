@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,18 @@ import (
 
 	"lsmengine/pkg/lsm"
 )
+
+type testRaftPeerResolver struct {
+	endpoints map[uint64]string
+}
+
+func (r testRaftPeerResolver) ResolveRaftPeer(_ context.Context, peerID uint64) (string, error) {
+	endpoint, ok := r.endpoints[peerID]
+	if !ok {
+		return "", fmt.Errorf("missing peer %d", peerID)
+	}
+	return endpoint, nil
+}
 
 func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	peerID := lsm.RaftPeerID("node-b")
@@ -56,6 +69,39 @@ func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	}
 	if string(req.Messages[0].Payload) != string([]byte{1, 2, 3}) {
 		t.Fatalf("unexpected payload: %v", req.Messages[0].Payload)
+	}
+}
+
+func TestRaftHTTPTransportUsesConfiguredPeerResolver(t *testing.T) {
+	peerID := lsm.RaftPeerID("node-b")
+	got := make(chan struct{}, 1)
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != RaftPeerMessagesPath {
+			t.Fatalf("expected path %s, got %s", RaftPeerMessagesPath, r.URL.Path)
+		}
+		got <- struct{}{}
+		writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
+	}))
+	defer peer.Close()
+	transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{
+		PeerResolver: testRaftPeerResolver{
+			endpoints: map[uint64]string{peerID: peer.URL},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new raft http transport: %v", err)
+	}
+
+	err = transport.Send(context.Background(), []lsm.RaftPeerMessage{
+		{From: lsm.RaftPeerID("node-a"), To: peerID, Term: 4, Type: "MsgApp"},
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for resolver-backed peer request")
 	}
 }
 

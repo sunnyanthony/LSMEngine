@@ -2038,8 +2038,12 @@ func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.R
 		peerURLs[id] = url
 	}
 	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(peerURLs) > 0 {
+		resolver, err := server.NewStaticRaftPeerResolver(peerURLs)
+		if err != nil {
+			return nil, err
+		}
 		transport, err := server.NewRaftHTTPTransport(server.RaftHTTPTransportOptions{
-			PeerURLs: peerURLs,
+			PeerResolver: resolver,
 		})
 		if err != nil {
 			return nil, err
