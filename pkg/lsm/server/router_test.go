@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -317,6 +318,85 @@ func TestGatewayUsesNodeEndpointResolver(t *testing.T) {
 	}
 	if nodeBWrites.Load() != 1 {
 		t.Fatalf("expected resolver-routed write to node-b")
+	}
+}
+
+func TestGatewayUsesReloadedNodeEndpointFileResolver(t *testing.T) {
+	path := t.TempDir() + "/endpoints.yaml"
+	if err := os.WriteFile(path, []byte(`
+node-a: "http://node-a"
+node-b: "http://old-b"
+`), 0o644); err != nil {
+		t.Fatalf("write endpoints: %v", err)
+	}
+	resolver, err := NewNodeEndpointFileResolver(NodeEndpointFileResolverOptions{Path: path})
+	if err != nil {
+		t.Fatalf("new file resolver: %v", err)
+	}
+	var oldBWrites atomic.Int32
+	var newBWrites atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cluster/routes" {
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: 1,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==",
+						EndKeyBase64:   "eg==",
+						Leader:         "node-b",
+					},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	})
+	handlerOldB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		oldBWrites.Add(1)
+		http.NotFound(w, r)
+	})
+	handlerNewB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/put" {
+			http.NotFound(w, r)
+			return
+		}
+		newBWrites.Add(1)
+		writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+			RequestID:   "reloaded-1",
+			Operation:   "put",
+			Consistency: lsm.WriteConsistencyLocalCommitted,
+			State:       lsm.WriteRequestCommitted,
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:         "http://node-a",
+		NodeEndpointResolver: resolver,
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"old-b":  handlerOldB,
+			"new-b":  handlerNewB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`
+node-a: "http://node-a"
+node-b: "http://new-b"
+`), 0o644); err != nil {
+		t.Fatalf("rewrite endpoints: %v", err)
+	}
+
+	status, err := gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed status, got %+v", status)
+	}
+	if oldBWrites.Load() != 0 || newBWrites.Load() != 1 {
+		t.Fatalf("expected write through reloaded endpoint, old=%d new=%d", oldBWrites.Load(), newBWrites.Load())
 	}
 }
 
