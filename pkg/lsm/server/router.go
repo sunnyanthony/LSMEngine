@@ -40,6 +40,26 @@ type Gateway struct {
 	routes cachedRoutes
 }
 
+// GatewayClusterStatus summarizes backend node status as seen through a gateway.
+type GatewayClusterStatus struct {
+	Ready               bool                       `json:"ready"`
+	Reason              string                     `json:"reason,omitempty"`
+	NodeCount           int                        `json:"node_count"`
+	ReachableNodes      int                        `json:"reachable_nodes"`
+	WriteLeader         string                     `json:"write_leader,omitempty"`
+	WriteLeaderEndpoint string                     `json:"write_leader_endpoint,omitempty"`
+	Nodes               []GatewayClusterNodeStatus `json:"nodes"`
+}
+
+// GatewayClusterNodeStatus is one backend node status sample.
+type GatewayClusterNodeStatus struct {
+	Node     string             `json:"node"`
+	Endpoint string             `json:"endpoint"`
+	OK       bool               `json:"ok"`
+	Error    string             `json:"error,omitempty"`
+	Status   *lsm.ClusterStatus `json:"status,omitempty"`
+}
+
 type cachedRoutes struct {
 	revision uint64
 	shards   []cachedRouteShard
@@ -123,6 +143,85 @@ func (g *Gateway) Delete(
 	consistency lsm.WriteConsistency,
 ) (lsm.WriteRequestStatus, error) {
 	return g.writeWithRetry(ctx, "delete", key, nil, consistency)
+}
+
+// ClusterStatus polls configured node endpoints and returns the gateway's
+// current view of backend readiness.
+func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, error) {
+	if g == nil {
+		return GatewayClusterStatus{
+			Ready:  false,
+			Reason: "gateway_unavailable",
+		}, fmt.Errorf("gateway unavailable")
+	}
+	endpoints, err := g.endpointResolver.ResolveNodeEndpoints(ctx)
+	if err != nil {
+		return GatewayClusterStatus{
+			Ready:  false,
+			Reason: err.Error(),
+		}, err
+	}
+	nodeIDs := sortedUniqueNodeEndpointIDs(endpoints)
+	result := GatewayClusterStatus{
+		NodeCount: len(nodeIDs),
+		Nodes:     make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
+	}
+	var lastErr error
+	for _, nodeID := range nodeIDs {
+		endpoint := endpoints[nodeID]
+		node := GatewayClusterNodeStatus{
+			Node:     nodeID,
+			Endpoint: endpoint,
+		}
+		var status lsm.ClusterStatus
+		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			node.Error = err.Error()
+			lastErr = err
+		} else {
+			node.OK = true
+			node.Status = &status
+			result.ReachableNodes++
+			if strings.TrimSpace(status.NodeID) != "" {
+				node.Node = status.NodeID
+			}
+			if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
+				result.WriteLeader = node.Node
+				result.WriteLeaderEndpoint = endpoint
+			}
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	result.Ready = result.ReachableNodes > 0
+	if !result.Ready {
+		switch {
+		case lastErr != nil:
+			result.Reason = lastErr.Error()
+		case result.NodeCount == 0:
+			result.Reason = "no node endpoints available"
+		default:
+			result.Reason = "no reachable node endpoints"
+		}
+		return result, errors.New(result.Reason)
+	}
+	if result.ReachableNodes < result.NodeCount {
+		result.Reason = "partial_node_unavailable"
+	}
+	return result, nil
+}
+
+func sortedUniqueNodeEndpointIDs(endpoints map[string]string) []string {
+	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	unique := make([]string, 0, len(nodeIDs))
+	seen := make(map[string]struct{}, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		endpoint := NormalizeHTTPBaseURL(endpoints[nodeID])
+		if _, ok := seen[endpoint]; ok {
+			continue
+		}
+		seen[endpoint] = struct{}{}
+		unique = append(unique, nodeID)
+	}
+	return unique
 }
 
 func (g *Gateway) writeWithRetry(

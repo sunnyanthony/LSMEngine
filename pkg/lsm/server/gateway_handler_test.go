@@ -55,8 +55,9 @@ func TestGatewayHandlerRoutesPutToLeader(t *testing.T) {
 	gateway, err := NewGateway(GatewayOptions{
 		BootstrapURL: "http://node-a",
 		NodeEndpoints: map[string]string{
-			"node-a": "http://node-a",
-			"node-b": "http://node-b",
+			"bootstrap": "http://node-a",
+			"node-a":    "http://node-a",
+			"node-b":    "http://node-b",
 		},
 		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
 			"node-a": handlerA,
@@ -165,6 +166,101 @@ func TestGatewayHandlerHealth(t *testing.T) {
 	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:         "follower",
+				LeaderKnown:    true,
+				WriteAvailable: false,
+			},
+		})
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-b",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:         "ready",
+				Leader:         true,
+				LeaderKnown:    true,
+				WriteAvailable: true,
+			},
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/gateway/status", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out GatewayClusterStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if !out.Ready || out.NodeCount != 2 || out.ReachableNodes != 2 {
+		t.Fatalf("unexpected gateway status: %+v", out)
+	}
+	if out.WriteLeader != "node-b" || out.WriteLeaderEndpoint != "http://node-b" {
+		t.Fatalf("unexpected write leader: %+v", out)
+	}
+	if len(out.Nodes) != 2 || !out.Nodes[0].OK || !out.Nodes[1].OK {
+		t.Fatalf("expected two successful node statuses: %+v", out.Nodes)
+	}
+}
+
+func TestGatewayHandlerStatusUnavailableWhenBackendsFail(t *testing.T) {
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": http.NotFoundHandler(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/gateway/status", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out GatewayClusterStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if out.Ready || out.ReachableNodes != 0 || len(out.Nodes) != 1 || out.Nodes[0].Error == "" {
+		t.Fatalf("unexpected unavailable status: %+v", out)
 	}
 }
 

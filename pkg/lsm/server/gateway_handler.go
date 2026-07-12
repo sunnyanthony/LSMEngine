@@ -22,6 +22,7 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 		writeConsistencyDefault: resolved.writeConsistencyDefault,
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
+	mux.HandleFunc("/gateway/status", handler.handleGatewayStatus)
 	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/range", handler.handleRange)
 	mux.HandleFunc("/kv/put", handler.handlePut)
@@ -47,6 +48,19 @@ func (h *gatewayHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, lsm.Health{Ready: true})
+}
+
+func (h *gatewayHandler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := h.gateway.ClusterStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, status)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (h *gatewayHandler) handleGet(w http.ResponseWriter, r *http.Request) {
