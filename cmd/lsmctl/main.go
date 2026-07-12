@@ -2147,8 +2147,8 @@ func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.R
 	for id, url := range toRaftPeerURLMap(raftCfg.JoinPeerURLs) {
 		peerURLs[id] = url
 	}
-	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(peerURLs) > 0 {
-		resolver, err := server.NewStaticRaftPeerResolver(peerURLs)
+	if opts.Provider == lsm.CommitLogProviderEtcdRaft && (len(peerURLs) > 0 || strings.TrimSpace(raftCfg.PeerURLFile) != "") {
+		resolver, err := raftPeerResolverFromConfig(raftCfg, peerURLs)
 		if err != nil {
 			return nil, err
 		}
@@ -2161,6 +2161,17 @@ func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.R
 		opts.Transport = transport
 	}
 	return opts, nil
+}
+
+func raftPeerResolverFromConfig(raftCfg serverconfig.RaftConfig, peerURLs map[uint64]string) (server.RaftPeerResolver, error) {
+	peerURLFile := strings.TrimSpace(raftCfg.PeerURLFile)
+	if peerURLFile != "" {
+		return server.NewRaftPeerURLFileResolver(server.RaftPeerURLFileResolverOptions{
+			Path:             peerURLFile,
+			FallbackPeerURLs: peerURLs,
+		})
+	}
+	return server.NewStaticRaftPeerResolver(peerURLs)
 }
 
 func toRaftPeerURLMap(in map[string]string) map[uint64]string {

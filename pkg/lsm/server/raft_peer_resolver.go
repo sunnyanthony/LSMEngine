@@ -22,13 +22,9 @@ func NewStaticRaftPeerResolver(peerURLs map[uint64]string) (*StaticRaftPeerResol
 	if len(peerURLs) == 0 {
 		return nil, fmt.Errorf("raft peer urls required")
 	}
-	resolved := make(map[uint64]string, len(peerURLs))
-	for id, rawURL := range peerURLs {
-		endpoint := strings.TrimSuffix(strings.TrimSpace(rawURL), "/")
-		if id == 0 || endpoint == "" {
-			return nil, fmt.Errorf("invalid raft peer url mapping")
-		}
-		resolved[id] = endpoint
+	resolved, err := normalizeRaftPeerURLMap(peerURLs)
+	if err != nil {
+		return nil, err
 	}
 	return &StaticRaftPeerResolver{peerURLs: resolved}, nil
 }
@@ -43,4 +39,30 @@ func (r *StaticRaftPeerResolver) ResolveRaftPeer(_ context.Context, peerID uint6
 		return "", fmt.Errorf("raft peer url not configured for node id %d", peerID)
 	}
 	return endpoint, nil
+}
+
+func normalizeRaftPeerURLMap(peerURLs map[uint64]string) (map[uint64]string, error) {
+	if len(peerURLs) == 0 {
+		return nil, nil
+	}
+	resolved := make(map[uint64]string, len(peerURLs))
+	for id, rawURL := range peerURLs {
+		endpoint := strings.TrimSuffix(strings.TrimSpace(rawURL), "/")
+		if id == 0 || endpoint == "" {
+			return nil, fmt.Errorf("invalid raft peer url mapping")
+		}
+		resolved[id] = endpoint
+	}
+	return resolved, nil
+}
+
+func clonePeerURLMap(peerURLs map[uint64]string) map[uint64]string {
+	if len(peerURLs) == 0 {
+		return nil
+	}
+	out := make(map[uint64]string, len(peerURLs))
+	for peerID, endpoint := range peerURLs {
+		out[peerID] = endpoint
+	}
+	return out
 }
