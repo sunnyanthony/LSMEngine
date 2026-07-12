@@ -52,12 +52,12 @@ wait_for_health() {
 wait_for_gateway_status() {
   local deadline=$((SECONDS + 60))
   local output=""
-  until output="$(curl -fsS "$GATEWAY_URL/gateway/status")" \
-    && [[ "$output" == *'"ready":true'* ]] \
-    && [[ "$output" == *'"reachable_nodes":3'* ]] \
-    && [[ "$output" == *'"write_leader":'* ]]; do
+  until output="$(lsmctl gateway-status --addr "$GATEWAY_URL")" \
+    && [[ "$output" == *"ready=true"* ]] \
+    && [[ "$output" == *"reachable_nodes=3"* ]] \
+    && [[ "$output" == *"write_leader=node-"* ]]; do
     if (( SECONDS >= deadline )); then
-      echo "timed out waiting for $GATEWAY_URL/gateway/status" >&2
+      echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
       if [[ -n "$output" ]]; then
         echo "$output" >&2
       fi
