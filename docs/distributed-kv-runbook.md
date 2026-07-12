@@ -158,7 +158,9 @@ go run ./cmd/lsmctl gateway-status --addr http://127.0.0.1:8090
 ```
 
 The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`,
-`/kv/write-status/{request_id}`, `/healthz`, and `/gateway/status`. Writes are
+`/kv/write-status/{request_id}`, `/healthz`, `/readyz`, and `/gateway/status`.
+`/healthz` reports gateway process liveness; `/readyz` reports whether the
+gateway can currently see a backend commit-log write leader. Writes are
 route-aware and retry stale leader metadata through `server.Gateway`; accepted
 write status lookups and reads use best-effort endpoint fallback, not a
 linearizable read protocol.
@@ -177,7 +179,8 @@ stable endpoint while raft peer traffic stays inside the Compose network. The
 Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
 covers the file-backed node endpoint resolver used by long-running gateways. It
-also verifies `/gateway/status` sees all three backend nodes and a write leader.
+also verifies `/readyz` reports backend write readiness and `/gateway/status`
+sees all three backend nodes plus a write leader.
 
 ## Rolling Restart Check
 

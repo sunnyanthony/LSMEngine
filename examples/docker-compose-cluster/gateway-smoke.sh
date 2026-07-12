@@ -49,6 +49,20 @@ wait_for_health() {
   done
 }
 
+wait_for_ready() {
+  local url="$1"
+  local deadline=$((SECONDS + 60))
+  until curl -fsS "$url/readyz" >/dev/null; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for $url/readyz" >&2
+      compose --profile gateway ps >&2 || true
+      compose --profile gateway logs --tail=100 >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 wait_for_gateway_status() {
   local deadline=$((SECONDS + 60))
   local output=""
@@ -89,6 +103,7 @@ require_contains "$wait_output" "ready=true"
 
 compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
+wait_for_ready "$GATEWAY_URL"
 wait_for_gateway_status
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"
