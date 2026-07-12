@@ -31,6 +31,24 @@ kubectl_lsm() {
   kubectl -n "$NAMESPACE" exec pod/lsm-cluster-0 -- /usr/local/bin/lsmctl "$@"
 }
 
+retry_kubectl_lsm_contains() {
+  local needle="$1"
+  shift
+  local deadline=$((SECONDS + 60))
+  local output=""
+  until output="$(kubectl_lsm "$@" 2>&1)" && [[ "$output" == *"$needle"* ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for lsmctl output to contain: $needle" >&2
+      echo "$output" >&2
+      kubectl -n "$NAMESPACE" get pods -o wide >&2 || true
+      kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=120 >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$output"
+}
+
 require_contains() {
   local haystack="$1"
   local needle="$2"
@@ -115,7 +133,7 @@ echo "committed put through $write_url"
 
 eventually_lsmctl_get_contains "http://lsm-cluster-1.lsm-cluster:8080" kind "found=true" "value=ok"
 
-range_output="$(kubectl_lsm range --addr http://lsm-cluster-1.lsm-cluster:8080 --start kind --end kine --limit 1)"
+range_output="$(retry_kubectl_lsm_contains "key=kind" range --addr http://lsm-cluster-1.lsm-cluster:8080 --start kind --end kine --limit 1)"
 require_contains "$range_output" "key=kind"
 require_contains "$range_output" "value=ok"
 

@@ -75,6 +75,80 @@ func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
 	})
 }
 
+func TestEtcdRaftThreeProcessLeaderRestartSmoke(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := buildLSMCTLBinary(t, tempDir)
+
+	peers := []string{"node-a", "node-b", "node-c"}
+	urls := reserveNodeURLs(t, peers)
+	processes := make(map[string]*startedLSMProcess, len(peers))
+	configPaths := make(map[string]string, len(peers))
+	for _, nodeID := range peers {
+		configPath := writeProcessConfig(t, tempDir, processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     peers,
+			ShardReplicas: peers,
+			PeerURLs:      urlsForPeers(peers, urls),
+		})
+		configPaths[nodeID] = configPath
+		processes[nodeID] = startLSMProcess(t, bin, configPath)
+	}
+	t.Cleanup(func() {
+		for _, nodeID := range []string{"node-c", "node-b", "node-a"} {
+			if proc := processes[nodeID]; proc != nil {
+				proc.stop(t)
+			}
+		}
+	})
+
+	for _, nodeID := range peers {
+		waitHTTPStatus(t, urls[nodeID]+"/healthz", http.StatusOK, 5*time.Second)
+	}
+
+	initialWriteNode := eventuallyPostKVPut(t, urls, peers, []byte("before-leader-restart"), []byte("stable"), 10*time.Second)
+	t.Logf("committed pre-leader-restart write through %s", initialWriteNode)
+	for _, nodeID := range peers {
+		nodeID := nodeID
+		t.Run("before-restart-"+nodeID, func(t *testing.T) {
+			eventually(t, 5*time.Second, func() bool {
+				got, ok, err := getKVValue(urls[nodeID], []byte("before-leader-restart"))
+				return err == nil && ok && bytes.Equal(got, []byte("stable"))
+			})
+		})
+	}
+
+	raftLeader := eventuallyCommitLogLeader(t, urls, peers, 10*time.Second)
+	shardLeaderTarget := firstPeerExcept(t, peers, raftLeader)
+	transferNode := eventuallyPostShardTransferLeader(t, urls, peers, "users", shardLeaderTarget, 10*time.Second)
+	t.Logf("transferred shard leader to %s through %s before stopping raft leader %s", shardLeaderTarget, transferNode, raftLeader)
+	eventually(t, 5*time.Second, func() bool {
+		leader, err := getRouteLeader(urls[shardLeaderTarget], "users")
+		return err == nil && leader == shardLeaderTarget
+	})
+
+	processes[raftLeader].stop(t)
+	processes[raftLeader] = nil
+	remainingPeers := peersExcept(peers, raftLeader)
+	duringRestartWriteNode := eventuallyPostKVPut(t, urls, remainingPeers, []byte("while-leader-down"), []byte("quorum-survived"), 10*time.Second)
+	t.Logf("committed while-leader-down write through %s", duringRestartWriteNode)
+	for _, nodeID := range remainingPeers {
+		nodeID := nodeID
+		t.Run("during-restart-"+nodeID, func(t *testing.T) {
+			eventually(t, 10*time.Second, func() bool {
+				got, ok, err := getKVValue(urls[nodeID], []byte("while-leader-down"))
+				return err == nil && ok && bytes.Equal(got, []byte("quorum-survived"))
+			})
+		})
+	}
+
+	processes[raftLeader] = startLSMProcess(t, bin, configPaths[raftLeader])
+	waitHTTPStatus(t, urls[raftLeader]+"/healthz", http.StatusOK, 5*time.Second)
+	eventually(t, 10*time.Second, func() bool {
+		got, ok, err := getKVValue(urls[raftLeader], []byte("while-leader-down"))
+		return err == nil && ok && bytes.Equal(got, []byte("quorum-survived"))
+	})
+}
+
 func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	tempDir := t.TempDir()
 	bin := buildLSMCTLBinary(t, tempDir)
@@ -370,6 +444,71 @@ func eventuallyRunLSMCTLWrite(t *testing.T, bin string, urls map[string]string, 
 	return ""
 }
 
+func eventuallyPostShardTransferLeader(t *testing.T, urls map[string]string, peers []string, shardID string, target string, timeout time.Duration) string {
+	t.Helper()
+	last := make(map[string]string, len(peers))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, nodeID := range peers {
+			status, body, err := postShardTransferLeader(urls[nodeID], shardID, target)
+			if err != nil {
+				last[nodeID] = err.Error()
+				continue
+			}
+			if status == http.StatusOK {
+				return nodeID
+			}
+			last[nodeID] = fmt.Sprintf("status=%d body=%s", status, strings.TrimSpace(body))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no raft node accepted transfer-leader for shard %s to %s within %s: %s", shardID, target, timeout, formatNodeAttempts(peers, last))
+	return ""
+}
+
+func eventuallyCommitLogLeader(t *testing.T, urls map[string]string, peers []string, timeout time.Duration) string {
+	t.Helper()
+	last := make(map[string]string, len(peers))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, nodeID := range peers {
+			leader, err := getCommitLogLeader(urls[nodeID])
+			if err != nil {
+				last[nodeID] = err.Error()
+				continue
+			}
+			if leader {
+				return nodeID
+			}
+			last[nodeID] = "not leader"
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no commit-log leader observed within %s: %s", timeout, formatNodeAttempts(peers, last))
+	return ""
+}
+
+func firstPeerExcept(t *testing.T, peers []string, excluded string) string {
+	t.Helper()
+	for _, peer := range peers {
+		if peer != excluded {
+			return peer
+		}
+	}
+	t.Fatalf("no peer available except %s", excluded)
+	return ""
+}
+
+func peersExcept(peers []string, excluded string) []string {
+	out := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		if peer != excluded {
+			out = append(out, peer)
+		}
+	}
+	return out
+}
+
 func runLSMCTL(t *testing.T, bin string, args ...string) []byte {
 	t.Helper()
 	out, err := runLSMCTLResult(t, bin, args...)
@@ -472,6 +611,87 @@ func postRaftAdd(baseURL string, nodeID string) (int, string, error) {
 	var out bytes.Buffer
 	_, _ = out.ReadFrom(resp.Body)
 	return resp.StatusCode, out.String(), nil
+}
+
+func postShardTransferLeader(baseURL string, shardID string, target string) (int, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		baseURL+"/cluster/shards/"+shardID+"/transfer-leader",
+		bytes.NewBufferString(`{"target":"`+target+`"}`),
+	)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	return resp.StatusCode, out.String(), nil
+}
+
+func getRouteLeader(baseURL string, shardID string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/cluster/routes", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("routes status %d", resp.StatusCode)
+	}
+	var out struct {
+		Shards []struct {
+			ID     string `json:"id"`
+			Leader string `json:"leader"`
+		} `json:"shards"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	for _, shard := range out.Shards {
+		if shard.ID == shardID {
+			return shard.Leader, nil
+		}
+	}
+	return "", fmt.Errorf("route shard %q not found", shardID)
+}
+
+func getCommitLogLeader(baseURL string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/cluster/status", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("cluster status %d", resp.StatusCode)
+	}
+	var out struct {
+		CommitLogRuntime struct {
+			Leader bool `json:"leader"`
+		} `json:"commit_log_runtime"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	return out.CommitLogRuntime.Leader, nil
 }
 
 func getKVValue(baseURL string, key []byte) ([]byte, bool, error) {
