@@ -26,9 +26,9 @@ type CommitLogOptions struct {
 // CommitLogSnapshotPolicy controls provider-owned raft log snapshot/compaction.
 //
 // AppliedEntries disables automatic provider snapshots when zero. RetainEntries
-// keeps a tail of recent raft log entries after each snapshot. This is a raft
-// log policy only; full LSM state-machine snapshot generation remains a
-// separate engine-level responsibility.
+// keeps a tail of recent raft log entries after each snapshot. For the builtin
+// etcd-raft provider, snapshot data is captured through the engine after the
+// matching commit index has been applied locally.
 type CommitLogSnapshotPolicy struct {
 	AppliedEntries uint64 `json:"applied_entries" yaml:"applied_entries"`
 	RetainEntries  uint64 `json:"retain_entries" yaml:"retain_entries"`

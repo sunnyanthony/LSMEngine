@@ -122,6 +122,8 @@ type controlPlane struct {
 	fs        iofs.FS
 	statePath string
 	consensus commitLogConsensus
+
+	appliedIndexObserver func(uint64)
 }
 
 const maxAppliedControlOps = 256
@@ -652,7 +654,20 @@ func (c *controlPlane) applyControlMutation(
 	if errors.Is(err, errControlNoop) {
 		return nil
 	}
+	if err == nil {
+		c.observeAppliedCommitLogIndex(entry.Commit.Index)
+		if observer, ok := c.consensus.(commitLogIndexObserver); ok {
+			observer.ObserveCommittedIndex(entry.Commit.Index)
+		}
+	}
 	return err
+}
+
+func (c *controlPlane) observeAppliedCommitLogIndex(index uint64) {
+	if c == nil || c.appliedIndexObserver == nil || index == 0 {
+		return
+	}
+	c.appliedIndexObserver(index)
 }
 
 func (c *controlPlane) applyCommittedControlMutation(

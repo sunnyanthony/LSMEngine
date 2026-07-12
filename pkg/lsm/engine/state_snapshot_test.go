@@ -2,9 +2,14 @@ package engine
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"lsmengine/pkg/lsm/types"
+
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestStateSnapshotRestoresVisibleDataAndControlToEmptyEngine(t *testing.T) {
@@ -169,6 +174,99 @@ func TestStateSnapshotRestoreRejectsMalformedEntriesBeforeWriting(t *testing.T) 
 	}
 }
 
+func TestEtcdRaftSnapshotPersistsLSMStatePayloadAfterEngineApply(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := New(Options{
+		DataDir:               dataDir,
+		NodeID:                "node-a",
+		ClusterID:             "cluster-dev",
+		CompactionL0Threshold: 0,
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderEtcdRaft,
+			SnapshotPolicy: CommitLogSnapshotPolicy{
+				AppliedEntries: 1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer db.Close()
+	if err := db.Put([]byte("alpha"), []byte("1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	snapshotPath := filepath.Join(
+		dataDir,
+		"raft",
+		fmt.Sprintf("commitlog-%016x", RaftPeerID("node-a")),
+		"snapshot.json",
+	)
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read raft snapshot: %v", err)
+	}
+	var disk struct {
+		Snapshot raftpb.Snapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatalf("decode raft snapshot: %v", err)
+	}
+	if disk.Snapshot.Metadata.Index != db.commitLogAppliedIndex {
+		t.Fatalf("expected snapshot index %d, got %d", db.commitLogAppliedIndex, disk.Snapshot.Metadata.Index)
+	}
+	if len(disk.Snapshot.Data) == 0 {
+		t.Fatalf("expected raft snapshot data to contain LSM state payload")
+	}
+	var payload lsmStateSnapshot
+	if err := json.Unmarshal(disk.Snapshot.Data, &payload); err != nil {
+		t.Fatalf("decode lsm snapshot payload: %v", err)
+	}
+	if payload.CommitLogAppliedIndex != db.commitLogAppliedIndex {
+		t.Fatalf("expected payload applied index %d, got %d", db.commitLogAppliedIndex, payload.CommitLogAppliedIndex)
+	}
+	if !stateSnapshotHasEntry(payload, "alpha", "1") {
+		t.Fatalf("expected payload to include alpha=1, got %+v", payload.Entries)
+	}
+}
+
+func TestEtcdRaftSnapshotPersistsControlPayloadAfterEngineApply(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := New(Options{
+		DataDir:               dataDir,
+		NodeID:                "node-a",
+		ClusterID:             "cluster-dev",
+		CompactionL0Threshold: 0,
+		CommitLog: &CommitLogOptions{
+			Provider: CommitLogProviderEtcdRaft,
+			SnapshotPolicy: CommitLogSnapshotPolicy{
+				AppliedEntries: 1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer db.Close()
+	if err := db.AddReplica("default", "node-b"); err != nil {
+		t.Fatalf("add replica: %v", err)
+	}
+
+	payload := readEtcdRaftLSMStateSnapshotPayload(t, dataDir, "node-a")
+	if payload.CommitLogAppliedIndex != db.commitLogAppliedIndex {
+		t.Fatalf("expected payload applied index %d, got %d", db.commitLogAppliedIndex, payload.CommitLogAppliedIndex)
+	}
+	if payload.Control == nil {
+		t.Fatalf("expected control state in snapshot payload")
+	}
+	if !stateSnapshotShardHasReplica(payload.Control.Shards, "default", "node-b") {
+		t.Fatalf("expected payload control state to include node-b replica, got %+v", payload.Control.Shards)
+	}
+	if status := db.ClusterStatus().CommitLogRuntime; status.LastError != "" {
+		t.Fatalf("expected clean commit log runtime status, got %+v", status)
+	}
+}
+
 func stateSnapshotShardHasReplica(shards []ShardStatus, shardID string, nodeID string) bool {
 	for _, shard := range shards {
 		if shard.ID != shardID {
@@ -178,6 +276,43 @@ func stateSnapshotShardHasReplica(shards []ShardStatus, shardID string, nodeID s
 			if replica.NodeID == nodeID {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func readEtcdRaftLSMStateSnapshotPayload(t *testing.T, dataDir string, nodeID string) lsmStateSnapshot {
+	t.Helper()
+	snapshotPath := filepath.Join(
+		dataDir,
+		"raft",
+		fmt.Sprintf("commitlog-%016x", RaftPeerID(nodeID)),
+		"snapshot.json",
+	)
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read raft snapshot: %v", err)
+	}
+	var disk struct {
+		Snapshot raftpb.Snapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatalf("decode raft snapshot: %v", err)
+	}
+	if len(disk.Snapshot.Data) == 0 {
+		t.Fatalf("expected raft snapshot data to contain LSM state payload")
+	}
+	var payload lsmStateSnapshot
+	if err := json.Unmarshal(disk.Snapshot.Data, &payload); err != nil {
+		t.Fatalf("decode lsm snapshot payload: %v", err)
+	}
+	return payload
+}
+
+func stateSnapshotHasEntry(snapshot lsmStateSnapshot, key string, value string) bool {
+	for _, entry := range snapshot.Entries {
+		if string(entry.Key) == key && string(entry.Value) == value && !entry.Tombstone {
+			return true
 		}
 	}
 	return false

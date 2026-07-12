@@ -118,6 +118,9 @@ func New(opts Options) (*LSM, error) {
 	lsm.writer = newWriteService(lsm)
 	lsm.reader = newReadService(lsm)
 	lsm.flushSvc = newFlushService(lsm)
+	if lsm.control != nil {
+		lsm.control.appliedIndexObserver = lsm.markCommitLogApplied
+	}
 	if opts.WriteEventSink != nil {
 		lsm.writeEvents = newWriteEventDispatcher(
 			opts.WriteEventSink,
@@ -167,8 +170,14 @@ func New(opts Options) (*LSM, error) {
 		return nil, err
 	}
 	lsm.commitLogAppliedIndex = lsm.initialCommitLogAppliedIndex()
+	if setter, ok := lsm.commitLog.(commitLogStateSnapshotterSetter); ok {
+		if err := setter.SetStateSnapshotter(lsmStateSnapshotter{l: lsm}); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
-		observer.ObserveCommittedIndex(lsm.seq)
+		observer.ObserveCommittedIndex(lsm.initialCommitLogProviderIndex())
 	}
 	if setter, ok := lsm.commitLog.(commitLogCommittedEntryObserverSetter); ok {
 		if err := setter.SetCommittedEntryObserver(lsmCommittedEntryObserver{l: lsm}); err != nil {
