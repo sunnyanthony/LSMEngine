@@ -10,6 +10,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/cdc.go`: per-shard retained change stream buffer and read API (`ReadCDCEvents`); node-local and in-memory only, not WAL-backed durable CDC.
 - `pkg/lsm/engine/read.go`: point reads.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
+- `pkg/lsm/engine/state_snapshot.go`: LSM-owned state-machine snapshot payload export and empty-engine restore foundation.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.
 - `pkg/lsm/engine/replay.go`: WAL replay + recovery.
 - `pkg/lsm/engine/commitlog.go`: control/data commit-log adapter and provider selection.
