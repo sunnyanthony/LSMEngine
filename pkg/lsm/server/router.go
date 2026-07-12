@@ -17,20 +17,21 @@ import (
 
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
-	BootstrapURL      string
-	NodeEndpoints     map[string]string
-	HTTPClient        *http.Client
-	MaxWriteAttempts  int
-	WriteRetryBackoff time.Duration
+	BootstrapURL         string
+	NodeEndpoints        map[string]string
+	NodeEndpointResolver NodeEndpointResolver
+	HTTPClient           *http.Client
+	MaxWriteAttempts     int
+	WriteRetryBackoff    time.Duration
 }
 
 // Gateway routes writes by shard metadata and performs bounded retries on retryable write errors.
 type Gateway struct {
-	bootstrapURL  string
-	nodeEndpoints map[string]string
-	client        *http.Client
-	maxAttempts   int
-	retryBackoff  time.Duration
+	bootstrapURL     string
+	endpointResolver NodeEndpointResolver
+	client           *http.Client
+	maxAttempts      int
+	retryBackoff     time.Duration
 
 	mu     sync.RWMutex
 	routes cachedRoutes
@@ -70,17 +71,16 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	if bootstrapURL == "" {
 		return nil, fmt.Errorf("bootstrap url required")
 	}
-	if len(opts.NodeEndpoints) == 0 {
-		return nil, fmt.Errorf("node endpoints required")
-	}
-	endpoints := make(map[string]string, len(opts.NodeEndpoints))
-	for nodeID, endpoint := range opts.NodeEndpoints {
-		trimmedNode := strings.TrimSpace(nodeID)
-		trimmedEndpoint := strings.TrimSuffix(strings.TrimSpace(endpoint), "/")
-		if trimmedNode == "" || trimmedEndpoint == "" {
-			return nil, fmt.Errorf("invalid node endpoint mapping")
+	resolver := opts.NodeEndpointResolver
+	if resolver == nil {
+		staticResolver, err := NewStaticNodeEndpointResolver(opts.NodeEndpoints)
+		if err != nil {
+			if len(opts.NodeEndpoints) > 0 {
+				return nil, fmt.Errorf("invalid node endpoint mapping")
+			}
+			return nil, err
 		}
-		endpoints[trimmedNode] = trimmedEndpoint
+		resolver = staticResolver
 	}
 	client := opts.HTTPClient
 	if client == nil {
@@ -94,11 +94,11 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		maxAttempts = 2
 	}
 	return &Gateway{
-		bootstrapURL:  bootstrapURL,
-		nodeEndpoints: endpoints,
-		client:        client,
-		maxAttempts:   maxAttempts,
-		retryBackoff:  opts.WriteRetryBackoff,
+		bootstrapURL:     bootstrapURL,
+		endpointResolver: resolver,
+		client:           client,
+		maxAttempts:      maxAttempts,
+		retryBackoff:     opts.WriteRetryBackoff,
 	}, nil
 }
 
@@ -198,7 +198,11 @@ func (g *Gateway) writeOnce(
 	if err != nil {
 		return lsm.WriteRequestStatus{}, err
 	}
-	endpoint, ok := g.nodeEndpoints[leader]
+	endpoints, err := g.endpointResolver.ResolveNodeEndpoints(ctx)
+	if err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	endpoint, ok := endpoints[leader]
 	if !ok {
 		return lsm.WriteRequestStatus{}, fmt.Errorf("node endpoint missing for leader %q", leader)
 	}

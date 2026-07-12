@@ -2779,10 +2779,7 @@ func writeKVRange(w io.Writer, result kvRangeResult) {
 }
 
 func normalizeHTTPBaseURL(raw string) string {
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		return strings.TrimRight(raw, "/")
-	}
-	return "http://" + strings.TrimRight(raw, "/")
+	return server.NormalizeHTTPBaseURL(raw)
 }
 
 func writeJSON(w io.Writer, payload any) {
@@ -2858,47 +2855,8 @@ func clusterNodeEndpointsFromConfig(
 	addr string,
 	overrides nodeEndpointFlags,
 ) (map[string]string, error) {
-	endpoints := make(map[string]string)
-	if strings.TrimSpace(cfg.Raft.PeerURLFile) != "" {
-		peerFileEndpoints, err := serverconfig.LoadPeerURLFile(cfg.Raft.PeerURLFile)
-		if err != nil {
-			return nil, err
-		}
-		for nodeID, endpoint := range peerFileEndpoints {
-			if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-				endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
-			}
-		}
-	}
-	for nodeID, endpoint := range cfg.Raft.PeerURLs {
-		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-			nodeID = strings.TrimSpace(nodeID)
-			if _, exists := endpoints[nodeID]; !exists {
-				endpoints[nodeID] = normalizeHTTPBaseURL(endpoint)
-			}
-		}
-	}
-	for nodeID, endpoint := range cfg.Raft.JoinPeerURLs {
-		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-			nodeID = strings.TrimSpace(nodeID)
-			if _, exists := endpoints[nodeID]; !exists {
-				endpoints[nodeID] = normalizeHTTPBaseURL(endpoint)
-			}
-		}
-	}
-	if strings.TrimSpace(addr) != "" {
-		nodeID := strings.TrimSpace(cfg.NodeID)
-		if nodeID == "" {
-			nodeID = "addr"
-		}
-		endpoints[nodeID] = normalizeHTTPBaseURL(addr)
-	}
-	for nodeID, endpoint := range overrides {
-		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
-			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
-		}
-	}
-	return endpoints, nil
+	resolver := server.NewNodeEndpointConfigResolverFromConfig(cfg, addr, overrides)
+	return resolver.ResolveNodeEndpoints(context.Background())
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {

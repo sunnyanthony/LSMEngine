@@ -68,7 +68,7 @@ wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s)"
 require_contains "$wait_output" "ready=true"
 require_contains "$wait_output" "ready_nodes=3"
 
-put_output="$(lsmctl put --addr http://127.0.0.1:8080 --key compose --value ok)"
+put_output="$(lsmctl put --cluster $(node_endpoint_args) --key compose --value ok)"
 require_contains "$put_output" "state=committed"
 
 get_output="$(lsmctl get --addr http://127.0.0.1:8081 --key compose)"
@@ -87,7 +87,7 @@ cluster_range_output="$(lsmctl range --cluster $(node_endpoint_args) --start com
 require_contains "$cluster_range_output" "key=compose"
 require_contains "$cluster_range_output" "value=ok"
 
-delete_output="$(lsmctl delete --addr http://127.0.0.1:8080 --key compose)"
+delete_output="$(lsmctl delete --cluster $(node_endpoint_args) --key compose)"
 require_contains "$delete_output" "state=committed"
 
 missing_output="$(lsmctl get --addr http://127.0.0.1:8082 --key compose)"

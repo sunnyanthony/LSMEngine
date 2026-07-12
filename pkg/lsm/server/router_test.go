@@ -14,6 +14,18 @@ import (
 	"lsmengine/pkg/lsm"
 )
 
+type testNodeEndpointResolver struct {
+	endpoints map[string]string
+}
+
+func (r testNodeEndpointResolver) ResolveNodeEndpoints(_ context.Context) (map[string]string, error) {
+	out := make(map[string]string, len(r.endpoints))
+	for nodeID, endpoint := range r.endpoints {
+		out[nodeID] = endpoint
+	}
+	return out, nil
+}
+
 func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 	var leader atomic.Value
 	leader.Store("node-a")
@@ -244,6 +256,67 @@ func TestGatewayDeleteRoutesToLeader(t *testing.T) {
 	}
 	if nodeBDeleteCalls.Load() != 1 {
 		t.Fatalf("expected delete to be routed to node-b")
+	}
+}
+
+func TestGatewayUsesNodeEndpointResolver(t *testing.T) {
+	var nodeBWrites atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cluster/routes" {
+			writeJSON(w, http.StatusOK, routingResponse{
+				Revision: 1,
+				Shards: []routingShard{
+					{
+						ID:             "users",
+						StartKeyBase64: "YQ==",
+						EndKeyBase64:   "eg==",
+						Leader:         "node-b",
+					},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/put" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeBWrites.Add(1)
+		writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+			RequestID:   "resolver-1",
+			Operation:   "put",
+			Consistency: lsm.WriteConsistencyLocalCommitted,
+			State:       lsm.WriteRequestCommitted,
+		})
+	})
+
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpointResolver: testNodeEndpointResolver{
+			endpoints: map[string]string{
+				"node-a": "http://node-a",
+				"node-b": "http://node-b",
+			},
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	status, err := gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed status, got %+v", status)
+	}
+	if nodeBWrites.Load() != 1 {
+		t.Fatalf("expected resolver-routed write to node-b")
 	}
 }
 
