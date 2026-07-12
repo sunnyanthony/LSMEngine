@@ -25,6 +25,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 
 ### M1 control-plane HTTP
 - `GET /kv/get?key_base64=<base64>`: point read from the local node; returns `200` with `found/key_base64/value_base64/seq` when present and `404` with `found=false` when absent.
+- `GET /kv/range?start_key_base64=<base64>&end_key_base64=<base64>&limit=<n>`: bounded local snapshot range scan; `start_key_base64` and `end_key_base64` are optional, `limit` defaults to 100 and is capped at 1000.
 - `POST /kv/put` with `{ "key_base64": "<base64>", "value_base64": "<base64>", "consistency": "accepted|local_committed" }`.
 - `POST /kv/delete` with `{ "key_base64": "<base64>", "consistency": "accepted|local_committed" }`.
 - `GET /kv/write-status/{request_id}`: async write lifecycle state for `accepted` writes.
@@ -85,12 +86,13 @@ the LSM engine. It is intentionally separate from the engine internals.
 ## CLI Mode
 - `lsmctl serve --config <path>` starts server mode.
 - `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys.
+- `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
-- Deferred CLI commands: `range` and `async-put`.
+- Deferred CLI command: `async-put`.
 
 ## Config and deployment
 - Provide a minimal YAML config for server mode (addr, data dir, timeouts, auth hooks).

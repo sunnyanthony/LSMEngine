@@ -51,6 +51,9 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	if reader, ok := provider.(lsm.ReadProvider); ok {
 		handler.reader = reader
 	}
+	if ranger, ok := provider.(lsm.RangeProvider); ok {
+		handler.ranger = ranger
+	}
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
@@ -67,6 +70,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
 	mux.HandleFunc("/kv/get", handler.handleGet)
+	mux.HandleFunc("/kv/range", handler.handleRange)
 	mux.HandleFunc("/kv/put", handler.handlePut)
 	mux.HandleFunc("/kv/delete", handler.handleDelete)
 	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
@@ -87,6 +91,7 @@ type handler struct {
 	control                 lsm.ControlProvider
 	controlWithOptions      lsm.ControlProviderWithOptions
 	reader                  lsm.ReadProvider
+	ranger                  lsm.RangeProvider
 	writer                  lsm.WriteProvider
 	cdc                     lsm.CDCProvider
 	raft                    raftPeerMessageHandler
@@ -99,6 +104,8 @@ type raftPeerMessageHandler interface {
 }
 
 const defaultWriteRequestCapacity = 4096
+const defaultRangeLimit = 100
+const maxRangeLimit = 1000
 
 type resolvedHandlerOptions struct {
 	writeConsistencyDefault lsm.WriteConsistency
@@ -505,6 +512,63 @@ func (h *handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *handler) handleRange(w http.ResponseWriter, r *http.Request) {
+	if h.ranger == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	start, err := optionalBase64Query(r, "start_key_base64")
+	if err != nil {
+		http.Error(w, "invalid start_key_base64", http.StatusBadRequest)
+		return
+	}
+	end, err := optionalBase64Query(r, "end_key_base64")
+	if err != nil {
+		http.Error(w, "invalid end_key_base64", http.StatusBadRequest)
+		return
+	}
+	limit, err := rangeLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	snap := h.ranger.Snapshot()
+	if snap == nil {
+		http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer snap.Close()
+	iter := snap.Range(start, end)
+	entries := make([]rangeEntryResponse, 0, limit)
+	truncated := false
+	for iter.Next() {
+		entry := iter.Entry()
+		if len(entries) >= limit {
+			truncated = true
+			break
+		}
+		entries = append(entries, rangeEntryResponse{
+			KeyBase64:   base64.StdEncoding.EncodeToString(entry.Key),
+			ValueBase64: base64.StdEncoding.EncodeToString(entry.Value),
+			Tombstone:   entry.Tombstone,
+			Seq:         entry.Seq,
+		})
+	}
+	if err := iter.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rangeResponse{
+		Entries:   entries,
+		Limit:     limit,
+		Truncated: truncated,
+	})
+}
+
 func (h *handler) handlePut(w http.ResponseWriter, r *http.Request) {
 	if h.writer == nil || h.requests == nil {
 		http.NotFound(w, r)
@@ -739,6 +803,31 @@ func writeStatusPath(path string) (requestID string, ok bool) {
 	return parts[2], true
 }
 
+func optionalBase64Query(r *http.Request, name string) ([]byte, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(raw)
+}
+
+func rangeLimit(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return defaultRangeLimit, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid limit")
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("limit must be positive")
+	}
+	if limit > maxRangeLimit {
+		return 0, fmt.Errorf("limit must be <= %d", maxRangeLimit)
+	}
+	return limit, nil
+}
+
 func normalizeWriteConsistency(
 	mode lsm.WriteConsistency,
 	defaultConsistency lsm.WriteConsistency,
@@ -788,6 +877,19 @@ type writeRouteHint struct {
 	Revision uint64 `json:"revision"`
 	ShardID  string `json:"shard_id,omitempty"`
 	Leader   string `json:"leader,omitempty"`
+}
+
+type rangeResponse struct {
+	Entries   []rangeEntryResponse `json:"entries"`
+	Limit     int                  `json:"limit"`
+	Truncated bool                 `json:"truncated"`
+}
+
+type rangeEntryResponse struct {
+	KeyBase64   string `json:"key_base64"`
+	ValueBase64 string `json:"value_base64"`
+	Tombstone   bool   `json:"tombstone"`
+	Seq         uint64 `json:"seq"`
 }
 
 func (h *handler) writeWriteError(w http.ResponseWriter, key []byte, err error) {
