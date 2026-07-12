@@ -32,7 +32,7 @@ func (s lsmStateSnapshotter) ApplyStateSnapshot(index uint64, data []byte) error
 	if s.l == nil {
 		return fmt.Errorf("nil lsm")
 	}
-	return s.l.applyStateSnapshotToEmptyAt(index, data)
+	return s.l.applyRaftStateSnapshot(index, data)
 }
 
 func (l *LSM) exportStateSnapshot() ([]byte, error) {
@@ -77,20 +77,55 @@ func (l *LSM) applyStateSnapshotToEmpty(data []byte) error {
 }
 
 func (l *LSM) applyStateSnapshotToEmptyAt(index uint64, data []byte) error {
+	snapshot, err := decodeStateSnapshotForRaftIndex(index, data)
+	if err != nil {
+		return err
+	}
+	return l.applyDecodedStateSnapshotToEmpty(snapshot)
+}
+
+func (l *LSM) applyRaftStateSnapshot(index uint64, data []byte) error {
+	snapshot, err := decodeStateSnapshotForRaftIndex(index, data)
+	if err != nil {
+		return err
+	}
 	if l == nil {
 		return fmt.Errorf("nil lsm")
 	}
+	l.commitApplyMu.Lock()
+	currentApplied := l.commitLogAppliedIndex
+	currentSeq := l.seq
+	l.commitApplyMu.Unlock()
+	if currentApplied == 0 && currentSeq == 0 {
+		return l.applyDecodedStateSnapshotToEmpty(snapshot)
+	}
+	if snapshot.CommitLogAppliedIndex <= currentApplied {
+		return nil
+	}
+	if snapshot.Seq < currentSeq {
+		return fmt.Errorf("state snapshot seq %d is behind local seq %d", snapshot.Seq, currentSeq)
+	}
+	return l.resetToStateSnapshot(snapshot)
+}
+
+func decodeStateSnapshotForRaftIndex(index uint64, data []byte) (lsmStateSnapshot, error) {
 	var snapshot lsmStateSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return fmt.Errorf("decode lsm state snapshot: %w", err)
+		return lsmStateSnapshot{}, fmt.Errorf("decode lsm state snapshot: %w", err)
 	}
 	if snapshot.Version != lsmStateSnapshotVersion {
-		return fmt.Errorf("unsupported lsm state snapshot version %d", snapshot.Version)
+		return lsmStateSnapshot{}, fmt.Errorf("unsupported lsm state snapshot version %d", snapshot.Version)
 	}
 	if index != 0 && snapshot.CommitLogAppliedIndex != index {
-		return fmt.Errorf("state snapshot applied index %d does not match raft snapshot index %d", snapshot.CommitLogAppliedIndex, index)
+		return lsmStateSnapshot{}, fmt.Errorf("state snapshot applied index %d does not match raft snapshot index %d", snapshot.CommitLogAppliedIndex, index)
 	}
+	return snapshot, nil
+}
 
+func (l *LSM) applyDecodedStateSnapshotToEmpty(snapshot lsmStateSnapshot) error {
+	if l == nil {
+		return fmt.Errorf("nil lsm")
+	}
 	l.commitApplyMu.Lock()
 	defer l.commitApplyMu.Unlock()
 	if l.seq != 0 || l.commitLogAppliedIndex != 0 {
@@ -128,6 +163,61 @@ func (l *LSM) applyStateSnapshotToEmptyAt(index uint64, data []byte) error {
 		}
 		if _, err := l.writer.appendPutToLocalStore(entry.Key, entry.Value, entry.Seq); err != nil {
 			return fmt.Errorf("apply state snapshot entry: %w", err)
+		}
+	}
+	l.observeCommittedSeq(snapshot.Seq)
+	l.markCommitLogAppliedLocked(snapshot.CommitLogAppliedIndex)
+	return nil
+}
+
+func (l *LSM) resetToStateSnapshot(snapshot lsmStateSnapshot) error {
+	if l == nil {
+		return fmt.Errorf("nil lsm")
+	}
+	l.commitApplyMu.Lock()
+	defer l.commitApplyMu.Unlock()
+	if snapshot.CommitLogAppliedIndex <= l.commitLogAppliedIndex {
+		return nil
+	}
+	if snapshot.Seq < l.seq {
+		return fmt.Errorf("state snapshot seq %d is behind local seq %d", snapshot.Seq, l.seq)
+	}
+
+	currentEntries, err := l.snapshotVisibleEntries()
+	if err != nil {
+		return fmt.Errorf("snapshot current state before reset: %w", err)
+	}
+	nextKeys := make(map[string]struct{}, len(snapshot.Entries))
+	if snapshot.Control != nil && l.control != nil {
+		l.control.mu.Lock()
+		if err := l.control.applyState(*snapshot.Control); err != nil {
+			l.control.mu.Unlock()
+			return fmt.Errorf("apply control state snapshot: %w", err)
+		}
+		if err := l.control.saveLocked(); err != nil {
+			l.control.mu.Unlock()
+			return fmt.Errorf("save control state snapshot: %w", err)
+		}
+		l.control.mu.Unlock()
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.Tombstone {
+			continue
+		}
+		if entry.Seq == 0 {
+			return fmt.Errorf("state snapshot entry has zero sequence")
+		}
+		nextKeys[string(entry.Key)] = struct{}{}
+		if _, err := l.writer.appendPutToLocalStore(entry.Key, entry.Value, entry.Seq); err != nil {
+			return fmt.Errorf("apply state snapshot entry: %w", err)
+		}
+	}
+	for _, entry := range currentEntries {
+		if _, ok := nextKeys[string(entry.Key)]; ok {
+			continue
+		}
+		if _, err := l.writer.appendDeleteToLocalStore(entry.Key, snapshot.Seq); err != nil {
+			return fmt.Errorf("delete state snapshot stale entry: %w", err)
 		}
 	}
 	l.observeCommittedSeq(snapshot.Seq)
