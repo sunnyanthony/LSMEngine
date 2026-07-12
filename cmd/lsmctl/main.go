@@ -38,6 +38,8 @@ func main() {
 		serveCmd(os.Args[2:])
 	case "gateway":
 		gatewayCmd(os.Args[2:])
+	case "gateway-status":
+		gatewayStatusCmd(os.Args[2:])
 	case "get":
 		getCmd(os.Args[2:])
 	case "range":
@@ -85,7 +87,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -246,6 +248,30 @@ func gatewayCmd(args []string) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("gateway listen: %v", err)
 	}
+}
+
+func gatewayStatusCmd(args []string) {
+	fs := flag.NewFlagSet("gateway-status", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "gateway HTTP address")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	status, err := readGatewayStatus(*addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, status)
+		return
+	}
+	writeGatewayStatus(os.Stdout, status)
 }
 
 func statsCmd(args []string) {
@@ -1588,6 +1614,17 @@ func readClusterStatuses(endpoints map[string]string) (clusterStatusResult, erro
 	return result, nil
 }
 
+func readGatewayStatus(addr string) (server.GatewayClusterStatus, error) {
+	if strings.TrimSpace(addr) == "" {
+		return server.GatewayClusterStatus{}, fmt.Errorf("gateway-status requires --addr or config addr")
+	}
+	var status server.GatewayClusterStatus
+	if err := getJSON(normalizeHTTPBaseURL(addr)+"/gateway/status", &status); err != nil {
+		return server.GatewayClusterStatus{}, err
+	}
+	return status, nil
+}
+
 func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterWaitResult, error) {
 	if len(endpoints) == 0 {
 		return clusterWaitResult{}, fmt.Errorf("wait-cluster requires node endpoints")
@@ -1688,6 +1725,49 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 			status.Revision,
 			status.ShardCount,
 			status.Draining,
+		)
+	}
+}
+
+func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
+	fmt.Fprintf(
+		w,
+		"ready=%v node_count=%d reachable_nodes=%d write_leader=%s write_leader_endpoint=%s reason=%s\n",
+		status.Ready,
+		status.NodeCount,
+		status.ReachableNodes,
+		status.WriteLeader,
+		status.WriteLeaderEndpoint,
+		status.Reason,
+	)
+	for _, node := range status.Nodes {
+		if node.Error != "" {
+			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, node.Error)
+			continue
+		}
+		if node.Status == nil {
+			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, "missing status")
+			continue
+		}
+		nodeID := node.Node
+		if strings.TrimSpace(node.Status.NodeID) != "" {
+			nodeID = node.Status.NodeID
+		}
+		runtime := node.Status.CommitLogRuntime
+		fmt.Fprintf(
+			w,
+			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
+			nodeID,
+			node.Endpoint,
+			runtime.Health,
+			runtime.Leader,
+			runtime.WriteAvailable,
+			runtime.LeaderKnown,
+			runtime.Term,
+			runtime.Index,
+			node.Status.Revision,
+			node.Status.ShardCount,
+			node.Status.Draining,
 		)
 	}
 }

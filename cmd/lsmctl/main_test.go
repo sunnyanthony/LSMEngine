@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"lsmengine/pkg/lsm"
+	"lsmengine/pkg/lsm/server"
 	serverconfig "lsmengine/pkg/lsm/server/config"
 )
 
@@ -280,6 +281,90 @@ func TestWriteClusterStatuses(t *testing.T) {
 		"write_available=true",
 		"term=2",
 		"index=11",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+}
+
+func TestReadGatewayStatusRemote(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(server.GatewayClusterStatus{
+			Ready:               true,
+			NodeCount:           2,
+			ReachableNodes:      2,
+			WriteLeader:         "node-b",
+			WriteLeaderEndpoint: "http://node-b:8080",
+		})
+	}))
+	defer srv.Close()
+
+	got, err := readGatewayStatus(srv.URL)
+	if err != nil {
+		t.Fatalf("read gateway status: %v", err)
+	}
+	if !got.Ready || got.WriteLeader != "node-b" || got.ReachableNodes != 2 {
+		t.Fatalf("unexpected gateway status: %+v", got)
+	}
+}
+
+func TestReadGatewayStatusRequiresAddr(t *testing.T) {
+	if _, err := readGatewayStatus(""); err == nil {
+		t.Fatalf("expected missing addr error")
+	}
+}
+
+func TestWriteGatewayStatus(t *testing.T) {
+	var buf bytes.Buffer
+	writeGatewayStatus(&buf, server.GatewayClusterStatus{
+		Ready:               true,
+		NodeCount:           2,
+		ReachableNodes:      1,
+		WriteLeader:         "node-a",
+		WriteLeaderEndpoint: "http://127.0.0.1:8080",
+		Reason:              "partial_node_unavailable",
+		Nodes: []server.GatewayClusterNodeStatus{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				OK:       true,
+				Status: &lsm.ClusterStatus{
+					NodeID:     "node-a",
+					Revision:   5,
+					ShardCount: 1,
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+						Term:           2,
+						Index:          12,
+					},
+				},
+			},
+			{
+				Node:     "node-d",
+				Endpoint: "http://127.0.0.1:8083",
+				Error:    "connection refused",
+			},
+		},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"ready=true",
+		"node_count=2",
+		"reachable_nodes=1",
+		"write_leader=node-a",
+		"reason=partial_node_unavailable",
+		"node=node-a",
+		"ok=true",
+		"health=ready",
+		"node=node-d",
+		"ok=false",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
