@@ -83,6 +83,14 @@ cluster_config_args() {
   printf '%s\n' --config "$LSMCTL_CONFIG"
 }
 
+wait_cluster_ready() {
+  local min_ready="$1"
+  lsmctl wait-cluster \
+    $(cluster_config_args) \
+    --min-ready "$min_ready" \
+    --timeout 60s >/dev/null
+}
+
 drain_service() {
   local service="$1"
   lsmctl drain-node \
@@ -145,6 +153,7 @@ wait_for_value() {
 write_lsmctl_config
 compose up -d --build
 wait_for_cluster
+wait_cluster_ready 3
 
 put_on_any_live_node "" "rolling-before" "all-up"
 
@@ -153,10 +162,12 @@ for service in "${services[@]}"; do
   value="ok-$service"
   drain_service "$service"
   compose stop "$service" >/dev/null
+  wait_cluster_ready 2
   put_on_any_live_node "$service" "$key" "$value"
   compose start "$service" >/dev/null
   wait_for_health "$(url_for_service "$service")"
   resume_service "$service"
+  wait_cluster_ready 3
   for read_service in "${services[@]}"; do
     wait_for_value "$read_service" "$key" "$value"
   done
