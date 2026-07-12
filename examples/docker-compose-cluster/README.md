@@ -31,6 +31,17 @@ Useful environment overrides:
 - `LSMCTL_BIN=/path/to/lsmctl`: use an existing CLI binary instead of
   `go run ./cmd/lsmctl`.
 
+## Rolling restart smoke
+
+```bash
+examples/docker-compose-cluster/rolling-restart.sh
+```
+
+This starts the same static three-node cluster, stops one node at a time,
+commits a write through the remaining quorum, restarts the stopped node with
+its existing volume, and verifies all three nodes can read the write before the
+next node is restarted.
+
 ## Manual commands
 
 ```bash

@@ -88,6 +88,12 @@ go test -tags test ./tests/integration/server \
   -count=1 -timeout 180s
 ```
 
+Use the Compose rolling restart smoke for a repeatable local check:
+
+```bash
+examples/docker-compose-cluster/rolling-restart.sh
+```
+
 For manual Compose validation:
 
 1. Start the cluster with `LSM_COMPOSE_KEEP=1`.
