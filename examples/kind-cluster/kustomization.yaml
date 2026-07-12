@@ -1,0 +1,6 @@
+namespace: lsm-cluster
+
+resources:
+  - namespace.yaml
+  - service.yaml
+  - statefulset.yaml
