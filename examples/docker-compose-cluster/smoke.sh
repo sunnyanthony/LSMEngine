@@ -64,6 +64,10 @@ wait_for_health "http://127.0.0.1:8080"
 wait_for_health "http://127.0.0.1:8081"
 wait_for_health "http://127.0.0.1:8082"
 
+wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s)"
+require_contains "$wait_output" "ready=true"
+require_contains "$wait_output" "ready_nodes=3"
+
 put_output="$(lsmctl put --addr http://127.0.0.1:8080 --key compose --value ok)"
 require_contains "$put_output" "state=committed"
 

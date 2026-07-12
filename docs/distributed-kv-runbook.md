@@ -59,6 +59,21 @@ go run ./cmd/lsmctl cluster-status \
   --node-endpoint node-c=http://127.0.0.1:8082
 ```
 
+Wait until the local cluster is ready for committed writes:
+
+```bash
+go run ./cmd/lsmctl wait-cluster \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --timeout 60s
+```
+
+By default, `wait-cluster` requires every configured endpoint to report a
+healthy `ready` or `follower` runtime state and requires one write-available
+raft leader. Use `--min-ready 2` for a planned degraded-quorum operation, or
+`--write-leader=false` when only endpoint/status reachability matters.
+
 The useful fields are:
 
 - `commit_log_runtime.mode`: should be `raft_transport_foundation` for the

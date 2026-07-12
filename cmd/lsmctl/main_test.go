@@ -254,6 +254,80 @@ func TestWriteClusterStatuses(t *testing.T) {
 	}
 }
 
+func TestEvaluateClusterWaitRequiresReadyNodesAndWriteLeader(t *testing.T) {
+	got := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "follower",
+						LeaderKnown:    true,
+						WriteAvailable: false,
+					},
+				},
+			},
+			{
+				Node:     "node-b",
+				Endpoint: "http://127.0.0.1:8081",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-b",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+					},
+				},
+			},
+			{
+				Node:     "node-c",
+				Endpoint: "http://127.0.0.1:8082",
+				Error:    "connection refused",
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 2,
+		RequireWriteLeader: true,
+	})
+	if !got.Ready {
+		t.Fatalf("expected cluster wait ready, got %+v", got)
+	}
+	if got.ReadyNodes != 2 || got.WriteLeader != "node-b" || got.WriteLeaderEndpoint != "http://127.0.0.1:8081" {
+		t.Fatalf("unexpected wait result: %+v", got)
+	}
+}
+
+func TestEvaluateClusterWaitRejectsMissingWriteLeader(t *testing.T) {
+	got := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "follower",
+						LeaderKnown:    false,
+						WriteAvailable: false,
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 1,
+		RequireWriteLeader: true,
+	})
+	if got.Ready {
+		t.Fatalf("expected missing write leader to keep wait result not ready: %+v", got)
+	}
+	if got.ReadyNodes != 1 {
+		t.Fatalf("expected one healthy node, got %+v", got)
+	}
+}
+
 func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {
 	var drainCalls atomic.Int32
 

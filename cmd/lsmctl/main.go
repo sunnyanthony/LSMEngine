@@ -52,6 +52,8 @@ func main() {
 		writeStatusCmd(os.Args[2:])
 	case "cluster-status":
 		clusterStatusCmd(os.Args[2:])
+	case "wait-cluster":
+		waitClusterCmd(os.Args[2:])
 	case "drain-node":
 		drainNodeCmd(os.Args[2:])
 	case "resume-node":
@@ -81,7 +83,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -351,6 +353,22 @@ type clusterStatusNodeResult struct {
 	Endpoint string             `json:"endpoint"`
 	Status   *lsm.ClusterStatus `json:"status,omitempty"`
 	Error    string             `json:"error,omitempty"`
+}
+
+type clusterWaitResult struct {
+	Ready               bool                `json:"ready"`
+	ReadyNodes          int                 `json:"ready_nodes"`
+	RequiredReadyNodes  int                 `json:"required_ready_nodes"`
+	WriteLeader         string              `json:"write_leader,omitempty"`
+	WriteLeaderEndpoint string              `json:"write_leader_endpoint,omitempty"`
+	Statuses            clusterStatusResult `json:"statuses"`
+}
+
+type waitClusterOptions struct {
+	RequiredReadyNodes int
+	RequireWriteLeader bool
+	Timeout            time.Duration
+	Interval           time.Duration
 }
 
 type drainNodeResult struct {
@@ -745,6 +763,50 @@ func clusterStatusCmd(args []string) {
 		return
 	}
 	writeClusterStatuses(os.Stdout, statuses)
+}
+
+func waitClusterCmd(args []string) {
+	fs := flag.NewFlagSet("wait-cluster", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	minReady := fs.Int("min-ready", 0, "minimum healthy nodes required; 0 requires all configured endpoints")
+	requireWriteLeader := fs.Bool("write-leader", true, "require a node that can accept committed writes")
+	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
+	interval := fs.Duration("interval", 200*time.Millisecond, "poll interval")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(endpoints) == 0 {
+		log.Fatal("wait-cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
+	}
+	result, err := waitCluster(endpoints, waitClusterOptions{
+		RequiredReadyNodes: *minReady,
+		RequireWriteLeader: *requireWriteLeader,
+		Timeout:            *timeout,
+		Interval:           *interval,
+	})
+	if err != nil {
+		if *jsonOut {
+			writeJSON(os.Stdout, result)
+		}
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeClusterWait(os.Stdout, result)
 }
 
 func drainNodeCmd(args []string) {
@@ -1458,6 +1520,80 @@ func readClusterStatuses(endpoints map[string]string) (clusterStatusResult, erro
 	return result, nil
 }
 
+func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterWaitResult, error) {
+	if len(endpoints) == 0 {
+		return clusterWaitResult{}, fmt.Errorf("wait-cluster requires node endpoints")
+	}
+	if opts.RequiredReadyNodes < 0 {
+		return clusterWaitResult{}, fmt.Errorf("min-ready must be non-negative")
+	}
+	if opts.RequiredReadyNodes > len(endpoints) {
+		return clusterWaitResult{}, fmt.Errorf("min-ready cannot exceed configured endpoints")
+	}
+	if opts.RequiredReadyNodes == 0 {
+		opts.RequiredReadyNodes = len(endpoints)
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = 60 * time.Second
+	}
+	if opts.Interval <= 0 {
+		opts.Interval = 200 * time.Millisecond
+	}
+	deadline := time.Now().Add(opts.Timeout)
+	var last clusterWaitResult
+	var lastErr error
+	for {
+		statuses, err := readClusterStatuses(endpoints)
+		if err != nil {
+			lastErr = err
+		}
+		last = evaluateClusterWait(statuses, opts)
+		if last.Ready {
+			return last, nil
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil && len(last.Statuses.Nodes) == 0 {
+				return last, lastErr
+			}
+			return last, fmt.Errorf(
+				"wait-cluster timed out: ready nodes %d/%d write_leader=%v",
+				last.ReadyNodes,
+				last.RequiredReadyNodes,
+				last.WriteLeader != "",
+			)
+		}
+		time.Sleep(opts.Interval)
+	}
+}
+
+func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) clusterWaitResult {
+	result := clusterWaitResult{
+		RequiredReadyNodes: opts.RequiredReadyNodes,
+		Statuses:           statuses,
+	}
+	for _, node := range statuses.Nodes {
+		if clusterNodeReplacementHealthy(node) {
+			result.ReadyNodes++
+		}
+		if node.Error != "" || node.Status == nil {
+			continue
+		}
+		runtime := node.Status.CommitLogRuntime
+		if runtime.Leader && runtime.WriteAvailable {
+			result.WriteLeader = node.Status.NodeID
+			if strings.TrimSpace(result.WriteLeader) == "" {
+				result.WriteLeader = node.Node
+			}
+			result.WriteLeaderEndpoint = node.Endpoint
+		}
+	}
+	result.Ready = result.ReadyNodes >= result.RequiredReadyNodes
+	if opts.RequireWriteLeader {
+		result.Ready = result.Ready && result.WriteLeader != ""
+	}
+	return result
+}
+
 func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 	for _, node := range result.Nodes {
 		if node.Error != "" {
@@ -1486,6 +1622,19 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 			status.Draining,
 		)
 	}
+}
+
+func writeClusterWait(w io.Writer, result clusterWaitResult) {
+	fmt.Fprintf(
+		w,
+		"ready=%v ready_nodes=%d required_ready=%d write_leader=%s write_leader_endpoint=%s\n",
+		result.Ready,
+		result.ReadyNodes,
+		result.RequiredReadyNodes,
+		result.WriteLeader,
+		result.WriteLeaderEndpoint,
+	)
+	writeClusterStatuses(w, result.Statuses)
 }
 
 func drainClusterNode(
