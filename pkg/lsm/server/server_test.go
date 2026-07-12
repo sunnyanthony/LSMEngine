@@ -69,6 +69,14 @@ type raftStubProvider struct {
 	err      error
 }
 
+type raftMembershipStubProvider struct {
+	stubProvider
+	mu      sync.Mutex
+	added   []string
+	removed []string
+	err     error
+}
+
 func newWriteControlStubProvider() *writeControlStubProvider {
 	return &writeControlStubProvider{
 		control: newControlStubProvider(),
@@ -96,6 +104,20 @@ func (p *raftStubProvider) messagesCopy() []lsm.RaftPeerMessage {
 	out := make([]lsm.RaftPeerMessage, len(p.messages))
 	copy(out, p.messages)
 	return out
+}
+
+func (p *raftMembershipStubProvider) AddRaftPeer(nodeID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.added = append(p.added, nodeID)
+	return p.err
+}
+
+func (p *raftMembershipStubProvider) RemoveRaftPeer(nodeID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.removed = append(p.removed, nodeID)
+	return p.err
 }
 
 func (p *writeControlStubProvider) Stats() lsm.Stats   { return p.write.Stats() }
@@ -726,6 +748,56 @@ func TestHandlerRemoveLeaderReplicaRejected(t *testing.T) {
 	}
 	if !replicaStatusContains(p.Shards()[0].Replicas, "node-a") {
 		t.Fatalf("expected node-a leader replica to remain")
+	}
+}
+
+func TestHandlerAddRaftPeer(t *testing.T) {
+	p := &raftMembershipStubProvider{}
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/node-c/raft-add", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(p.added) != 1 || p.added[0] != "node-c" {
+		t.Fatalf("expected node-c raft add, got %+v", p.added)
+	}
+}
+
+func TestHandlerRemoveRaftPeer(t *testing.T) {
+	p := &raftMembershipStubProvider{}
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/node-c/raft-remove", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(p.removed) != 1 || p.removed[0] != "node-c" {
+		t.Fatalf("expected node-c raft remove, got %+v", p.removed)
+	}
+}
+
+func TestHandlerRaftPeerOptionsRejected(t *testing.T) {
+	p := &raftMembershipStubProvider{}
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/node-c/raft-add", bytes.NewBufferString(`{"operation_id":"add-c"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerRaftPeerUnsupported(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/node-c/raft-add", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }
 

@@ -32,6 +32,7 @@ type RaftOptions struct {
 	ElectionTimeout   time.Duration `json:"election_timeout,omitempty" yaml:"election_timeout,omitempty"`
 	HeartbeatInterval time.Duration `json:"heartbeat_interval,omitempty" yaml:"heartbeat_interval,omitempty"`
 	Peers             []string      `json:"peers,omitempty" yaml:"peers,omitempty"`
+	Join              bool          `json:"join,omitempty" yaml:"join,omitempty"`
 }
 
 // ShardConfig defines a fixed shard range and replica group.

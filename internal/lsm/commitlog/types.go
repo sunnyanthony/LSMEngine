@@ -21,6 +21,7 @@ type Config struct {
 	Peers          []string
 	Transport      RaftMessageTransport
 	SnapshotPolicy SnapshotPolicy
+	Join           bool
 }
 
 type SnapshotPolicy struct {

@@ -22,3 +22,12 @@ type ControlProviderWithOptions interface {
 	TriggerRebalanceWithOptions(shardID, target string, opts ControlWriteOptions) error
 	PrepareDrainWithOptions(nodeID string, opts ControlWriteOptions) error
 }
+
+// RaftMembershipProvider exposes provider-level raft voter membership hooks.
+//
+// This is intentionally separate from shard replica metadata. Operators should
+// start or configure the target node before adding it as a raft peer.
+type RaftMembershipProvider interface {
+	AddRaftPeer(nodeID string) error
+	RemoveRaftPeer(nodeID string) error
+}

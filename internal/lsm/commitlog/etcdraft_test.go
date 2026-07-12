@@ -100,6 +100,32 @@ func TestEtcdRaftConsensusRequiresTransportForMultiPeer(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftConsensusJoinModeSkipsBootstrap(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
+		NodeID:    "node-c",
+		Peers:     []string{"node-a", "node-b", "node-c"},
+		Transport: transport,
+		Join:      true,
+	})
+	if err != nil {
+		t.Fatalf("new join consensus: %v", err)
+	}
+	lastIndex, err := consensus.storage.LastIndex()
+	if err != nil {
+		t.Fatalf("last index: %v", err)
+	}
+	if lastIndex != 0 {
+		t.Fatalf("expected join node to skip bootstrap entries, got last index %d", lastIndex)
+	}
+	status := consensus.RuntimeStatus()
+	if status.Index != 0 || status.LeaderKnown {
+		t.Fatalf("expected empty join runtime state, got %+v", status)
+	}
+}
+
 func TestEtcdRaftConsensusKnownRemoteLeaderRejectsLocalCommit(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
