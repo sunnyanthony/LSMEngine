@@ -83,11 +83,14 @@ func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	joinPeers := []string{"node-a", "node-b", "node-c"}
 	urls := reserveNodeURLs(t, joinPeers)
 	var processes []*startedLSMProcess
-	start := func(opts processConfigOptions) {
+	configPaths := make(map[string]string, len(joinPeers))
+	start := func(opts processConfigOptions) *startedLSMProcess {
 		t.Helper()
 		configPath := writeProcessConfig(t, tempDir, opts)
+		configPaths[opts.NodeID] = configPath
 		proc := startLSMProcess(t, bin, configPath)
 		processes = append(processes, proc)
+		return proc
 	}
 	for _, nodeID := range initialPeers {
 		start(processConfigOptions{
@@ -142,6 +145,26 @@ func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	eventually(t, 10*time.Second, func() bool {
 		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "joined")
 		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=after-join"))
+	})
+
+	processes[len(processes)-1].stop(t)
+	processes = processes[:len(processes)-1]
+	processes = append(processes, startLSMProcess(t, bin, configPaths["node-c"]))
+	waitHTTPStatus(t, urls["node-c"]+"/healthz", http.StatusOK, 5*time.Second)
+	eventually(t, 10*time.Second, func() bool {
+		got, ok, err := getKVValue(urls["node-c"], seedKey)
+		return err == nil && ok && bytes.Equal(got, seedValue)
+	})
+	eventually(t, 10*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "joined")
+		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=after-join"))
+	})
+
+	restartWriteNode := eventuallyRunLSMCTLWrite(t, bin, urls, joinPeers, "put", "after-restart", "still-replicates", 10*time.Second)
+	t.Logf("committed post-restart lsmctl put through %s", restartWriteNode)
+	eventually(t, 10*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "after-restart")
+		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=still-replicates"))
 	})
 }
 
