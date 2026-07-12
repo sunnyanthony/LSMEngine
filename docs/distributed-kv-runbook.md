@@ -154,11 +154,13 @@ go run ./cmd/lsmctl put --addr http://127.0.0.1:8090 --key user:1 --value alice
 go run ./cmd/lsmctl get --addr http://127.0.0.1:8090 --key user:1
 ```
 
-The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`, and
-`/healthz`. Writes are route-aware and retry stale leader metadata through
-`server.Gateway`; reads use the same best-effort first-healthy endpoint fallback
-as `lsmctl get/range --cluster`, not a linearizable read protocol. Use the
-Compose gateway smoke for a repeatable local check:
+The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`, `/healthz`,
+and `/gateway/status`. Writes are route-aware and retry stale leader metadata
+through `server.Gateway`; reads use the same best-effort first-healthy endpoint
+fallback as `lsmctl get/range --cluster`, not a linearizable read protocol.
+`/gateway/status` is the gateway's aggregated backend-node view, separate from a
+node server's local `/cluster/status`. Use the Compose gateway smoke for a
+repeatable local check:
 
 ```bash
 examples/docker-compose-cluster/gateway-smoke.sh
@@ -169,7 +171,8 @@ and exposes it at `http://127.0.0.1:8090`, so the local client talks to one
 stable endpoint while raft peer traffic stays inside the Compose network. The
 Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
-covers the file-backed node endpoint resolver used by long-running gateways.
+covers the file-backed node endpoint resolver used by long-running gateways. It
+also verifies `/gateway/status` sees all three backend nodes and a write leader.
 
 ## Rolling Restart Check
 
