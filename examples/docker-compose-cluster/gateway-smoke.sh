@@ -49,6 +49,26 @@ wait_for_health() {
   done
 }
 
+wait_for_gateway_status() {
+  local deadline=$((SECONDS + 60))
+  local output=""
+  until output="$(curl -fsS "$GATEWAY_URL/gateway/status")" \
+    && [[ "$output" == *'"ready":true'* ]] \
+    && [[ "$output" == *'"reachable_nodes":3'* ]] \
+    && [[ "$output" == *'"write_leader":'* ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for $GATEWAY_URL/gateway/status" >&2
+      if [[ -n "$output" ]]; then
+        echo "$output" >&2
+      fi
+      compose --profile gateway ps >&2 || true
+      compose --profile gateway logs --tail=100 >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 require_contains() {
   local haystack="$1"
   local needle="$2"
@@ -69,6 +89,7 @@ require_contains "$wait_output" "ready=true"
 
 compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
+wait_for_gateway_status
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"
 require_contains "$put_output" "state=committed"
