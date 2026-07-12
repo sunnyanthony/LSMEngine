@@ -166,7 +166,10 @@ examples/docker-compose-cluster/gateway-smoke.sh
 
 The smoke runs gateway as a Docker Compose service using the `gateway` profile
 and exposes it at `http://127.0.0.1:8090`, so the local client talks to one
-stable endpoint while raft peer traffic stays inside the Compose network.
+stable endpoint while raft peer traffic stays inside the Compose network. The
+Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
+containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
+covers the file-backed node endpoint resolver used by long-running gateways.
 
 ## Rolling Restart Check
 

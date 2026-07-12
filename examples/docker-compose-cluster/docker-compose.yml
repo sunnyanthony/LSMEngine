@@ -61,14 +61,12 @@ services:
       - http://node-a:8080
       - --write-consistency-default
       - local_committed
-      - --node-endpoint
-      - node-a=http://node-a:8080
-      - --node-endpoint
-      - node-b=http://node-b:8080
-      - --node-endpoint
-      - node-c=http://node-c:8080
+      - --endpoint-file
+      - /etc/lsm/peer-urls.yaml
     ports:
       - "8090:8090"
+    volumes:
+      - ./peer-urls.yaml:/etc/lsm/peer-urls.yaml:ro
     depends_on:
       - node-a
       - node-b
