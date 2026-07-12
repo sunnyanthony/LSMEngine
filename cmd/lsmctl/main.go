@@ -896,7 +896,7 @@ func loadConfigOrExit(path string) serverconfig.Config {
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
-	if cfg.Replicas == 0 && cfg.ElectionTimeout == 0 && cfg.HeartbeatInterval == 0 && len(cfg.Peers) == 0 {
+	if cfg.Replicas == 0 && cfg.ElectionTimeout == 0 && cfg.HeartbeatInterval == 0 && len(cfg.Peers) == 0 && !cfg.Join {
 		return nil
 	}
 	peers := append([]string(nil), cfg.Peers...)
@@ -905,6 +905,7 @@ func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
 		ElectionTimeout:   cfg.ElectionTimeout,
 		HeartbeatInterval: cfg.HeartbeatInterval,
 		Peers:             peers,
+		Join:              cfg.Join,
 	}
 }
 

@@ -22,6 +22,7 @@ raft:
   replicas: 3
   election_timeout: "2s"
   heartbeat_interval: "500ms"
+  join: true
   peers: ["node-a", "node-b", "node-c"]
   peer_urls:
     node-b: "http://127.0.0.1:9091"
@@ -82,6 +83,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.HeartbeatInterval != 500*time.Millisecond {
 		t.Fatalf("expected raft heartbeat interval, got %v", cfg.Raft.HeartbeatInterval)
+	}
+	if !cfg.Raft.Join {
+		t.Fatalf("expected raft join mode")
 	}
 	if len(cfg.Raft.Peers) != 3 {
 		t.Fatalf("expected raft peers, got %d", len(cfg.Raft.Peers))
@@ -171,6 +175,22 @@ func TestValidateEtcdRaftAllowsSinglePeerWithoutPeerURLs(t *testing.T) {
 	}
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("validate single peer: %v", err)
+	}
+}
+
+func TestValidateEtcdRaftJoinRequiresExistingPeer(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Join:  true,
+			Peers: []string{"node-a"},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected join peer requirement validation error")
 	}
 }
 

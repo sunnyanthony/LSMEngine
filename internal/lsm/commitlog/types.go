@@ -19,6 +19,7 @@ type Config struct {
 	Peers          []string
 	Transport      PeerTransport
 	SnapshotPolicy SnapshotPolicy
+	Join           bool
 }
 
 type SnapshotPolicy struct {

@@ -82,6 +82,9 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Join && len(peerIDs) <= 1 {
+		return nil, fmt.Errorf("raft join requires at least one existing peer")
+	}
 	transport := cfg.Transport
 	if len(peerIDs) > 1 && transport == nil {
 		return nil, fmt.Errorf("raft transport is required when raft peers > 1")
@@ -102,7 +105,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new etcd raft node: %w", err)
 	}
-	if !loadedLog {
+	if !loadedLog && !cfg.Join {
 		bootstrapPeers := make([]raft.Peer, 0, len(peerIDs))
 		for _, id := range peerIDs {
 			bootstrapPeers = append(bootstrapPeers, raft.Peer{ID: id})
@@ -138,7 +141,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	}
 	// Multi-peer clusters may not have enough live peers yet during startup.
 	// We only force immediate self-election in cluster-of-one mode.
-	if len(peerIDs) == 1 {
+	if len(peerIDs) == 1 && !cfg.Join {
 		if err := c.ensureLeader(ctx); err != nil {
 			return nil, err
 		}

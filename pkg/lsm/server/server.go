@@ -43,6 +43,9 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 			handler.controlWithOptions = advanced
 		}
 	}
+	if membership, ok := provider.(lsm.RaftMembershipProvider); ok {
+		handler.raftMembership = membership
+	}
 	if writer, ok := provider.(lsm.WriteProvider); ok {
 		handler.writer = writer
 		handler.requests = newWriteRequestStore(resolved.maxWriteRequests)
@@ -90,6 +93,7 @@ type handler struct {
 	provider                lsm.StatsProvider
 	control                 lsm.ControlProvider
 	controlWithOptions      lsm.ControlProviderWithOptions
+	raftMembership          lsm.RaftMembershipProvider
 	reader                  lsm.ReadProvider
 	ranger                  lsm.RangeProvider
 	writer                  lsm.WriteProvider
@@ -380,10 +384,6 @@ func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleNodeAction(w http.ResponseWriter, r *http.Request) {
-	if h.control == nil {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -393,15 +393,48 @@ func (h *handler) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if action != "drain" {
+	switch action {
+	case "drain":
+		if h.control == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var req drainRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		writeActionResult(w, h.drain(nodeID, req.controlWriteOptions()))
+	case "raft-add":
+		if h.raftMembership == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var req controlRequestOptions
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		if req.hasControlWriteOptions() {
+			writeActionResult(w, errs.ErrControlWriteOptionsUnsupported)
+			return
+		}
+		writeActionResult(w, h.raftMembership.AddRaftPeer(nodeID))
+	case "raft-remove":
+		if h.raftMembership == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var req controlRequestOptions
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		if req.hasControlWriteOptions() {
+			writeActionResult(w, errs.ErrControlWriteOptionsUnsupported)
+			return
+		}
+		writeActionResult(w, h.raftMembership.RemoveRaftPeer(nodeID))
+	default:
 		http.NotFound(w, r)
-		return
 	}
-	var req drainRequest
-	if !decodeJSONBody(w, r, &req) {
-		return
-	}
-	writeActionResult(w, h.drain(nodeID, req.controlWriteOptions()))
 }
 
 type controlRequestOptions struct {

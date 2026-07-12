@@ -50,6 +50,7 @@ type RaftConfig struct {
 	HeartbeatInterval time.Duration     `yaml:"heartbeat_interval"`
 	Peers             []string          `yaml:"peers"`
 	PeerURLs          map[string]string `yaml:"peer_urls"`
+	Join              bool              `yaml:"join"`
 }
 
 // ShardConfig describes a fixed shard range in server YAML.
@@ -87,6 +88,9 @@ func Validate(cfg Config) error {
 	peers, err := normalizedPeers(cfg.Raft.Peers)
 	if err != nil {
 		return err
+	}
+	if cfg.Raft.Join && len(peers) <= 1 {
+		return fmt.Errorf("raft join requires at least one existing peer")
 	}
 	if len(peers) <= 1 {
 		return nil
