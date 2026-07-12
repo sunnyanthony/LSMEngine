@@ -197,6 +197,24 @@ rejected. It reuses the same replacement preflight as `replace-node --dry-run`
 and prints suggested dry-run/apply commands. It does not submit raft membership,
 shard replica, or drain mutations.
 
+One-shot supervisor/operator execution:
+
+```bash
+go run ./cmd/lsmctl replacement-apply \
+  --new-node node-d \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --node-endpoint node-d=http://127.0.0.1:8083
+```
+
+`replacement-apply` runs the same planning step and then executes the replacement
+sequence once. It still rejects zero or multiple unavailable old-node candidates
+unless `--old-node` is provided. It is intentionally not a background repair
+loop; an external supervisor remains responsible for starting the replacement
+process, writing endpoint discovery data, choosing retry policy, and deciding
+when to invoke the command.
+
 Manual replacement workflow:
 
 ```bash
@@ -212,6 +230,7 @@ go run ./cmd/lsmctl replace-node \
 go run ./cmd/lsmctl replace-node \
   --old-node node-a \
   --new-node node-d \
+  --allow-unavailable-old-node \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
   --node-endpoint node-c=http://127.0.0.1:8082 \
@@ -224,7 +243,9 @@ prints the shard replacement plan without submitting mutations. The real command
 uses the same preflight before it adds `--new-node` as a raft voter, adds it as a
 shard replica for those shards, drains the old node, removes the old shard
 replicas, and removes the old raft voter. Use repeated `--shard` flags to
-constrain the replacement to specific shards.
+constrain the replacement to specific shards. Use `--allow-unavailable-old-node`
+only for failed-node replacement; ordinary maintenance drains should keep waiting
+for the target node to report `draining=true`.
 
 Use the Compose replacement smoke for a repeatable local check:
 
