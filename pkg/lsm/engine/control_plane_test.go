@@ -672,6 +672,12 @@ func TestTriggerSplitAndDrain(t *testing.T) {
 	if !status.Draining {
 		t.Fatalf("expected draining=true")
 	}
+	if err := store.ResumeDrain("node-a"); err != nil {
+		t.Fatalf("resume drain: %v", err)
+	}
+	if status := store.ClusterStatus(); status.Draining {
+		t.Fatalf("expected draining=false after resume")
+	}
 	for _, shard := range store.Shards() {
 		if shard.Leader == "node-a" {
 			t.Fatalf("expected leader moved away from node-a for shard %q", shard.ID)
@@ -720,6 +726,42 @@ func TestPrepareDrainDoesNotPartiallyMutateWhenShardCannotMove(t *testing.T) {
 		if shard.Leader != "node-a" {
 			t.Fatalf("expected shard %q leader to remain node-a, got %q", shard.ID, shard.Leader)
 		}
+	}
+}
+
+func TestPrepareDrainRemoteNodeTransfersLeadershipWithoutLocalDraining(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-b",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.PrepareDrain("node-b"); err != nil {
+		t.Fatalf("remote drain: %v", err)
+	}
+	status := store.ClusterStatus()
+	if status.Draining {
+		t.Fatalf("expected node-a to stay non-draining after remote drain")
+	}
+	shards := store.Shards()
+	if len(shards) != 1 {
+		t.Fatalf("expected one shard, got %d", len(shards))
+	}
+	if shards[0].Leader != "node-a" {
+		t.Fatalf("expected leader to move to node-a, got %q", shards[0].Leader)
 	}
 }
 

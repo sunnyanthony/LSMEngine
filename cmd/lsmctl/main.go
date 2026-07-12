@@ -52,6 +52,10 @@ func main() {
 		writeStatusCmd(os.Args[2:])
 	case "cluster-status":
 		clusterStatusCmd(os.Args[2:])
+	case "drain-node":
+		drainNodeCmd(os.Args[2:])
+	case "resume-node":
+		resumeNodeCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -63,7 +67,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -256,6 +260,15 @@ type targetRequest struct {
 	Target string `json:"target"`
 }
 
+type controlRequestOptions struct {
+	OperationID      string  `json:"operation_id,omitempty"`
+	ExpectedRevision *uint64 `json:"expected_revision,omitempty"`
+}
+
+type drainRequest struct {
+	controlRequestOptions
+}
+
 type nodeEndpointFlags map[string]string
 
 func (f *nodeEndpointFlags) String() string {
@@ -305,6 +318,14 @@ type clusterStatusNodeResult struct {
 	Endpoint string             `json:"endpoint"`
 	Status   *lsm.ClusterStatus `json:"status,omitempty"`
 	Error    string             `json:"error,omitempty"`
+}
+
+type drainNodeResult struct {
+	Target      string              `json:"target"`
+	SubmittedTo string              `json:"submitted_to"`
+	Endpoint    string              `json:"endpoint"`
+	Shards      []lsm.ShardStatus   `json:"shards"`
+	Statuses    clusterStatusResult `json:"statuses"`
 }
 
 func getCmd(args []string) {
@@ -595,6 +616,92 @@ func clusterStatusCmd(args []string) {
 		return
 	}
 	writeClusterStatuses(os.Stdout, statuses)
+}
+
+func drainNodeCmd(args []string) {
+	fs := flag.NewFlagSet("drain-node", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	node := fs.String("node", "", "node id to drain")
+	operationID := fs.String("operation-id", "", "idempotency key for the drain control mutation")
+	expectedRevision := fs.Uint64("expected-revision", 0, "expected control revision; 0 disables the check")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *node == "" && fs.NArg() > 0 {
+		*node = fs.Arg(0)
+	}
+	if strings.TrimSpace(*node) == "" {
+		log.Fatal("--node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatal("drain-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
+	if *expectedRevision != 0 {
+		revision := *expectedRevision
+		opts.ExpectedRevision = &revision
+	}
+	result, err := drainClusterNode(endpoints, *node, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeDrainNodeResult(os.Stdout, result)
+}
+
+func resumeNodeCmd(args []string) {
+	fs := flag.NewFlagSet("resume-node", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	node := fs.String("node", "", "node id to resume")
+	operationID := fs.String("operation-id", "", "idempotency key for the resume control mutation")
+	expectedRevision := fs.Uint64("expected-revision", 0, "expected control revision; 0 disables the check")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *node == "" && fs.NArg() > 0 {
+		*node = fs.Arg(0)
+	}
+	if strings.TrimSpace(*node) == "" {
+		log.Fatal("--node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatal("resume-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
+	if *expectedRevision != 0 {
+		revision := *expectedRevision
+		opts.ExpectedRevision = &revision
+	}
+	result, err := resumeClusterNode(endpoints, *node, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeDrainNodeResult(os.Stdout, result)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -932,6 +1039,167 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 			status.Draining,
 		)
 	}
+}
+
+func drainClusterNode(
+	endpoints map[string]string,
+	target string,
+	opts controlRequestOptions,
+) (drainNodeResult, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return drainNodeResult{}, fmt.Errorf("target node required")
+	}
+	if len(endpoints) == 0 {
+		return drainNodeResult{}, fmt.Errorf("drain-node requires node endpoints")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var result drainNodeResult
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if result.Target == "" {
+			nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+			if err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if err := postControlAction(endpoint+"/cluster/nodes/"+url.PathEscape(target)+"/drain", drainRequest{
+				controlRequestOptions: opts,
+			}); err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			result = drainNodeResult{
+				Target:      target,
+				SubmittedTo: nodeID,
+				Endpoint:    endpoint,
+			}
+		}
+		if completed, next, err := readDrainNodeResult(result.Endpoint, endpoints, result); err == nil {
+			result = next
+			if completed {
+				return result, nil
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if result.Target != "" {
+		return result, fmt.Errorf("drain-node timed out waiting for node %q to drain", target)
+	}
+	if lastErr != nil {
+		return drainNodeResult{}, lastErr
+	}
+	return drainNodeResult{}, fmt.Errorf("drain-node timed out")
+}
+
+func readDrainNodeResult(
+	controlEndpoint string,
+	endpoints map[string]string,
+	result drainNodeResult,
+) (bool, drainNodeResult, error) {
+	var shards []lsm.ShardStatus
+	if err := getJSON(controlEndpoint+"/cluster/shards", &shards); err != nil {
+		return false, result, err
+	}
+	statuses, err := readClusterStatuses(endpoints)
+	if err != nil {
+		return false, result, err
+	}
+	result.Shards = shards
+	result.Statuses = statuses
+	return drainComplete(result), result, nil
+}
+
+func drainComplete(result drainNodeResult) bool {
+	for _, shard := range result.Shards {
+		if shard.Leader == result.Target {
+			return false
+		}
+	}
+	for _, node := range result.Statuses.Nodes {
+		if node.Node != result.Target {
+			continue
+		}
+		return node.Status != nil && node.Status.Draining
+	}
+	return false
+}
+
+func resumeClusterNode(
+	endpoints map[string]string,
+	target string,
+	opts controlRequestOptions,
+) (drainNodeResult, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return drainNodeResult{}, fmt.Errorf("target node required")
+	}
+	if len(endpoints) == 0 {
+		return drainNodeResult{}, fmt.Errorf("resume-node requires node endpoints")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var result drainNodeResult
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if result.Target == "" {
+			nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+			if err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if err := postControlAction(endpoint+"/cluster/nodes/"+url.PathEscape(target)+"/resume", drainRequest{
+				controlRequestOptions: opts,
+			}); err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			result = drainNodeResult{
+				Target:      target,
+				SubmittedTo: nodeID,
+				Endpoint:    endpoint,
+			}
+		}
+		if _, next, err := readDrainNodeResult(result.Endpoint, endpoints, result); err == nil {
+			result = next
+			if resumeComplete(result) {
+				return result, nil
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if result.Target != "" {
+		return result, fmt.Errorf("resume-node timed out waiting for node %q to resume", target)
+	}
+	if lastErr != nil {
+		return drainNodeResult{}, lastErr
+	}
+	return drainNodeResult{}, fmt.Errorf("resume-node timed out")
+}
+
+func resumeComplete(result drainNodeResult) bool {
+	for _, node := range result.Statuses.Nodes {
+		if node.Node != result.Target {
+			continue
+		}
+		return node.Status != nil && !node.Status.Draining
+	}
+	return false
+}
+
+func writeDrainNodeResult(w io.Writer, result drainNodeResult) {
+	fmt.Fprintf(w, "target=%s submitted_to=%s endpoint=%s\n", result.Target, result.SubmittedTo, result.Endpoint)
+	for _, shard := range result.Shards {
+		fmt.Fprintf(w, "shard=%s leader=%s\n", shard.ID, shard.Leader)
+	}
+	writeClusterStatuses(w, result.Statuses)
 }
 
 func alignShardLeader(endpoint string, key []byte, target string) error {

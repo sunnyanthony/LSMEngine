@@ -63,6 +63,29 @@ wait_for_cluster() {
   done
 }
 
+node_endpoint_args() {
+  printf '%s\n' \
+    --node-endpoint "node-a=$(url_for_service node-a)" \
+    --node-endpoint "node-b=$(url_for_service node-b)" \
+    --node-endpoint "node-c=$(url_for_service node-c)"
+}
+
+drain_service() {
+  local service="$1"
+  lsmctl drain-node \
+    --node "$service" \
+    --operation-id "rolling-drain-$service" \
+    $(node_endpoint_args)
+}
+
+resume_service() {
+  local service="$1"
+  lsmctl resume-node \
+    --node "$service" \
+    --operation-id "rolling-resume-$service" \
+    $(node_endpoint_args)
+}
+
 put_on_any_live_node() {
   local skipped_service="$1"
   local key="$2"
@@ -72,9 +95,7 @@ put_on_any_live_node() {
   while (( SECONDS < deadline )); do
     if output="$(lsmctl put \
       --cluster \
-      --node-endpoint "node-a=$(url_for_service node-a)" \
-      --node-endpoint "node-b=$(url_for_service node-b)" \
-      --node-endpoint "node-c=$(url_for_service node-c)" \
+      $(node_endpoint_args) \
       --key "$key" \
       --value "$value" 2>&1)" &&
       [[ "$output" == *"state=committed"* ]]; then
@@ -116,10 +137,12 @@ put_on_any_live_node "" "rolling-before" "all-up"
 for service in "${services[@]}"; do
   key="rolling-$service"
   value="ok-$service"
+  drain_service "$service"
   compose stop "$service" >/dev/null
   put_on_any_live_node "$service" "$key" "$value"
   compose start "$service" >/dev/null
   wait_for_health "$(url_for_service "$service")"
+  resume_service "$service"
   for read_service in "${services[@]}"; do
     wait_for_value "$read_service" "$key" "$value"
   done

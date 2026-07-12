@@ -43,6 +43,12 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 			handler.controlWithOptions = advanced
 		}
 	}
+	if resume, ok := provider.(lsm.ControlResumeProvider); ok {
+		handler.controlResume = resume
+		if advanced, ok := provider.(lsm.ControlResumeProviderWithOptions); ok {
+			handler.controlResumeWithOptions = advanced
+		}
+	}
 	if membership, ok := provider.(lsm.RaftMembershipProvider); ok {
 		handler.raftMembership = membership
 	}
@@ -90,17 +96,19 @@ func Serve(addr string, provider lsm.StatsProvider) error {
 }
 
 type handler struct {
-	provider                lsm.StatsProvider
-	control                 lsm.ControlProvider
-	controlWithOptions      lsm.ControlProviderWithOptions
-	raftMembership          lsm.RaftMembershipProvider
-	reader                  lsm.ReadProvider
-	ranger                  lsm.RangeProvider
-	writer                  lsm.WriteProvider
-	cdc                     lsm.CDCProvider
-	raft                    raftPeerMessageHandler
-	requests                *writeRequestStore
-	writeConsistencyDefault lsm.WriteConsistency
+	provider                 lsm.StatsProvider
+	control                  lsm.ControlProvider
+	controlWithOptions       lsm.ControlProviderWithOptions
+	controlResume            lsm.ControlResumeProvider
+	controlResumeWithOptions lsm.ControlResumeProviderWithOptions
+	raftMembership           lsm.RaftMembershipProvider
+	reader                   lsm.ReadProvider
+	ranger                   lsm.RangeProvider
+	writer                   lsm.WriteProvider
+	cdc                      lsm.CDCProvider
+	raft                     raftPeerMessageHandler
+	requests                 *writeRequestStore
+	writeConsistencyDefault  lsm.WriteConsistency
 }
 
 type raftPeerMessageHandler interface {
@@ -404,6 +412,16 @@ func (h *handler) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeActionResult(w, h.drain(nodeID, req.controlWriteOptions()))
+	case "resume":
+		if h.controlResume == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var req drainRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		writeActionResult(w, h.resumeDrain(nodeID, req.controlWriteOptions()))
 	case "raft-add":
 		if h.raftMembership == nil {
 			http.NotFound(w, r)
@@ -801,6 +819,16 @@ func (h *handler) drain(nodeID string, opts lsm.ControlWriteOptions) error {
 		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.PrepareDrain(nodeID)
+}
+
+func (h *handler) resumeDrain(nodeID string, opts lsm.ControlWriteOptions) error {
+	if h.controlResumeWithOptions != nil {
+		return h.controlResumeWithOptions.ResumeDrainWithOptions(nodeID, opts)
+	}
+	if strings.TrimSpace(opts.OperationID) != "" || opts.ExpectedRevision != nil {
+		return errs.ErrControlWriteOptionsUnsupported
+	}
+	return h.controlResume.ResumeDrain(nodeID)
 }
 
 func shardActionPath(path string) (shardID string, action string, ok bool) {

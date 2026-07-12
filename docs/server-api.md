@@ -37,6 +37,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `POST /cluster/shards/{id}/split` with `{ "split_key_base64": "<base64>", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/shards/{id}/rebalance` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
 - `POST /cluster/nodes/{id}/drain` with optional `{ "operation_id": "...", "expected_revision": 12 }`.
+- `POST /cluster/nodes/{id}/resume` with optional `{ "operation_id": "...", "expected_revision": 12 }`.
   - `operation_id` is optional; if reused with the same operation while retained in the server's recent-operation window, server returns success as an idempotent retry. The current window is bounded to the most recent 256 applied control mutations.
   - `expected_revision` is optional; mismatch returns `409 Conflict`.
 - Control mutations are executed through a commit-log adapter (`commitlog.provider`).
@@ -92,6 +93,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
 - `lsmctl put/delete --cluster --node-endpoint node-a=http://...` performs a cluster-aware remote write: it discovers the current commit-log write leader from `/cluster/status`, transfers shard leadership to that node when needed, and writes through that node.
 - `lsmctl cluster-status --node-endpoint node-a=http://... --node-endpoint node-b=http://...` polls `/cluster/status` across configured endpoints and prints health, write availability, leader state, term/index, revision, shard count, and per-node errors.
+- `lsmctl drain-node --node node-a --node-endpoint node-a=http://...` submits a committed drain mutation through the current commit-log write leader, waits for shard leadership to move away from the target, and waits for the target to report `draining=true`.
+- `lsmctl resume-node --node node-a --node-endpoint node-a=http://...` submits the matching committed resume mutation and waits for the target to report `draining=false` after maintenance.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.

@@ -537,9 +537,6 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 	if nodeID == "" {
 		nodeID = c.nodeID
 	}
-	if nodeID != c.nodeID {
-		return fmt.Errorf("drain supported only for local node")
-	}
 	fingerprint := prepareDrainFingerprint(nodeID)
 	return c.applyControlMutation(
 		controlMutation{
@@ -552,42 +549,36 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 			if mutation.Kind != "prepare-drain" || mutation.NodeID != nodeID {
 				return fmt.Errorf("committed control mutation mismatch")
 			}
-			targets := make(map[string]string)
-			for _, id := range c.order {
-				shard := c.shards[id]
-				if shard.Leader != nodeID {
-					continue
-				}
-				target := ""
-				for _, replica := range shard.Replicas {
-					if replica.NodeID != nodeID && replica.Healthy {
-						target = replica.NodeID
-						break
-					}
-				}
-				if target == "" {
-					return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
-				}
-				targets[id] = target
+			return c.applyPrepareDrainMutationLocked(mutation)
+		},
+	)
+}
+
+func (c *controlPlane) resumeDrain(nodeID string) error {
+	return c.resumeDrainWithOptions(nodeID, ControlWriteOptions{})
+}
+
+func (c *controlPlane) resumeDrainWithOptions(nodeID string, opts ControlWriteOptions) error {
+	if c == nil {
+		return errs.ErrShardNotFound
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		nodeID = c.nodeID
+	}
+	fingerprint := resumeDrainFingerprint(nodeID)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:   "resume-drain",
+			NodeID: nodeID,
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "resume-drain" || mutation.NodeID != nodeID {
+				return fmt.Errorf("committed control mutation mismatch")
 			}
-			for _, id := range c.order {
-				target, ok := targets[id]
-				if !ok {
-					continue
-				}
-				shard := c.shards[id]
-				shard.Leader = target
-				for i := range shard.Replicas {
-					if shard.Replicas[i].NodeID == target {
-						shard.Replicas[i].Role = "leader"
-						continue
-					}
-					shard.Replicas[i].Role = "follower"
-				}
-				c.shards[id] = shard
-			}
-			c.draining = true
-			return nil
+			return c.applyResumeDrainMutationLocked(mutation)
 		},
 	)
 }
@@ -723,6 +714,8 @@ func (c *controlPlane) applyControlMutationPayloadLocked(mutation controlMutatio
 		return c.applySplitMutationLocked(mutation)
 	case "prepare-drain":
 		return c.applyPrepareDrainMutationLocked(mutation)
+	case "resume-drain":
+		return c.applyResumeDrainMutationLocked(mutation)
 	default:
 		return fmt.Errorf("unknown control mutation kind %q", mutation.Kind)
 	}
@@ -893,6 +886,17 @@ func (c *controlPlane) applyPrepareDrainMutationLocked(mutation controlMutation)
 	return nil
 }
 
+func (c *controlPlane) applyResumeDrainMutationLocked(mutation controlMutation) error {
+	nodeID := strings.TrimSpace(mutation.NodeID)
+	if nodeID == "" {
+		return errs.ErrShardNotFound
+	}
+	if nodeID == c.nodeID {
+		c.draining = false
+	}
+	return nil
+}
+
 func (c *controlPlane) commitLogApplied() uint64 {
 	if c == nil {
 		return 0
@@ -967,6 +971,10 @@ func splitFingerprint(shardID string, splitKey []byte) string {
 
 func prepareDrainFingerprint(nodeID string) string {
 	return fmt.Sprintf("drain:%s", nodeID)
+}
+
+func resumeDrainFingerprint(nodeID string) string {
+	return fmt.Sprintf("resume-drain:%s", nodeID)
 }
 
 func (c *controlPlane) save() error {
@@ -1321,7 +1329,7 @@ func (l *LSM) TriggerRebalanceWithOptions(shardID, target string, opts ControlWr
 	return l.control.triggerRebalanceWithOptions(shardID, target, opts)
 }
 
-// PrepareDrain transfers local leadership off-node before drain.
+// PrepareDrain transfers leadership off the target node before drain.
 func (l *LSM) PrepareDrain(nodeID string) error {
 	if l == nil || l.control == nil {
 		return errs.ErrShardNotFound
@@ -1335,4 +1343,20 @@ func (l *LSM) PrepareDrainWithOptions(nodeID string, opts ControlWriteOptions) e
 		return errs.ErrShardNotFound
 	}
 	return l.control.prepareDrainWithOptions(nodeID, opts)
+}
+
+// ResumeDrain clears the target node's draining flag after maintenance.
+func (l *LSM) ResumeDrain(nodeID string) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.resumeDrain(nodeID)
+}
+
+// ResumeDrainWithOptions resumes a node with optional concurrency controls.
+func (l *LSM) ResumeDrainWithOptions(nodeID string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.resumeDrainWithOptions(nodeID, opts)
 }

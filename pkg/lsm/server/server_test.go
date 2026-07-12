@@ -144,6 +144,9 @@ func (p *writeControlStubProvider) TriggerRebalance(shardID, target string) erro
 func (p *writeControlStubProvider) PrepareDrain(nodeID string) error {
 	return p.control.PrepareDrain(nodeID)
 }
+func (p *writeControlStubProvider) ResumeDrain(nodeID string) error {
+	return p.control.ResumeDrain(nodeID)
+}
 func (p *writeControlStubProvider) TransferLeaderWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
 	return p.control.TransferLeaderWithOptions(shardID, target, opts)
 }
@@ -161,6 +164,9 @@ func (p *writeControlStubProvider) TriggerRebalanceWithOptions(shardID, target s
 }
 func (p *writeControlStubProvider) PrepareDrainWithOptions(nodeID string, opts lsm.ControlWriteOptions) error {
 	return p.control.PrepareDrainWithOptions(nodeID, opts)
+}
+func (p *writeControlStubProvider) ResumeDrainWithOptions(nodeID string, opts lsm.ControlWriteOptions) error {
+	return p.control.ResumeDrainWithOptions(nodeID, opts)
 }
 func (p *writeControlStubProvider) Put(key []byte, value []byte) error {
 	return p.write.Put(key, value)
@@ -259,6 +265,10 @@ func (c *legacyControlStubProvider) TriggerRebalance(shardID, target string) err
 
 func (c *legacyControlStubProvider) PrepareDrain(nodeID string) error {
 	return c.inner.PrepareDrain(nodeID)
+}
+
+func (c *legacyControlStubProvider) ResumeDrain(nodeID string) error {
+	return c.inner.ResumeDrain(nodeID)
 }
 
 func newControlStubProvider() *controlStubProvider {
@@ -466,6 +476,26 @@ func (c *controlStubProvider) PrepareDrainWithOptions(nodeID string, opts lsm.Co
 	c.state.status.Draining = true
 	c.state.status.Revision++
 	c.recordOperationLocked(opts, "drain:"+nodeID)
+	return nil
+}
+
+func (c *controlStubProvider) ResumeDrain(nodeID string) error {
+	return c.ResumeDrainWithOptions(nodeID, lsm.ControlWriteOptions{})
+}
+
+func (c *controlStubProvider) ResumeDrainWithOptions(nodeID string, opts lsm.ControlWriteOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	applied, err := c.ensureControlWriteOptionsLocked(opts, "resume-drain:"+nodeID)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	c.state.status.Draining = false
+	c.state.status.Revision++
+	c.recordOperationLocked(opts, "resume-drain:"+nodeID)
 	return nil
 }
 
@@ -940,6 +970,21 @@ func TestHandlerDrain(t *testing.T) {
 	}
 	if !p.ClusterStatus().Draining {
 		t.Fatalf("expected draining=true")
+	}
+}
+
+func TestHandlerResumeDrain(t *testing.T) {
+	p := newControlStubProvider()
+	p.state.status.Draining = true
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/nodes/node-a/resume", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if p.ClusterStatus().Draining {
+		t.Fatalf("expected draining=false")
 	}
 }
 
