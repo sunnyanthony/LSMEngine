@@ -1,0 +1,26 @@
+data_dir: "/data"
+node_id: "node-b"
+cluster_id: "compose-cluster"
+storage_mode: "local"
+control_state_path: "/data/control_state.json"
+addr: "0.0.0.0:8080"
+read_timeout: "5s"
+write_timeout: "5s"
+write_consistency_default: "local_committed"
+commitlog:
+  provider: "etcd-raft"
+  snapshot_policy:
+    applied_entries: 8
+    retain_entries: 4
+raft:
+  peers: ["node-a", "node-b", "node-c"]
+  peer_urls:
+    node-a: "http://node-a:8080"
+    node-b: "http://node-b:8080"
+    node-c: "http://node-c:8080"
+shards:
+  - id: "users"
+    start_key: "a"
+    end_key: "z"
+    replicas: ["node-a", "node-b", "node-c"]
+    leader: "node-a"

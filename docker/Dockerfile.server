@@ -8,7 +8,9 @@ COPY . .
 RUN go build -o /out/lsmctl ./cmd/lsmctl
 
 FROM debian:bookworm-slim
-RUN useradd -u 10001 -r -s /usr/sbin/nologin lsm
+RUN useradd -u 10001 -r -s /usr/sbin/nologin lsm \
+    && mkdir -p /data \
+    && chown -R 10001:10001 /data
 COPY --from=build /out/lsmctl /usr/local/bin/lsmctl
 USER 10001
 ENTRYPOINT ["/usr/local/bin/lsmctl"]
