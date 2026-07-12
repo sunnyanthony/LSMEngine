@@ -48,6 +48,9 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 		handler.requests = newWriteRequestStore(resolved.maxWriteRequests)
 		handler.writeConsistencyDefault = resolved.writeConsistencyDefault
 	}
+	if reader, ok := provider.(lsm.ReadProvider); ok {
+		handler.reader = reader
+	}
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
@@ -63,6 +66,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	mux.HandleFunc("/cdc/events", handler.handleCDCEvents)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
+	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/put", handler.handlePut)
 	mux.HandleFunc("/kv/delete", handler.handleDelete)
 	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
@@ -82,6 +86,7 @@ type handler struct {
 	provider                lsm.StatsProvider
 	control                 lsm.ControlProvider
 	controlWithOptions      lsm.ControlProviderWithOptions
+	reader                  lsm.ReadProvider
 	writer                  lsm.WriteProvider
 	cdc                     lsm.CDCProvider
 	raft                    raftPeerMessageHandler
@@ -421,6 +426,14 @@ type deleteRequest struct {
 	Consistency lsm.WriteConsistency `json:"consistency,omitempty"`
 }
 
+type getResponse struct {
+	Found       bool   `json:"found"`
+	KeyBase64   string `json:"key_base64"`
+	ValueBase64 string `json:"value_base64"`
+	Tombstone   bool   `json:"tombstone,omitempty"`
+	Seq         uint64 `json:"seq"`
+}
+
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -441,6 +454,43 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	}
 	http.Error(w, "request body must contain a single JSON value", http.StatusBadRequest)
 	return false
+}
+
+func (h *handler) handleGet(w http.ResponseWriter, r *http.Request) {
+	if h.reader == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyBase64 := strings.TrimSpace(r.URL.Query().Get("key_base64"))
+	if keyBase64 == "" {
+		http.Error(w, "key_base64 required", http.StatusBadRequest)
+		return
+	}
+	key, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		http.Error(w, "invalid key_base64", http.StatusBadRequest)
+		return
+	}
+	entry, ok := h.reader.Get(key)
+	if !ok || entry.Tombstone {
+		writeJSON(w, http.StatusNotFound, getResponse{
+			Found:     false,
+			KeyBase64: base64.StdEncoding.EncodeToString(key),
+			Tombstone: entry.Tombstone,
+			Seq:       entry.Seq,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, getResponse{
+		Found:       true,
+		KeyBase64:   base64.StdEncoding.EncodeToString(key),
+		ValueBase64: base64.StdEncoding.EncodeToString(entry.Value),
+		Seq:         entry.Seq,
+	})
 }
 
 func (h *handler) handlePut(w http.ResponseWriter, r *http.Request) {
