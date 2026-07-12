@@ -81,6 +81,35 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadPeerURLFile reads a YAML/JSON node-name to absolute URL map.
+func LoadPeerURLFile(path string) (map[string]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("raft peer_url_file required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]string
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(raw))
+	for nodeID, endpoint := range raw {
+		nodeID = strings.TrimSpace(nodeID)
+		if nodeID == "" {
+			return nil, fmt.Errorf("raft peer_url_file contains empty node name")
+		}
+		endpoint = strings.TrimSpace(endpoint)
+		if err := validateAbsoluteURL(endpoint); err != nil {
+			return nil, fmt.Errorf("raft peer_url_file[%q] must be an absolute URL", nodeID)
+		}
+		out[nodeID] = endpoint
+	}
+	return out, nil
+}
+
 // Validate checks cross-field server config invariants that YAML decoding cannot
 // express.
 func Validate(cfg Config) error {

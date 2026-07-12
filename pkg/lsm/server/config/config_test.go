@@ -204,6 +204,30 @@ func TestValidateEtcdRaftRejectsRelativePeerURLFile(t *testing.T) {
 	}
 }
 
+func TestLoadPeerURLFile(t *testing.T) {
+	path := writeConfig(t, `
+node-a: "http://127.0.0.1:8080/"
+node-b: "http://127.0.0.1:8081"
+`)
+	got, err := LoadPeerURLFile(path)
+	if err != nil {
+		t.Fatalf("load peer url file: %v", err)
+	}
+	if got["node-a"] != "http://127.0.0.1:8080/" {
+		t.Fatalf("expected node-a url, got %+v", got)
+	}
+	if got["node-b"] != "http://127.0.0.1:8081" {
+		t.Fatalf("expected node-b url, got %+v", got)
+	}
+}
+
+func TestLoadPeerURLFileRejectsInvalidURL(t *testing.T) {
+	path := writeConfig(t, `node-a: "127.0.0.1:8080"`)
+	if _, err := LoadPeerURLFile(path); err == nil {
+		t.Fatalf("expected invalid peer url error")
+	}
+}
+
 func TestValidateEtcdRaftRejectsUnknownPeerURL(t *testing.T) {
 	cfg := Config{
 		NodeID: "node-a",
