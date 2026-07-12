@@ -95,6 +95,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl cluster-status --node-endpoint node-a=http://... --node-endpoint node-b=http://...` polls `/cluster/status` across configured endpoints and prints health, write availability, leader state, term/index, revision, shard count, and per-node errors.
 - `lsmctl drain-node --node node-a --node-endpoint node-a=http://...` submits a committed drain mutation through the current commit-log write leader, waits for shard leadership to move away from the target, and waits for the target to report `draining=true`.
 - `lsmctl resume-node --node node-a --node-endpoint node-a=http://...` submits the matching committed resume mutation and waits for the target to report `draining=false` after maintenance.
+- `lsmctl raft-add-node --node node-c --node-endpoint node-a=http://...` and `lsmctl raft-remove-node --node node-c ...` submit provider-level raft voter membership changes through the current commit-log write leader. These are separate from shard replica metadata.
+- `lsmctl shard-add-replica --shard users --node node-c ...` and `lsmctl shard-remove-replica --shard users --node node-c ...` submit committed shard replica metadata changes and wait until `/cluster/shards` reflects the requested membership.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.

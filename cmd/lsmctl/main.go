@@ -56,6 +56,14 @@ func main() {
 		drainNodeCmd(os.Args[2:])
 	case "resume-node":
 		resumeNodeCmd(os.Args[2:])
+	case "raft-add-node":
+		raftAddNodeCmd(os.Args[2:])
+	case "raft-remove-node":
+		raftRemoveNodeCmd(os.Args[2:])
+	case "shard-add-replica":
+		shardAddReplicaCmd(os.Args[2:])
+	case "shard-remove-replica":
+		shardRemoveReplicaCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -67,7 +75,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -258,6 +266,7 @@ type kvWriteRequest struct {
 
 type targetRequest struct {
 	Target string `json:"target"`
+	controlRequestOptions
 }
 
 type controlRequestOptions struct {
@@ -325,6 +334,16 @@ type drainNodeResult struct {
 	SubmittedTo string              `json:"submitted_to"`
 	Endpoint    string              `json:"endpoint"`
 	Shards      []lsm.ShardStatus   `json:"shards"`
+	Statuses    clusterStatusResult `json:"statuses"`
+}
+
+type membershipActionResult struct {
+	Operation   string              `json:"operation"`
+	Node        string              `json:"node"`
+	Shard       string              `json:"shard,omitempty"`
+	SubmittedTo string              `json:"submitted_to"`
+	Endpoint    string              `json:"endpoint"`
+	Shards      []lsm.ShardStatus   `json:"shards,omitempty"`
 	Statuses    clusterStatusResult `json:"statuses"`
 }
 
@@ -702,6 +721,108 @@ func resumeNodeCmd(args []string) {
 		return
 	}
 	writeDrainNodeResult(os.Stdout, result)
+}
+
+func raftAddNodeCmd(args []string) {
+	membershipNodeCmd("raft-add-node", args, "raft-add")
+}
+
+func raftRemoveNodeCmd(args []string) {
+	membershipNodeCmd("raft-remove-node", args, "raft-remove")
+}
+
+func membershipNodeCmd(command string, args []string, action string) {
+	fs := flag.NewFlagSet(command, flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	node := fs.String("node", "", "node id")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *node == "" && fs.NArg() > 0 {
+		*node = fs.Arg(0)
+	}
+	if strings.TrimSpace(*node) == "" {
+		log.Fatal("--node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatalf("%s requires raft.peer_urls in config, --addr, or --node-endpoint", command)
+	}
+	result, err := changeRaftMembership(endpoints, action, *node)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeMembershipActionResult(os.Stdout, result)
+}
+
+func shardAddReplicaCmd(args []string) {
+	shardReplicaCmd("shard-add-replica", args, "add-replica")
+}
+
+func shardRemoveReplicaCmd(args []string) {
+	shardReplicaCmd("shard-remove-replica", args, "remove-replica")
+}
+
+func shardReplicaCmd(command string, args []string, action string) {
+	fs := flag.NewFlagSet(command, flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	shard := fs.String("shard", "", "shard id")
+	node := fs.String("node", "", "node id")
+	operationID := fs.String("operation-id", "", "idempotency key for the shard membership mutation")
+	expectedRevision := fs.Uint64("expected-revision", 0, "expected control revision; 0 disables the check")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *shard == "" && fs.NArg() > 0 {
+		*shard = fs.Arg(0)
+	}
+	if *node == "" && fs.NArg() > 1 {
+		*node = fs.Arg(1)
+	}
+	if strings.TrimSpace(*shard) == "" {
+		log.Fatal("--shard required")
+	}
+	if strings.TrimSpace(*node) == "" {
+		log.Fatal("--node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatalf("%s requires raft.peer_urls in config, --addr, or --node-endpoint", command)
+	}
+	opts := controlRequestOptions{OperationID: strings.TrimSpace(*operationID)}
+	if *expectedRevision != 0 {
+		revision := *expectedRevision
+		opts.ExpectedRevision = &revision
+	}
+	result, err := changeShardReplica(endpoints, action, *shard, *node, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeMembershipActionResult(os.Stdout, result)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -1194,10 +1315,170 @@ func resumeComplete(result drainNodeResult) bool {
 	return false
 }
 
+func changeRaftMembership(
+	endpoints map[string]string,
+	action string,
+	node string,
+) (membershipActionResult, error) {
+	node = strings.TrimSpace(node)
+	if node == "" {
+		return membershipActionResult{}, fmt.Errorf("node required")
+	}
+	nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+	if err != nil {
+		return membershipActionResult{}, err
+	}
+	if err := postControlAction(endpoint+"/cluster/nodes/"+url.PathEscape(node)+"/"+url.PathEscape(action), drainRequest{}); err != nil {
+		return membershipActionResult{}, err
+	}
+	statuses, err := readClusterStatuses(endpoints)
+	if err != nil {
+		return membershipActionResult{}, err
+	}
+	return membershipActionResult{
+		Operation:   action,
+		Node:        node,
+		SubmittedTo: nodeID,
+		Endpoint:    endpoint,
+		Statuses:    statuses,
+	}, nil
+}
+
+func changeShardReplica(
+	endpoints map[string]string,
+	action string,
+	shardID string,
+	node string,
+	opts controlRequestOptions,
+) (membershipActionResult, error) {
+	shardID = strings.TrimSpace(shardID)
+	node = strings.TrimSpace(node)
+	if shardID == "" {
+		return membershipActionResult{}, fmt.Errorf("shard required")
+	}
+	if node == "" {
+		return membershipActionResult{}, fmt.Errorf("node required")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var result membershipActionResult
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if result.Operation == "" {
+			nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+			if err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if err := postControlAction(
+				endpoint+"/cluster/shards/"+url.PathEscape(shardID)+"/"+url.PathEscape(action),
+				targetRequest{
+					Target:                node,
+					controlRequestOptions: opts,
+				},
+			); err != nil {
+				lastErr = err
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			result = membershipActionResult{
+				Operation:   action,
+				Node:        node,
+				Shard:       shardID,
+				SubmittedTo: nodeID,
+				Endpoint:    endpoint,
+			}
+		}
+		next, err := readMembershipActionResult(result.Endpoint, endpoints, result)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		result = next
+		if shardReplicaActionComplete(result) {
+			return result, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if result.Operation != "" {
+		return result, fmt.Errorf("%s timed out waiting for shard %q membership", action, shardID)
+	}
+	if lastErr != nil {
+		return membershipActionResult{}, lastErr
+	}
+	return membershipActionResult{}, fmt.Errorf("%s timed out", action)
+}
+
+func readMembershipActionResult(
+	controlEndpoint string,
+	endpoints map[string]string,
+	result membershipActionResult,
+) (membershipActionResult, error) {
+	var shards []lsm.ShardStatus
+	if err := getJSON(controlEndpoint+"/cluster/shards", &shards); err != nil {
+		return result, err
+	}
+	statuses, err := readClusterStatuses(endpoints)
+	if err != nil {
+		return result, err
+	}
+	result.Shards = shards
+	result.Statuses = statuses
+	return result, nil
+}
+
+func shardReplicaActionComplete(result membershipActionResult) bool {
+	for _, shard := range result.Shards {
+		if shard.ID != result.Shard {
+			continue
+		}
+		has := hasShardReplica(shard, result.Node)
+		switch result.Operation {
+		case "add-replica":
+			return has
+		case "remove-replica":
+			return !has
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func hasShardReplica(shard lsm.ShardStatus, node string) bool {
+	for _, replica := range shard.Replicas {
+		if replica.NodeID == node {
+			return true
+		}
+	}
+	return false
+}
+
 func writeDrainNodeResult(w io.Writer, result drainNodeResult) {
 	fmt.Fprintf(w, "target=%s submitted_to=%s endpoint=%s\n", result.Target, result.SubmittedTo, result.Endpoint)
 	for _, shard := range result.Shards {
 		fmt.Fprintf(w, "shard=%s leader=%s\n", shard.ID, shard.Leader)
+	}
+	writeClusterStatuses(w, result.Statuses)
+}
+
+func writeMembershipActionResult(w io.Writer, result membershipActionResult) {
+	if result.Shard != "" {
+		fmt.Fprintf(w, "operation=%s shard=%s node=%s submitted_to=%s endpoint=%s\n", result.Operation, result.Shard, result.Node, result.SubmittedTo, result.Endpoint)
+	} else {
+		fmt.Fprintf(w, "operation=%s node=%s submitted_to=%s endpoint=%s\n", result.Operation, result.Node, result.SubmittedTo, result.Endpoint)
+	}
+	for _, shard := range result.Shards {
+		if result.Shard != "" && shard.ID != result.Shard {
+			continue
+		}
+		replicas := make([]string, 0, len(shard.Replicas))
+		for _, replica := range shard.Replicas {
+			replicas = append(replicas, replica.NodeID+":"+replica.Role)
+		}
+		sort.Strings(replicas)
+		fmt.Fprintf(w, "shard=%s leader=%s replicas=%s\n", shard.ID, shard.Leader, strings.Join(replicas, ","))
 	}
 	writeClusterStatuses(w, result.Statuses)
 }

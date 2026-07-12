@@ -10,8 +10,9 @@ It is a packaging smoke test for the current raft foundation:
 - writes are issued through node-a with `local_committed` consistency;
 - reads verify that committed data is applied on followers.
 
-This is not dynamic cluster management yet. Node bootstrap, raft membership
-changes, full LSM state-machine snapshot transfer, and service discovery remain
+This is not full dynamic cluster management yet. The CLI has manual raft and
+shard membership commands, but automated replacement policy, full LSM
+state-machine snapshot transfer orchestration, and service discovery remain
 future work.
 
 ## Run

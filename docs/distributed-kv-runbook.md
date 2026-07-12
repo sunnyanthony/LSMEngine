@@ -169,8 +169,11 @@ Use the persistent restart smoke to verify pod replacement:
 examples/kind-cluster/restart-smoke.sh
 ```
 
-This is still a static bootstrap path; it does not provide service discovery,
-automated membership repair, or automatic node replacement.
+This is still a static bootstrap path. `lsmctl raft-add-node`,
+`lsmctl raft-remove-node`, `lsmctl shard-add-replica`, and
+`lsmctl shard-remove-replica` provide manual membership primitives for
+operators, but service discovery, automated membership repair, and full node
+replacement orchestration remain outside this path.
 
 ## Failure Expectations
 
@@ -198,9 +201,9 @@ go test -tags test ./tests/integration/server \
 Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
-- orchestrated drain/restart workflows;
+- process supervision and fully automated replacement workflows;
 - mixed-version compatibility tests;
-- automatic raft membership lifecycle around node replacement;
+- policy-driven raft/shard membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
 
 The external dependency rule also applies here: etcd-raft remains behind the
