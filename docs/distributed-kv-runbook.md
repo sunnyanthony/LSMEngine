@@ -302,8 +302,10 @@ examples/docker-compose-cluster/replace-node-smoke.sh
 
 The script starts the static three-node cluster, starts node-d as a join-mode
 replacement service, runs `lsmctl replace-node --dry-run`, runs the real
-`lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, and
-verifies node-b/node-c/node-d can still commit and read data.
+`lsmctl replace-node --old-node node-a --new-node node-d`, verifies node-d can
+read committed data, stops node-a, waits for the final node-b/node-c/node-d
+quorum with `lsmctl wait-cluster`, and verifies node-b/node-c/node-d can still
+commit and read data.
 
 Use the failed-node replacement smoke to verify the one-shot supervisor path:
 
@@ -313,8 +315,9 @@ examples/docker-compose-cluster/failed-replacement-smoke.sh
 
 The script stops node-a before replacement, verifies node-b/node-c can still
 commit through quorum, starts node-d, runs `lsmctl replacement-plan`, runs
-`lsmctl replacement-apply`, and verifies node-d catches up to committed values
-from before and after the old node failed.
+`lsmctl replacement-apply`, waits for the final node-b/node-c/node-d quorum with
+`lsmctl wait-cluster`, and verifies node-d catches up to committed values from
+before and after the old node failed.
 
 ## Failure Expectations
 
