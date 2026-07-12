@@ -23,6 +23,7 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 		writeConsistencyDefault: resolved.writeConsistencyDefault,
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
+	mux.HandleFunc("/readyz", handler.handleReady)
 	mux.HandleFunc("/gateway/status", handler.handleGatewayStatus)
 	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/range", handler.handleRange)
@@ -46,6 +47,36 @@ func (h *gatewayHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
 			Ready:  false,
 			Reason: "gateway_unavailable",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, lsm.Health{Ready: true})
+}
+
+func (h *gatewayHandler) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.gateway == nil {
+		writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
+			Ready:  false,
+			Reason: "gateway_unavailable",
+		})
+		return
+	}
+	status, err := h.gateway.ClusterStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
+			Ready:  false,
+			Reason: status.Reason,
+		})
+		return
+	}
+	if strings.TrimSpace(status.WriteLeader) == "" {
+		writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
+			Ready:  false,
+			Reason: "write_leader_unavailable",
 		})
 		return
 	}

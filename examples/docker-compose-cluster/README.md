@@ -54,6 +54,7 @@ the Compose `gateway` service on `127.0.0.1:8090`, then verifies ordinary
 single gateway endpoint. The gateway routes writes to the current raft write
 leader, loads node endpoints from the mounted `peer-urls.yaml`, and uses
 best-effort endpoint fallback for reads. The smoke also verifies
+gateway `/readyz` reports backend write readiness,
 `lsmctl gateway-status --addr http://127.0.0.1:8090` reports all three backend
 nodes and the current write leader, then checks accepted write-status lookup
 through the same gateway endpoint.
