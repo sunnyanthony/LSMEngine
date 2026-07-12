@@ -6,7 +6,8 @@ This example starts a static three-node LSMEngine cluster with the builtin
 It is a packaging smoke test for the current raft foundation:
 
 - three `lsmctl serve` processes run in separate containers;
-- node peer traffic uses Compose service names;
+- node peer traffic uses an operator-managed `peer-urls.yaml` file with Compose
+  service names;
 - writes are issued through node-a with `local_committed` consistency;
 - reads verify that committed data is applied on followers.
 - optional node-d replacement coverage is available through the `replacement`
@@ -16,6 +17,11 @@ This is not full dynamic cluster management yet. The CLI has manual raft and
 shard membership commands plus a planned `replace-node` workflow, but automated
 replacement triggers, full LSM state-machine snapshot transfer orchestration,
 and service discovery remain future work.
+
+The server configs mount `peer-urls.yaml` as `raft.peer_url_file`. The
+operator smoke scripts generate a separate host-side endpoint file and pass it
+through `lsmctl --config`, so the same endpoint-file contract is exercised from
+server peer transport and CLI operator commands.
 
 ## Run
 

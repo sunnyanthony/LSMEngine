@@ -6,6 +6,9 @@ COMPOSE_FILE="$ROOT_DIR/examples/docker-compose-cluster/docker-compose.yml"
 PROJECT="${LSM_COMPOSE_PROJECT:-lsmengine-cluster}"
 KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
+TMP_DIR="$(mktemp -d)"
+LSMCTL_PEER_URL_FILE="$TMP_DIR/peer-urls.yaml"
+LSMCTL_CONFIG="$TMP_DIR/lsmctl.yaml"
 
 initial_services=(node-a node-b node-c)
 all_services=(node-a node-b node-c node-d)
@@ -23,12 +26,26 @@ lsmctl() {
 }
 
 cleanup() {
+  rm -rf "$TMP_DIR"
   if [[ "$KEEP" == "1" ]]; then
     return
   fi
   compose --profile replacement down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+write_lsmctl_config() {
+  cat >"$LSMCTL_PEER_URL_FILE" <<EOF
+node-a: "$(url_for_service node-a)"
+node-b: "$(url_for_service node-b)"
+node-c: "$(url_for_service node-c)"
+node-d: "$(url_for_service node-d)"
+EOF
+  cat >"$LSMCTL_CONFIG" <<EOF
+raft:
+  peer_url_file: "$LSMCTL_PEER_URL_FILE"
+EOF
+}
 
 url_for_service() {
   case "$1" in
@@ -68,11 +85,8 @@ require_contains() {
   fi
 }
 
-node_endpoint_args() {
-  local service
-  for service in "${all_services[@]}"; do
-    printf '%s\n' --node-endpoint "$service=$(url_for_service "$service")"
-  done
+cluster_config_args() {
+  printf '%s\n' --config "$LSMCTL_CONFIG"
 }
 
 put_cluster() {
@@ -81,7 +95,7 @@ put_cluster() {
   local deadline=$((SECONDS + 60))
   local output
   while (( SECONDS < deadline )); do
-    if output="$(lsmctl put --cluster $(node_endpoint_args) --key "$key" --value "$value" 2>&1)" &&
+    if output="$(lsmctl put --cluster $(cluster_config_args) --key "$key" --value "$value" 2>&1)" &&
       [[ "$output" == *"state=committed"* ]]; then
       return 0
     fi
@@ -113,6 +127,7 @@ wait_for_value() {
   return 1
 }
 
+write_lsmctl_config
 compose up -d --build "${initial_services[@]}"
 for service in "${initial_services[@]}"; do
   wait_for_health "$(url_for_service "$service")"
@@ -136,7 +151,7 @@ wait_for_health "$(url_for_service node-d)"
 plan_output="$(lsmctl replacement-plan \
   --new-node node-d \
   --operation-prefix compose-failed-replace-node-a-node-d \
-  $(node_endpoint_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"
 require_contains "$plan_output" "old_node=node-a"
 require_contains "$plan_output" "new_node=node-d"
 require_contains "$plan_output" "reason=status-error"
@@ -147,7 +162,7 @@ require_contains "$plan_output" "apply_command="
 apply_output="$(lsmctl replacement-apply \
   --new-node node-d \
   --operation-prefix compose-failed-replace-node-a-node-d \
-  $(node_endpoint_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"
 require_contains "$apply_output" "planned_old_node=node-a"
 require_contains "$apply_output" "planned_new_node=node-d"
 require_contains "$apply_output" "reason=status-error"
