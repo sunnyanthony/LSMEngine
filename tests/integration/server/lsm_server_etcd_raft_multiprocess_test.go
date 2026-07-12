@@ -16,6 +16,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"lsmengine/pkg/lsm"
 )
 
 func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
@@ -170,6 +172,83 @@ func TestEtcdRaftThreeProcessLeaderRestartSmoke(t *testing.T) {
 	})
 }
 
+func TestEtcdRaftThreeProcessFollowerLongOutageCatchupSmoke(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := buildLSMCTLBinary(t, tempDir)
+
+	peers := []string{"node-a", "node-b", "node-c"}
+	urls := reserveNodeURLs(t, peers)
+	processes := make(map[string]*startedLSMProcess, len(peers))
+	configPaths := make(map[string]string, len(peers))
+	for _, nodeID := range peers {
+		configPath := writeProcessConfig(t, tempDir, processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     peers,
+			ShardReplicas: peers,
+			PeerURLs:      urlsForPeers(peers, urls),
+		})
+		configPaths[nodeID] = configPath
+		processes[nodeID] = startLSMProcess(t, bin, configPath)
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			logStartedProcesses(t, processes)
+		}
+		for _, nodeID := range []string{"node-c", "node-b", "node-a"} {
+			if proc := processes[nodeID]; proc != nil {
+				proc.stop(t)
+			}
+		}
+	})
+
+	for _, nodeID := range peers {
+		waitHTTPStatus(t, urls[nodeID]+"/healthz", http.StatusOK, 5*time.Second)
+	}
+
+	eventually(t, 10*time.Second, func() bool {
+		status, body, err := postKVPut(urls["node-a"], []byte("catchup-before-stop"), []byte("visible-before-stop"))
+		if err != nil {
+			return false
+		}
+		if status != http.StatusOK {
+			t.Logf("initial catchup put status=%d body=%s", status, body)
+			return false
+		}
+		return true
+	})
+	eventually(t, 5*time.Second, func() bool {
+		got, ok, err := getKVValue(urls["node-c"], []byte("catchup-before-stop"))
+		return err == nil && ok && bytes.Equal(got, []byte("visible-before-stop"))
+	})
+
+	processes["node-c"].stop(t)
+	processes["node-c"] = nil
+
+	const outageWrites = 18
+	for i := 0; i < outageWrites; i++ {
+		key := []byte(fmt.Sprintf("catchup-offline-%02d", i))
+		value := []byte(fmt.Sprintf("value-%02d", i))
+		eventually(t, 10*time.Second, func() bool {
+			return putKVOnCurrentWriteLeader(t, urls, []string{"node-a", "node-b"}, key, value)
+		})
+	}
+	eventually(t, 10*time.Second, func() bool {
+		got, ok, err := getKVValue(urls["node-b"], []byte("catchup-offline-17"))
+		return err == nil && ok && bytes.Equal(got, []byte("value-17"))
+	})
+
+	processes["node-c"] = startLSMProcess(t, bin, configPaths["node-c"])
+	waitHTTPStatus(t, urls["node-c"]+"/healthz", http.StatusOK, 5*time.Second)
+	for i := 0; i < outageWrites; i++ {
+		key := []byte(fmt.Sprintf("catchup-offline-%02d", i))
+		value := []byte(fmt.Sprintf("value-%02d", i))
+		eventually(t, 15*time.Second, func() bool {
+			got, ok, err := getKVValue(urls["node-c"], key)
+			return err == nil && ok && bytes.Equal(got, value)
+		})
+	}
+}
+
 func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	tempDir := t.TempDir()
 	bin := buildLSMCTLBinary(t, tempDir)
@@ -266,6 +345,24 @@ type startedLSMProcess struct {
 	cmd  *exec.Cmd
 	logs bytes.Buffer
 	done chan error
+}
+
+func logStartedProcesses(t *testing.T, processes map[string]*startedLSMProcess) {
+	t.Helper()
+	for _, nodeID := range sortedProcessNames(processes) {
+		if proc := processes[nodeID]; proc != nil {
+			t.Logf("process %s logs:\n%s", nodeID, proc.logs.String())
+		}
+	}
+}
+
+func sortedProcessNames(processes map[string]*startedLSMProcess) []string {
+	names := make([]string, 0, len(processes))
+	for name := range processes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 type processConfigOptions struct {
@@ -461,12 +558,16 @@ func waitHTTPStatus(t *testing.T, url string, want int, timeout time.Duration) {
 }
 
 func postKVPut(baseURL string, key []byte, value []byte) (int, string, error) {
+	return postKVPutWithTimeout(baseURL, key, value, 2*time.Second)
+}
+
+func postKVPutWithTimeout(baseURL string, key []byte, value []byte, timeout time.Duration) (int, string, error) {
 	body := bytes.NewBufferString(`{"key_base64":"` +
 		base64.StdEncoding.EncodeToString(key) +
 		`","value_base64":"` +
 		base64.StdEncoding.EncodeToString(value) +
 		`","consistency":"local_committed"}`)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/kv/put", body)
 	if err != nil {
@@ -559,6 +660,86 @@ func getRouteLeader(baseURL string, shardID string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("route shard %q not found", shardID)
+}
+
+func putKVOnCurrentWriteLeader(
+	t *testing.T,
+	urls map[string]string,
+	liveNodes []string,
+	key []byte,
+	value []byte,
+) bool {
+	t.Helper()
+	leaderNode, ok := currentRaftWriteLeader(urls, liveNodes)
+	if !ok {
+		return false
+	}
+	routeLeader, err := getRouteLeader(urls[leaderNode], "users")
+	if err != nil {
+		t.Logf("get route leader from %s: %v", leaderNode, err)
+		return false
+	}
+	if routeLeader != leaderNode {
+		routeURL := urls[routeLeader]
+		if routeURL == "" {
+			t.Logf("route leader %s has no configured URL", routeLeader)
+			return false
+		}
+		status, body, err := postShardTransferLeader(routeURL, "users", leaderNode)
+		if err != nil {
+			t.Logf("transfer shard leader %s -> %s: %v", routeLeader, leaderNode, err)
+			return false
+		}
+		if status != http.StatusOK {
+			t.Logf("transfer shard leader %s -> %s status=%d body=%s", routeLeader, leaderNode, status, body)
+			return false
+		}
+	}
+	status, body, err := postKVPutWithTimeout(urls[leaderNode], key, value, 6*time.Second)
+	if err != nil {
+		t.Logf("put via %s: %v", leaderNode, err)
+		return false
+	}
+	if status != http.StatusOK {
+		t.Logf("put via %s key=%q status=%d body=%s", leaderNode, key, status, body)
+		return false
+	}
+	return true
+}
+
+func currentRaftWriteLeader(urls map[string]string, liveNodes []string) (string, bool) {
+	for _, nodeID := range liveNodes {
+		status, err := getClusterStatus(urls[nodeID])
+		if err != nil {
+			continue
+		}
+		if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
+			return nodeID, true
+		}
+	}
+	return "", false
+}
+
+func getClusterStatus(baseURL string) (lsm.ClusterStatus, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/cluster/status", nil)
+	if err != nil {
+		return lsm.ClusterStatus{}, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return lsm.ClusterStatus{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return lsm.ClusterStatus{}, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var out lsm.ClusterStatus
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return lsm.ClusterStatus{}, err
+	}
+	return out, nil
 }
 
 func getKVValue(baseURL string, key []byte) ([]byte, bool, error) {
