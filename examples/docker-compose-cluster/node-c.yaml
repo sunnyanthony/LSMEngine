@@ -18,6 +18,8 @@ raft:
     node-a: "http://node-a:8080"
     node-b: "http://node-b:8080"
     node-c: "http://node-c:8080"
+  join_peer_urls:
+    node-d: "http://node-d:8080"
 shards:
   - id: "users"
     start_key: "a"

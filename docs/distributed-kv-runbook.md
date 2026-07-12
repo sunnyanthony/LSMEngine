@@ -194,6 +194,17 @@ raft voter, adds it as a shard replica for those shards, drains the old node,
 removes the old shard replicas, and removes the old raft voter. Use repeated
 `--shard` flags to constrain the replacement to specific shards.
 
+Use the Compose replacement smoke for a repeatable local check:
+
+```bash
+examples/docker-compose-cluster/replace-node-smoke.sh
+```
+
+The script starts the static three-node cluster, starts node-d as a join-mode
+replacement service, runs `lsmctl replace-node --old-node node-a --new-node
+node-d`, stops node-a, and verifies node-b/node-c/node-d can still commit and
+read data.
+
 ## Failure Expectations
 
 Expected behavior during common failures:
