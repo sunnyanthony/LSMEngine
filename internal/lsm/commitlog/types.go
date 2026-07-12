@@ -49,6 +49,14 @@ type StateSnapshotterSetter interface {
 	SetStateSnapshotter(snapshotter StateSnapshotter) error
 }
 
+type StateSnapshotApplier interface {
+	ApplyStateSnapshot(index uint64, data []byte) error
+}
+
+type StateSnapshotApplierSetter interface {
+	SetStateSnapshotApplier(applier StateSnapshotApplier) error
+}
+
 type MembershipChangeType string
 
 const (

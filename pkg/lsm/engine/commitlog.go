@@ -35,6 +35,14 @@ type commitLogStateSnapshotterSetter interface {
 	SetStateSnapshotter(snapshotter commitLogStateSnapshotter) error
 }
 
+type commitLogStateSnapshotApplier interface {
+	ApplyStateSnapshot(index uint64, data []byte) error
+}
+
+type commitLogStateSnapshotApplierSetter interface {
+	SetStateSnapshotApplier(applier commitLogStateSnapshotApplier) error
+}
+
 func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
 	entry, err := c.inner.CommitControl(ctx, toInternalControlMutation(mutation))
 	if err != nil {
@@ -126,6 +134,17 @@ func (c *builtinCommitLogConsensus) SetStateSnapshotter(snapshotter commitLogSta
 	return setter.SetStateSnapshotter(internalStateSnapshotter{snapshotter: snapshotter})
 }
 
+func (c *builtinCommitLogConsensus) SetStateSnapshotApplier(applier commitLogStateSnapshotApplier) error {
+	setter, ok := c.inner.(internalcommitlog.StateSnapshotApplierSetter)
+	if !ok {
+		return nil
+	}
+	if applier == nil {
+		return setter.SetStateSnapshotApplier(nil)
+	}
+	return setter.SetStateSnapshotApplier(internalStateSnapshotApplier{applier: applier})
+}
+
 func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (commitLogConsensus, error) {
 	cfg := internalcommitlog.Config{
 		Provider: internalcommitlog.Provider(provider),
@@ -167,11 +186,23 @@ type internalStateSnapshotter struct {
 	snapshotter commitLogStateSnapshotter
 }
 
+type internalStateSnapshotApplier struct {
+	applier commitLogStateSnapshotApplier
+}
+
 func (s internalStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) {
 	if s.snapshotter == nil {
 		return nil, nil
 	}
 	return s.snapshotter.CaptureStateSnapshot(index)
+}
+
+func (a internalStateSnapshotApplier) ApplyStateSnapshot(index uint64, data []byte) error {
+	if a.applier == nil {
+		return nil
+	}
+	copied := append([]byte(nil), data...)
+	return a.applier.ApplyStateSnapshot(index, copied)
 }
 
 func (o internalCommittedEntryObserver) ObserveCommittedControl(entry internalcommitlog.ControlCommittedEntry) error {

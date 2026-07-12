@@ -173,6 +173,12 @@ func New(opts Options) (*LSM, error) {
 			return nil, err
 		}
 	}
+	if setter, ok := lsm.commitLog.(commitLogStateSnapshotApplierSetter); ok {
+		if err := setter.SetStateSnapshotApplier(lsmStateSnapshotter{l: lsm}); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
 		observer.ObserveCommittedIndex(lsm.commitLogAppliedIndex)
 	}

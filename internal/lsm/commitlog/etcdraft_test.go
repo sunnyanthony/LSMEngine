@@ -41,6 +41,17 @@ func (r *recordingStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, 
 	return []byte(fmt.Sprintf("state-%d", index)), nil
 }
 
+type recordingStateSnapshotApplier struct {
+	indexes []uint64
+	data    [][]byte
+}
+
+func (r *recordingStateSnapshotApplier) ApplyStateSnapshot(index uint64, data []byte) error {
+	r.indexes = append(r.indexes, index)
+	r.data = append(r.data, append([]byte(nil), data...))
+	return nil
+}
+
 func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
@@ -340,6 +351,46 @@ func TestEtcdRaftConsensusStateSnapshotterUsesObservedAppliedIndex(t *testing.T)
 	consensus.ObserveCommittedIndex(entry.Commit.Index)
 	if len(snapshotter.indexes) != 1 {
 		t.Fatalf("expected duplicate observation to avoid recapturing snapshot, got %v", snapshotter.indexes)
+	}
+}
+
+func TestEtcdRaftConsensusAppliesIncomingSnapshotData(t *testing.T) {
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft,
+		DataDir:  t.TempDir(),
+		NodeID:   "node-a",
+	})
+	if err != nil {
+		t.Fatalf("new consensus: %v", err)
+	}
+	applier := &recordingStateSnapshotApplier{}
+	if err := consensus.SetStateSnapshotApplier(applier); err != nil {
+		t.Fatalf("set snapshot applier: %v", err)
+	}
+	snapshot := raftpb.Snapshot{
+		Data: []byte("lsm-state"),
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     8,
+			Term:      2,
+			ConfState: raftpb.ConfState{Voters: []uint64{consensus.nodeID}},
+		},
+	}
+
+	consensus.mu.Lock()
+	err = consensus.applyIncomingSnapshotLocked(snapshot)
+	consensus.mu.Unlock()
+	if err != nil {
+		t.Fatalf("apply incoming snapshot: %v", err)
+	}
+	if len(applier.indexes) != 1 || applier.indexes[0] != snapshot.Metadata.Index {
+		t.Fatalf("expected applier index %d, got %v", snapshot.Metadata.Index, applier.indexes)
+	}
+	if len(applier.data) != 1 || string(applier.data[0]) != "lsm-state" {
+		t.Fatalf("expected applier data, got %q", applier.data)
+	}
+	status := consensus.RuntimeStatus()
+	if status.SnapshotIndex != snapshot.Metadata.Index || status.Index != snapshot.Metadata.Index {
+		t.Fatalf("expected runtime snapshot/index %d, got %+v", snapshot.Metadata.Index, status)
 	}
 }
 
