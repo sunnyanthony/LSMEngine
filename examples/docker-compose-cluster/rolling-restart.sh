@@ -64,48 +64,27 @@ wait_for_cluster() {
 }
 
 put_on_any_live_node() {
-	local skipped_service="$1"
-	local key="$2"
-	local value="$3"
-	local deadline=$((SECONDS + 60))
-	local target url output
-	while (( SECONDS < deadline )); do
-		if target="$(try_transfer_shard_to_live_node "$skipped_service")"; then
-			url="$(url_for_service "$target")"
-			if output="$(lsmctl put --addr "$url" --key "$key" --value "$value" 2>&1)" &&
-				[[ "$output" == *"state=committed"* ]]; then
-				return 0
-			fi
-		fi
-		sleep 1
-	done
-	echo "timed out writing $key while $skipped_service was stopped" >&2
-	dump_diagnostics
-	return 1
-}
-
-try_transfer_shard_to_live_node() {
-	local skipped_service="$1"
-	local service url payload output status
-	for service in "${services[@]}"; do
-		if [[ "$service" == "$skipped_service" ]]; then
-			continue
-		fi
-		url="$(url_for_service "$service")"
-		payload="{\"target\":\"$service\"}"
-		if output="$(curl -sS -w $'\n%{http_code}' \
-			-H 'Content-Type: application/json' \
-			-X POST \
-			-d "$payload" \
-			"$url/cluster/shards/users/transfer-leader" 2>/dev/null)"; then
-			status="${output##*$'\n'}"
-			if [[ "$status" == "200" ]]; then
-				echo "$service"
-				return 0
-			fi
-		fi
-	done
-	return 1
+  local skipped_service="$1"
+  local key="$2"
+  local value="$3"
+  local deadline=$((SECONDS + 60))
+  local output
+  while (( SECONDS < deadline )); do
+    if output="$(lsmctl put \
+      --cluster \
+      --node-endpoint "node-a=$(url_for_service node-a)" \
+      --node-endpoint "node-b=$(url_for_service node-b)" \
+      --node-endpoint "node-c=$(url_for_service node-c)" \
+      --key "$key" \
+      --value "$value" 2>&1)" &&
+      [[ "$output" == *"state=committed"* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out writing $key while $skipped_service was stopped" >&2
+  dump_diagnostics
+  return 1
 }
 
 wait_for_value() {
