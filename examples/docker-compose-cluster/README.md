@@ -53,9 +53,9 @@ examples/docker-compose-cluster/replace-node-smoke.sh
 ```
 
 This starts node-a/node-b/node-c, writes a committed value, starts node-d with
-`raft.join: true`, runs `lsmctl replace-node --old-node node-a --new-node
-node-d`, stops node-a, then verifies node-b/node-c/node-d can accept and read a
-new committed write.
+`raft.join: true`, preflights `lsmctl replace-node --dry-run`, runs
+`lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, then
+verifies node-b/node-c/node-d can accept and read a new committed write.
 
 ## Manual commands
 

@@ -646,6 +646,171 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 	}
 }
 
+func TestReplaceClusterNodeDryRunOnlyPreflights(t *testing.T) {
+	var mutationCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-a",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "leader", Healthy: true},
+						{NodeID: "node-b", Role: "follower", Healthy: true},
+					},
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	result, err := replaceClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-c",
+		DryRun:  true,
+	})
+	if err != nil {
+		t.Fatalf("replace node dry-run: %v", err)
+	}
+	if !result.DryRun {
+		t.Fatalf("expected dry-run result")
+	}
+	if result.Preflight.WriteLeader != "node-b" {
+		t.Fatalf("expected node-b write leader, got %+v", result.Preflight)
+	}
+	if len(result.Shards) != 1 || result.Shards[0] != "users" {
+		t.Fatalf("unexpected replacement shards: %+v", result.Shards)
+	}
+	if len(result.Steps) != 0 || result.Drain.Target != "" {
+		t.Fatalf("dry-run should not submit replacement steps: %+v", result)
+	}
+	if mutationCalls.Load() != 0 {
+		t.Fatalf("dry-run submitted %d mutation calls", mutationCalls.Load())
+	}
+}
+
+func TestReplaceClusterNodePreflightRequiresReachableReplacement(t *testing.T) {
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-a",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "leader", Healthy: true},
+						{NodeID: "node-b", Role: "follower", Healthy: true},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	nodeC.Close()
+
+	_, err := replaceClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-c",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatalf("expected unreachable replacement error")
+	}
+	if !strings.Contains(err.Error(), "node \"node-c\" endpoint") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWriteKVPutClusterTransfersShardToCurrentWriteLeader(t *testing.T) {
 	var transferCalls atomic.Int32
 	var putCalls atomic.Int32
