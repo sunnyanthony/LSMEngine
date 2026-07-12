@@ -1,0 +1,4 @@
+node-a: "http://node-a:8080"
+node-b: "http://node-b:8080"
+node-c: "http://node-c:8080"
+node-d: "http://node-d:8080"
