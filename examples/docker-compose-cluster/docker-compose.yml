@@ -48,6 +48,32 @@ services:
       - ./peer-urls.yaml:/etc/lsm/peer-urls.yaml:ro
       - node-d-data:/data
 
+  gateway:
+    profiles: ["gateway"]
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.server
+    command:
+      - gateway
+      - --listen
+      - 0.0.0.0:8090
+      - --bootstrap-url
+      - http://node-a:8080
+      - --write-consistency-default
+      - local_committed
+      - --node-endpoint
+      - node-a=http://node-a:8080
+      - --node-endpoint
+      - node-b=http://node-b:8080
+      - --node-endpoint
+      - node-c=http://node-c:8080
+    ports:
+      - "8090:8090"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+
 volumes:
   node-a-data:
   node-b-data:
