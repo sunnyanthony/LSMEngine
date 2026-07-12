@@ -135,6 +135,35 @@ gateways or supervisors. Future Kubernetes, DNS, or service-registry discovery
 should plug into the same resolver layer instead of adding provider-specific
 lookups directly to CLI commands or gateway routing.
 
+For a single client-facing endpoint, run `lsmctl gateway`:
+
+```bash
+go run ./cmd/lsmctl gateway \
+  --listen 127.0.0.1:8090 \
+  --bootstrap-url http://127.0.0.1:8080 \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --write-consistency-default local_committed
+```
+
+Clients can then use normal non-cluster commands against the gateway:
+
+```bash
+go run ./cmd/lsmctl put --addr http://127.0.0.1:8090 --key user:1 --value alice
+go run ./cmd/lsmctl get --addr http://127.0.0.1:8090 --key user:1
+```
+
+The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`, and
+`/healthz`. Writes are route-aware and retry stale leader metadata through
+`server.Gateway`; reads use the same best-effort first-healthy endpoint fallback
+as `lsmctl get/range --cluster`, not a linearizable read protocol. Use the
+Compose gateway smoke for a repeatable local check:
+
+```bash
+examples/docker-compose-cluster/gateway-smoke.sh
+```
+
 ## Rolling Restart Check
 
 The integration suite covers this workflow with real `lsmctl serve` processes:

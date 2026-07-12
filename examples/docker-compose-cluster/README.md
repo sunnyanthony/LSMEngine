@@ -41,6 +41,18 @@ Useful environment overrides:
 - `LSMCTL_BIN=/path/to/lsmctl`: use an existing CLI binary instead of
   `go run ./cmd/lsmctl`.
 
+## Gateway smoke
+
+```bash
+examples/docker-compose-cluster/gateway-smoke.sh
+```
+
+This starts node-a/node-b/node-c, waits for cluster readiness, starts
+`lsmctl gateway` on `127.0.0.1:8090`, then verifies ordinary
+`lsmctl put/get/delete --addr http://127.0.0.1:8090` calls work through the
+single gateway endpoint. The gateway routes writes to the current raft write
+leader and uses best-effort endpoint fallback for reads.
+
 ## Rolling restart smoke
 
 ```bash
