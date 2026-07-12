@@ -338,6 +338,18 @@ func (h *handler) handleShardAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeActionResult(w, h.transferLeader(shardID, req))
+	case "add-replica":
+		var req targetRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		writeActionResult(w, h.addReplica(shardID, req))
+	case "remove-replica":
+		var req targetRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		writeActionResult(w, h.removeReplica(shardID, req))
 	case "rebalance":
 		var req targetRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -639,6 +651,28 @@ func (h *handler) transferLeader(shardID string, req targetRequest) error {
 		return errs.ErrControlWriteOptionsUnsupported
 	}
 	return h.control.TransferLeader(shardID, req.Target)
+}
+
+func (h *handler) addReplica(shardID string, req targetRequest) error {
+	opts := req.controlWriteOptions()
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.AddReplicaWithOptions(shardID, req.Target, opts)
+	}
+	if req.hasControlWriteOptions() {
+		return errs.ErrControlWriteOptionsUnsupported
+	}
+	return h.control.AddReplica(shardID, req.Target)
+}
+
+func (h *handler) removeReplica(shardID string, req targetRequest) error {
+	opts := req.controlWriteOptions()
+	if h.controlWithOptions != nil {
+		return h.controlWithOptions.RemoveReplicaWithOptions(shardID, req.Target, opts)
+	}
+	if req.hasControlWriteOptions() {
+		return errs.ErrControlWriteOptionsUnsupported
+	}
+	return h.control.RemoveReplica(shardID, req.Target)
 }
 
 func (h *handler) rebalance(shardID string, req targetRequest) error {

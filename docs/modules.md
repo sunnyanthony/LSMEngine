@@ -25,6 +25,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - storage boundary: `internal/lsm/commitlog/raft_storage.go` persists builtin etcd-raft hard state, snapshots, and segmented log entries under `<data>/raft/commitlog-<node-id>/`; provider-owned raft log snapshot/compaction policy stays behind the same provider layer, while full LSM state-machine snapshot transfer and membership catch-up work remain deferred.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress and operational health (`mode/index/term/leader/replicas/write_available/leader_known/health/last_error_*`).
+  - Shard replica membership operations (`add-replica` / `remove-replica`) are committed control mutations and are persisted with the same revision/idempotency safeguards as leader transfer, split, rebalance, and drain. They update shard metadata only; dynamic etcd-raft ConfChange membership and node bootstrap/join remain separate future work.
 - `pkg/lsm/server/server.go`: monitoring + control APIs + point reads and write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
   - Also exposes CDC recent-events endpoint (`/cdc/events`).
 - `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, and bounded write attempts).

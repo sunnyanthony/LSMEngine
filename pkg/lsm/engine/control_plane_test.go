@@ -413,6 +413,84 @@ func TestControlWriteOptionsIdempotentRetry(t *testing.T) {
 	}
 }
 
+func TestControlPlaneReplicaMembershipLifecyclePersists(t *testing.T) {
+	dataDir := t.TempDir()
+	opts := Options{
+		DataDir:   dataDir,
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := store.AddReplicaWithOptions("users", "node-c", ControlWriteOptions{OperationID: "add-c"}); err != nil {
+		t.Fatalf("add replica: %v", err)
+	}
+	if err := store.RemoveReplicaWithOptions("users", "node-b", ControlWriteOptions{OperationID: "remove-b"}); err != nil {
+		t.Fatalf("remove replica: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	restarted, err := New(opts)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer restarted.Close()
+	shards := restarted.Shards()
+	if len(shards) != 1 {
+		t.Fatalf("expected one shard, got %d", len(shards))
+	}
+	if !hasReplica(shards[0].Replicas, "node-c") {
+		t.Fatalf("expected node-c replica after restart: %+v", shards[0].Replicas)
+	}
+	if hasReplica(shards[0].Replicas, "node-b") {
+		t.Fatalf("expected node-b removed after restart: %+v", shards[0].Replicas)
+	}
+	if got := restarted.ClusterStatus().Revision; got != 2 {
+		t.Fatalf("expected revision 2, got %d", got)
+	}
+}
+
+func TestControlPlaneRemoveLeaderReplicaRejected(t *testing.T) {
+	store, err := New(Options{
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+		ShardMap: []ShardConfig{
+			{
+				ID:       "users",
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+				Replicas: []string{"node-a", "node-b"},
+				Leader:   "node-a",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.RemoveReplica("users", "node-a"); err == nil {
+		t.Fatalf("expected leader removal error")
+	}
+	if got := store.ClusterStatus().Revision; got != 0 {
+		t.Fatalf("expected revision to remain 0, got %d", got)
+	}
+}
+
 func TestControlWriteOptionsIdempotencyIsBoundedByRetentionWindow(t *testing.T) {
 	store, err := New(Options{
 		DataDir:   t.TempDir(),
