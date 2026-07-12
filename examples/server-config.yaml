@@ -23,6 +23,10 @@ raft:
   # peer_urls:
   #   node-b: "http://127.0.0.1:8081"
   #   node-c: "http://127.0.0.1:8082"
+  # join_peer_urls pre-registers future joiners for raft HTTP transport only;
+  # these nodes are not bootstrap voters until raft-add commits.
+  # join_peer_urls:
+  #   node-d: "http://127.0.0.1:8083"
 shards:
   # shards are ordered by key-range routing; keep non-overlapping ranges.
   - id: "users-a-m"

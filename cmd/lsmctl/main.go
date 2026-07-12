@@ -884,9 +884,13 @@ func toCommitLogOptions(cfg serverconfig.CommitLogConfig, raftCfg serverconfig.R
 			RetainEntries:  cfg.SnapshotPolicy.RetainEntries,
 		},
 	}
-	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(raftCfg.PeerURLs) > 0 {
+	peerURLs := toRaftPeerURLMap(raftCfg.PeerURLs)
+	for id, url := range toRaftPeerURLMap(raftCfg.JoinPeerURLs) {
+		peerURLs[id] = url
+	}
+	if opts.Provider == lsm.CommitLogProviderEtcdRaft && len(peerURLs) > 0 {
 		transport, err := server.NewRaftHTTPTransport(server.RaftHTTPTransportOptions{
-			PeerURLs: toRaftPeerURLMap(raftCfg.PeerURLs),
+			PeerURLs: peerURLs,
 		})
 		if err != nil {
 			return nil, err

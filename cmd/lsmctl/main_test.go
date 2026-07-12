@@ -92,6 +92,22 @@ func TestToCommitLogOptionsBuildsRaftHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestToCommitLogOptionsBuildsTransportWithJoinPeerURLs(t *testing.T) {
+	got, err := toCommitLogOptions(
+		serverconfig.CommitLogConfig{Provider: string(lsm.CommitLogProviderEtcdRaft)},
+		serverconfig.RaftConfig{
+			PeerURLs:     map[string]string{"node-b": "http://127.0.0.1:9091"},
+			JoinPeerURLs: map[string]string{"node-c": "http://127.0.0.1:9092"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("to commit log options: %v", err)
+	}
+	if got == nil || got.Transport == nil {
+		t.Fatalf("expected raft transport")
+	}
+}
+
 func TestToRaftPeerURLMapUsesStablePeerIDs(t *testing.T) {
 	got := toRaftPeerURLMap(map[string]string{
 		"node-b": "http://127.0.0.1:9091",
