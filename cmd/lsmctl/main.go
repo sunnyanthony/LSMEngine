@@ -419,6 +419,11 @@ type replacementApplyResult struct {
 	Result replaceNodeResult     `json:"result"`
 }
 
+type clusterReadOptions struct {
+	Enabled       bool
+	NodeEndpoints map[string]string
+}
+
 type replaceNodeOptions struct {
 	OldNode                 string
 	NewNode                 string
@@ -440,6 +445,9 @@ func getCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "read from the first reachable cluster endpoint")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	key := fs.String("key", "", "key as UTF-8 text")
 	keyBase64 := fs.String("key-base64", "", "key as base64")
 	jsonOut := fs.Bool("json", false, "emit JSON")
@@ -457,7 +465,11 @@ func getCmd(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	result, err := readKV(*addr, *dataDir, keyBytes)
+	clusterOpts, err := clusterReadOptionsFromConfig(cfg, *addr, *clusterMode, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err := readKVWithCluster(*addr, *dataDir, keyBytes, clusterOpts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -483,6 +495,9 @@ func rangeCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "read from the first reachable cluster endpoint")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	start := fs.String("start", "", "start key as UTF-8 text")
 	startBase64 := fs.String("start-base64", "", "start key as base64")
 	end := fs.String("end", "", "end key as UTF-8 text")
@@ -507,7 +522,11 @@ func rangeCmd(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	result, err := readKVRange(*addr, *dataDir, startBytes, endBytes, *limit)
+	clusterOpts, err := clusterReadOptionsFromConfig(cfg, *addr, *clusterMode, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err := readKVRangeWithCluster(*addr, *dataDir, startBytes, endBytes, *limit, clusterOpts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1148,6 +1167,31 @@ func readKV(addr, dataDir string, key []byte) (kvGetResult, error) {
 	}, nil
 }
 
+func readKVWithCluster(addr, dataDir string, key []byte, opts clusterReadOptions) (kvGetResult, error) {
+	if !opts.Enabled {
+		return readKV(addr, dataDir, key)
+	}
+	return readKVFromCluster(opts.NodeEndpoints, key)
+}
+
+func readKVFromCluster(endpoints map[string]string, key []byte) (kvGetResult, error) {
+	if len(endpoints) == 0 {
+		return kvGetResult{}, fmt.Errorf("cluster read requires node endpoints")
+	}
+	var lastErr error
+	for _, nodeID := range sortedEndpointNodes(endpoints) {
+		result, err := readKV(endpoints[nodeID], "", key)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", nodeID, err)
+	}
+	if lastErr != nil {
+		return kvGetResult{}, lastErr
+	}
+	return kvGetResult{}, fmt.Errorf("cluster read unavailable")
+}
+
 func readKVRange(addr, dataDir string, start []byte, end []byte, limit int) (kvRangeResult, error) {
 	if limit <= 0 {
 		return kvRangeResult{}, fmt.Errorf("limit must be positive")
@@ -1202,6 +1246,38 @@ func readKVRange(addr, dataDir string, start []byte, end []byte, limit int) (kvR
 		Limit:     limit,
 		Truncated: truncated,
 	}, nil
+}
+
+func readKVRangeWithCluster(
+	addr string,
+	dataDir string,
+	start []byte,
+	end []byte,
+	limit int,
+	opts clusterReadOptions,
+) (kvRangeResult, error) {
+	if !opts.Enabled {
+		return readKVRange(addr, dataDir, start, end, limit)
+	}
+	return readKVRangeFromCluster(opts.NodeEndpoints, start, end, limit)
+}
+
+func readKVRangeFromCluster(endpoints map[string]string, start []byte, end []byte, limit int) (kvRangeResult, error) {
+	if len(endpoints) == 0 {
+		return kvRangeResult{}, fmt.Errorf("cluster range requires node endpoints")
+	}
+	var lastErr error
+	for _, nodeID := range sortedEndpointNodes(endpoints) {
+		result, err := readKVRange(endpoints[nodeID], "", start, end, limit)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", nodeID, err)
+	}
+	if lastErr != nil {
+		return kvRangeResult{}, lastErr
+	}
+	return kvRangeResult{}, fmt.Errorf("cluster range unavailable")
 }
 
 func writeKVPut(
@@ -2600,6 +2676,29 @@ func clusterWriteOptionsFromConfig(
 		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	return clusterWriteOptions{
+		Enabled:       true,
+		NodeEndpoints: endpoints,
+	}, nil
+}
+
+func clusterReadOptionsFromConfig(
+	cfg serverconfig.Config,
+	addr string,
+	clusterMode bool,
+	overrides nodeEndpointFlags,
+) (clusterReadOptions, error) {
+	enabled := clusterMode || len(overrides) > 0
+	if !enabled {
+		return clusterReadOptions{}, nil
+	}
+	endpoints, err := clusterNodeEndpointsFromConfig(cfg, addr, overrides)
+	if err != nil {
+		return clusterReadOptions{}, err
+	}
+	if len(endpoints) == 0 {
+		return clusterReadOptions{}, fmt.Errorf("--cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
+	}
+	return clusterReadOptions{
 		Enabled:       true,
 		NodeEndpoints: endpoints,
 	}, nil

@@ -87,8 +87,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 
 ## CLI Mode
 - `lsmctl serve --config <path>` starts server mode.
-- `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys.
-- `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds.
+- `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys. `--cluster` reads from the first reachable configured endpoint.
+- `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds. `--cluster` applies the same first-reachable endpoint fallback as `get`.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
 - `lsmctl put/delete --cluster --node-endpoint node-a=http://...` performs a cluster-aware remote write: it discovers the current commit-log write leader from `/cluster/status`, transfers shard leadership to that node when needed, and writes through that node. Cluster-aware and operator commands can also load endpoints from `raft.peer_url_file`, `raft.peer_urls`, and `raft.join_peer_urls` in `--config`; explicit `--addr` and `--node-endpoint` flags override config values.

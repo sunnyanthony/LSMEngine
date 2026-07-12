@@ -51,6 +51,13 @@ require_contains() {
   fi
 }
 
+node_endpoint_args() {
+  printf '%s\n' \
+    --node-endpoint "node-a=http://127.0.0.1:8080" \
+    --node-endpoint "node-b=http://127.0.0.1:8081" \
+    --node-endpoint "node-c=http://127.0.0.1:8082"
+}
+
 compose up -d --build
 
 wait_for_health "http://127.0.0.1:8080"
@@ -67,6 +74,14 @@ require_contains "$get_output" "value=ok"
 range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
 require_contains "$range_output" "key=compose"
 require_contains "$range_output" "value=ok"
+
+cluster_get_output="$(lsmctl get --cluster $(node_endpoint_args) --key compose)"
+require_contains "$cluster_get_output" "found=true"
+require_contains "$cluster_get_output" "value=ok"
+
+cluster_range_output="$(lsmctl range --cluster $(node_endpoint_args) --start compose --end composf --limit 1)"
+require_contains "$cluster_range_output" "key=compose"
+require_contains "$cluster_range_output" "value=ok"
 
 delete_output="$(lsmctl delete --addr http://127.0.0.1:8080 --key compose)"
 require_contains "$delete_output" "state=committed"
