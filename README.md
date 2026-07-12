@@ -58,6 +58,7 @@ Internal engine components (subject to change):
 - Run a static three-node server smoke with Docker Compose: `examples/docker-compose-cluster/smoke.sh`
 - Run a static three-node rolling restart smoke with Docker Compose: `examples/docker-compose-cluster/rolling-restart.sh`
 - Run a static three-node server smoke in kind: `examples/kind-cluster/smoke.sh`
+- Run a kind pod replacement smoke with persistent volumes: `examples/kind-cluster/restart-smoke.sh`
 
 ## Scripts
 - `scripts/docker-test.sh`: default mode runs `go test -v -tags test ./...` inside Docker with mounted module/build caches.
