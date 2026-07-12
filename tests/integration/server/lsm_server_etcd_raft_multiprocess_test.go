@@ -249,6 +249,80 @@ func TestEtcdRaftThreeProcessFollowerLongOutageCatchupSmoke(t *testing.T) {
 	}
 }
 
+func TestEtcdRaftThreeProcessMinorityPartitionRejectsWrites(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := buildLSMCTLBinary(t, tempDir)
+
+	peers := []string{"node-a", "node-b", "node-c"}
+	urls := reserveNodeURLs(t, peers)
+	processes := make(map[string]*startedLSMProcess, len(peers))
+	for _, nodeID := range peers {
+		configPath := writeProcessConfig(t, tempDir, processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     peers,
+			ShardReplicas: peers,
+			PeerURLs:      urlsForPeers(peers, urls),
+			WriteTimeout:  "8s",
+		})
+		processes[nodeID] = startLSMProcess(t, bin, configPath)
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			logStartedProcesses(t, processes)
+		}
+		for _, nodeID := range []string{"node-c", "node-b", "node-a"} {
+			if proc := processes[nodeID]; proc != nil {
+				proc.stop(t)
+			}
+		}
+	})
+
+	for _, nodeID := range peers {
+		waitHTTPStatus(t, urls[nodeID]+"/healthz", http.StatusOK, 5*time.Second)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		return putKVOnCurrentWriteLeader(t, urls, peers, []byte("minority-before"), []byte("committed-before"))
+	})
+
+	var isolatedNode string
+	eventually(t, 5*time.Second, func() bool {
+		leaderNode, ok := currentRaftWriteLeader(urls, peers)
+		if ok {
+			isolatedNode = leaderNode
+		}
+		return ok
+	})
+	for _, nodeID := range peers {
+		if nodeID == isolatedNode {
+			continue
+		}
+		processes[nodeID].stop(t)
+		processes[nodeID] = nil
+	}
+
+	status, body, err := postKVPutWithTimeout(urls[isolatedNode], []byte("minority-during"), []byte("must-not-commit"), 10*time.Second)
+	if err != nil {
+		t.Fatalf("minority write request should return retryable error response: %v", err)
+	}
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("expected minority write status 503, got %d (%s)", status, body)
+	}
+	errResp, err := decodeWriteErrorResponse(body)
+	if err != nil {
+		t.Fatalf("decode minority write error: %v (%s)", err, body)
+	}
+	if errResp.Code != "commit_log_unavailable" || !errResp.Retryable {
+		t.Fatalf("expected retryable commit_log_unavailable, got %+v", errResp)
+	}
+	got, ok, err := getKVValue(urls[isolatedNode], []byte("minority-during"))
+	if err != nil {
+		t.Fatalf("get minority write key: %v", err)
+	}
+	if ok {
+		t.Fatalf("minority write must not be locally visible, got %q", got)
+	}
+}
+
 func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
 	tempDir := t.TempDir()
 	bin := buildLSMCTLBinary(t, tempDir)
@@ -372,6 +446,7 @@ type processConfigOptions struct {
 	PeerURLs      map[string]string
 	JoinPeerURLs  map[string]string
 	Join          bool
+	WriteTimeout  string
 }
 
 func buildLSMCTLBinary(t *testing.T, tempDir string) string {
@@ -430,7 +505,11 @@ func writeProcessConfig(t *testing.T, baseDir string, opts processConfigOptions)
 	fmt.Fprintf(&buf, "control_state_path: %q\n", filepath.Join(dataDir, "control_state.json"))
 	fmt.Fprintf(&buf, "addr: %q\n", stripHTTP(nodeURL))
 	fmt.Fprintf(&buf, "read_timeout: %q\n", "5s")
-	fmt.Fprintf(&buf, "write_timeout: %q\n", "5s")
+	writeTimeout := opts.WriteTimeout
+	if writeTimeout == "" {
+		writeTimeout = "5s"
+	}
+	fmt.Fprintf(&buf, "write_timeout: %q\n", writeTimeout)
 	fmt.Fprintf(&buf, "write_consistency_default: %q\n", "local_committed")
 	buf.WriteString("commitlog:\n")
 	buf.WriteString("  provider: \"etcd-raft\"\n")
@@ -680,12 +759,7 @@ func putKVOnCurrentWriteLeader(
 		return false
 	}
 	if routeLeader != leaderNode {
-		routeURL := urls[routeLeader]
-		if routeURL == "" {
-			t.Logf("route leader %s has no configured URL", routeLeader)
-			return false
-		}
-		status, body, err := postShardTransferLeader(routeURL, "users", leaderNode)
+		status, body, err := postShardTransferLeader(urls[leaderNode], "users", leaderNode)
 		if err != nil {
 			t.Logf("transfer shard leader %s -> %s: %v", routeLeader, leaderNode, err)
 			return false
@@ -738,6 +812,19 @@ func getClusterStatus(baseURL string) (lsm.ClusterStatus, error) {
 	var out lsm.ClusterStatus
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return lsm.ClusterStatus{}, err
+	}
+	return out, nil
+}
+
+type testWriteErrorResponse struct {
+	Code      string `json:"code"`
+	Retryable bool   `json:"retryable"`
+}
+
+func decodeWriteErrorResponse(body string) (testWriteErrorResponse, error) {
+	var out testWriteErrorResponse
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		return out, err
 	}
 	return out, nil
 }
