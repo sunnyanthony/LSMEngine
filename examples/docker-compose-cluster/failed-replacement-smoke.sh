@@ -158,6 +158,7 @@ require_contains "$plan_output" "reason=status-error"
 require_contains "$plan_output" "preflight=ok"
 require_contains "$plan_output" "dry_run_command="
 require_contains "$plan_output" "apply_command="
+require_contains "$plan_output" "--config $LSMCTL_CONFIG"
 
 apply_output="$(lsmctl replacement-apply \
   --new-node node-d \

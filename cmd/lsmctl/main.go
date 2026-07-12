@@ -426,6 +426,13 @@ type replaceNodeOptions struct {
 	OperationPrefix         string
 	DryRun                  bool
 	AllowUnavailableOldNode bool
+	CommandEndpoints        replacementCommandEndpointSource
+}
+
+type replacementCommandEndpointSource struct {
+	ConfigPath string
+	Addr       string
+	Overrides  nodeEndpointFlags
 }
 
 func getCmd(args []string) {
@@ -992,6 +999,7 @@ func replacementPlanCmd(args []string) {
 		log.Fatal("--new-node required")
 	}
 	cfg := loadConfigOrExit(*configPath)
+	commandEndpointSource := replacementCommandEndpointSourceFromFlags(*configPath, *addr, nodeEndpoints)
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
@@ -1003,11 +1011,12 @@ func replacementPlanCmd(args []string) {
 		log.Fatal("replacement-plan requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	result, err := planReplacementNode(endpoints, replaceNodeOptions{
-		OldNode:         *oldNode,
-		NewNode:         *newNode,
-		ShardIDs:        []string(shardIDs),
-		OperationPrefix: *operationPrefix,
-		DryRun:          true,
+		OldNode:          *oldNode,
+		NewNode:          *newNode,
+		ShardIDs:         []string(shardIDs),
+		OperationPrefix:  *operationPrefix,
+		DryRun:           true,
+		CommandEndpoints: commandEndpointSource,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -1038,6 +1047,7 @@ func replacementApplyCmd(args []string) {
 		log.Fatal("--new-node required")
 	}
 	cfg := loadConfigOrExit(*configPath)
+	commandEndpointSource := replacementCommandEndpointSourceFromFlags(*configPath, *addr, nodeEndpoints)
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
@@ -1049,10 +1059,11 @@ func replacementApplyCmd(args []string) {
 		log.Fatal("replacement-apply requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
 	result, err := applyPlannedReplacement(endpoints, replaceNodeOptions{
-		OldNode:         *oldNode,
-		NewNode:         *newNode,
-		ShardIDs:        []string(shardIDs),
-		OperationPrefix: *operationPrefix,
+		OldNode:          *oldNode,
+		NewNode:          *newNode,
+		ShardIDs:         []string(shardIDs),
+		OperationPrefix:  *operationPrefix,
+		CommandEndpoints: commandEndpointSource,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -1994,17 +2005,19 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 		return replacementPlanResult{}, err
 	}
 	dryRunArgs := replaceNodeCommandArgs(endpoints, replaceNodeOptions{
-		OldNode:         oldNode,
-		NewNode:         newNode,
-		ShardIDs:        opts.ShardIDs,
-		OperationPrefix: opts.OperationPrefix,
-		DryRun:          true,
+		OldNode:          oldNode,
+		NewNode:          newNode,
+		ShardIDs:         opts.ShardIDs,
+		OperationPrefix:  opts.OperationPrefix,
+		DryRun:           true,
+		CommandEndpoints: opts.CommandEndpoints,
 	})
 	applyArgs := replaceNodeCommandArgs(endpoints, replaceNodeOptions{
-		OldNode:         oldNode,
-		NewNode:         newNode,
-		ShardIDs:        opts.ShardIDs,
-		OperationPrefix: opts.OperationPrefix,
+		OldNode:          oldNode,
+		NewNode:          newNode,
+		ShardIDs:         opts.ShardIDs,
+		OperationPrefix:  opts.OperationPrefix,
+		CommandEndpoints: opts.CommandEndpoints,
 	})
 	return replacementPlanResult{
 		OldNode:       oldNode,
@@ -2020,11 +2033,12 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 
 func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
 	plan, err := planReplacementNode(endpoints, replaceNodeOptions{
-		OldNode:         opts.OldNode,
-		NewNode:         opts.NewNode,
-		ShardIDs:        opts.ShardIDs,
-		OperationPrefix: opts.OperationPrefix,
-		DryRun:          true,
+		OldNode:          opts.OldNode,
+		NewNode:          opts.NewNode,
+		ShardIDs:         opts.ShardIDs,
+		OperationPrefix:  opts.OperationPrefix,
+		DryRun:           true,
+		CommandEndpoints: opts.CommandEndpoints,
 	})
 	if err != nil {
 		return replacementApplyResult{}, err
@@ -2119,16 +2133,56 @@ func replaceNodeCommandArgs(endpoints map[string]string, opts replaceNodeOptions
 	if prefix := strings.TrimSpace(opts.OperationPrefix); prefix != "" {
 		args = append(args, "--operation-prefix", prefix)
 	}
+	args = appendReplacementCommandEndpointArgs(args, endpoints, opts.CommandEndpoints)
 	for _, shardID := range opts.ShardIDs {
 		shardID = strings.TrimSpace(shardID)
 		if shardID != "" {
 			args = append(args, "--shard", shardID)
 		}
 	}
+	return args
+}
+
+func appendReplacementCommandEndpointArgs(args []string, endpoints map[string]string, source replacementCommandEndpointSource) []string {
+	hasSource := false
+	if configPath := strings.TrimSpace(source.ConfigPath); configPath != "" {
+		args = append(args, "--config", configPath)
+		hasSource = true
+	}
+	if addr := strings.TrimSpace(source.Addr); addr != "" {
+		args = append(args, "--addr", addr)
+		hasSource = true
+	}
+	for _, nodeID := range sortedEndpointNodes(source.Overrides) {
+		args = append(args, "--node-endpoint", nodeID+"="+source.Overrides[nodeID])
+		hasSource = true
+	}
+	if hasSource {
+		return args
+	}
 	for _, nodeID := range sortedEndpointNodes(endpoints) {
 		args = append(args, "--node-endpoint", nodeID+"="+endpoints[nodeID])
 	}
 	return args
+}
+
+func replacementCommandEndpointSourceFromFlags(configPath string, addr string, overrides nodeEndpointFlags) replacementCommandEndpointSource {
+	return replacementCommandEndpointSource{
+		ConfigPath: strings.TrimSpace(configPath),
+		Addr:       strings.TrimSpace(addr),
+		Overrides:  cloneNodeEndpointFlags(overrides),
+	}
+}
+
+func cloneNodeEndpointFlags(in nodeEndpointFlags) nodeEndpointFlags {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(nodeEndpointFlags, len(in))
+	for nodeID, endpoint := range in {
+		out[nodeID] = endpoint
+	}
+	return out
 }
 
 func readShards(endpoint string) ([]lsm.ShardStatus, error) {

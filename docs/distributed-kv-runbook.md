@@ -210,6 +210,9 @@ or reporting `commit_log_runtime.health=unavailable`; multiple candidates are
 rejected. It reuses the same replacement preflight as `replace-node --dry-run`
 and prints suggested dry-run/apply commands. It does not submit raft membership,
 shard replica, or drain mutations.
+When the plan command uses `--config`, the suggested commands preserve that
+config path instead of expanding every resolved endpoint, so endpoint-file based
+operator workflows remain copyable.
 
 Replacement preflight also enforces a quorum policy per affected shard: existing
 replicas other than the old node must still have a healthy majority according to
