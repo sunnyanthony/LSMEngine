@@ -13,28 +13,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 )
 
 func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatalf("repo root: %v", err)
-	}
 	tempDir := t.TempDir()
-	bin := filepath.Join(tempDir, "lsmctl")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/lsmctl")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build lsmctl: %v\n%s", err, out)
-	}
+	bin := buildLSMCTLBinary(t, tempDir)
 
 	peers := []string{"node-a", "node-b", "node-c"}
 	urls := reserveNodeURLs(t, peers)
 	var processes []*startedLSMProcess
 	for _, nodeID := range peers {
-		configPath := writeProcessConfig(t, tempDir, nodeID, peers, urls)
+		configPath := writeProcessConfig(t, tempDir, processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     peers,
+			ShardReplicas: peers,
+			PeerURLs:      urlsForPeers(peers, urls),
+		})
 		proc := startLSMProcess(t, bin, configPath)
 		processes = append(processes, proc)
 	}
@@ -84,10 +81,108 @@ func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
 	})
 }
 
+func TestEtcdRaftThreeProcessDynamicJoinSmoke(t *testing.T) {
+	tempDir := t.TempDir()
+	bin := buildLSMCTLBinary(t, tempDir)
+
+	initialPeers := []string{"node-a", "node-b"}
+	joinPeers := []string{"node-a", "node-b", "node-c"}
+	urls := reserveNodeURLs(t, joinPeers)
+	var processes []*startedLSMProcess
+	start := func(opts processConfigOptions) {
+		t.Helper()
+		configPath := writeProcessConfig(t, tempDir, opts)
+		proc := startLSMProcess(t, bin, configPath)
+		processes = append(processes, proc)
+	}
+	for _, nodeID := range initialPeers {
+		start(processConfigOptions{
+			NodeID:        nodeID,
+			RaftPeers:     initialPeers,
+			ShardReplicas: initialPeers,
+			PeerURLs:      urlsForPeers(initialPeers, urls),
+			JoinPeerURLs:  urlsForPeers([]string{"node-c"}, urls),
+		})
+	}
+	t.Cleanup(func() {
+		for i := len(processes) - 1; i >= 0; i-- {
+			processes[i].stop(t)
+		}
+	})
+
+	for _, nodeID := range initialPeers {
+		waitHTTPStatus(t, urls[nodeID]+"/healthz", http.StatusOK, 5*time.Second)
+	}
+
+	seedKey := []byte("seed")
+	seedValue := []byte("before-join")
+	eventually(t, 5*time.Second, func() bool {
+		status, body, err := postKVPut(urls["node-a"], seedKey, seedValue)
+		if err != nil {
+			return false
+		}
+		if status != http.StatusOK {
+			t.Logf("seed put status=%d body=%s", status, body)
+			return false
+		}
+		return true
+	})
+	eventually(t, 5*time.Second, func() bool {
+		got, ok, err := getKVValue(urls["node-b"], seedKey)
+		return err == nil && ok && bytes.Equal(got, seedValue)
+	})
+
+	start(processConfigOptions{
+		NodeID:        "node-c",
+		RaftPeers:     joinPeers,
+		ShardReplicas: joinPeers,
+		PeerURLs:      urlsForPeers(joinPeers, urls),
+		Join:          true,
+	})
+	waitHTTPStatus(t, urls["node-c"]+"/healthz", http.StatusOK, 5*time.Second)
+	status, body, err := postRaftAdd(urls["node-a"], "node-c")
+	if err != nil {
+		t.Fatalf("raft-add node-c: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected raft-add status 200, got %d (%s)", status, body)
+	}
+
+	runLSMCTL(t, bin, "put", "--addr", urls["node-a"], "--key", "joined", "--value", "after-join")
+	eventually(t, 10*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "joined")
+		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=after-join"))
+	})
+}
+
 type startedLSMProcess struct {
 	cmd  *exec.Cmd
 	logs bytes.Buffer
 	done chan error
+}
+
+type processConfigOptions struct {
+	NodeID        string
+	RaftPeers     []string
+	ShardReplicas []string
+	PeerURLs      map[string]string
+	JoinPeerURLs  map[string]string
+	Join          bool
+}
+
+func buildLSMCTLBinary(t *testing.T, tempDir string) string {
+	t.Helper()
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	bin := filepath.Join(tempDir, "lsmctl")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/lsmctl")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build lsmctl: %v\n%s", err, out)
+	}
+	return bin
 }
 
 func reserveNodeURLs(t *testing.T, peers []string) map[string]string {
@@ -106,8 +201,18 @@ func reserveNodeURLs(t *testing.T, peers []string) map[string]string {
 	return urls
 }
 
-func writeProcessConfig(t *testing.T, baseDir string, nodeID string, peers []string, urls map[string]string) string {
+func writeProcessConfig(t *testing.T, baseDir string, opts processConfigOptions) string {
 	t.Helper()
+	nodeID := opts.NodeID
+	raftPeers := opts.RaftPeers
+	shardReplicas := opts.ShardReplicas
+	if len(shardReplicas) == 0 {
+		shardReplicas = raftPeers
+	}
+	nodeURL := opts.PeerURLs[nodeID]
+	if nodeURL == "" {
+		t.Fatalf("missing peer url for %s", nodeID)
+	}
 	dataDir := filepath.Join(baseDir, nodeID)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir data dir: %v", err)
@@ -119,7 +224,7 @@ func writeProcessConfig(t *testing.T, baseDir string, nodeID string, peers []str
 	fmt.Fprintf(&buf, "cluster_id: %q\n", "cluster-smoke")
 	fmt.Fprintf(&buf, "storage_mode: %q\n", "local")
 	fmt.Fprintf(&buf, "control_state_path: %q\n", filepath.Join(dataDir, "control_state.json"))
-	fmt.Fprintf(&buf, "addr: %q\n", stripHTTP(urls[nodeID]))
+	fmt.Fprintf(&buf, "addr: %q\n", stripHTTP(nodeURL))
 	fmt.Fprintf(&buf, "read_timeout: %q\n", "5s")
 	fmt.Fprintf(&buf, "write_timeout: %q\n", "5s")
 	fmt.Fprintf(&buf, "write_consistency_default: %q\n", "local_committed")
@@ -130,19 +235,28 @@ func writeProcessConfig(t *testing.T, baseDir string, nodeID string, peers []str
 	buf.WriteString("    retain_entries: 4\n")
 	buf.WriteString("raft:\n")
 	buf.WriteString("  peers:\n")
-	for _, peer := range peers {
+	for _, peer := range raftPeers {
 		fmt.Fprintf(&buf, "    - %q\n", peer)
 	}
+	if opts.Join {
+		buf.WriteString("  join: true\n")
+	}
 	buf.WriteString("  peer_urls:\n")
-	for _, peer := range peers {
-		fmt.Fprintf(&buf, "    %s: %q\n", peer, urls[peer])
+	for _, peer := range sortedProcessPeers(opts.PeerURLs) {
+		fmt.Fprintf(&buf, "    %s: %q\n", peer, opts.PeerURLs[peer])
+	}
+	if len(opts.JoinPeerURLs) > 0 {
+		buf.WriteString("  join_peer_urls:\n")
+		for _, peer := range sortedProcessPeers(opts.JoinPeerURLs) {
+			fmt.Fprintf(&buf, "    %s: %q\n", peer, opts.JoinPeerURLs[peer])
+		}
 	}
 	buf.WriteString("shards:\n")
 	buf.WriteString("  - id: \"users\"\n")
 	buf.WriteString("    start_key: \"a\"\n")
 	buf.WriteString("    end_key: \"z\"\n")
 	buf.WriteString("    replicas:\n")
-	for _, peer := range peers {
+	for _, peer := range shardReplicas {
 		fmt.Fprintf(&buf, "      - %q\n", peer)
 	}
 	buf.WriteString("    leader: \"node-a\"\n")
@@ -150,6 +264,23 @@ func writeProcessConfig(t *testing.T, baseDir string, nodeID string, peers []str
 		t.Fatalf("write config %s: %v", nodeID, err)
 	}
 	return path
+}
+
+func urlsForPeers(peers []string, urls map[string]string) map[string]string {
+	out := make(map[string]string, len(peers))
+	for _, peer := range peers {
+		out[peer] = urls[peer]
+	}
+	return out
+}
+
+func sortedProcessPeers(urls map[string]string) []string {
+	peers := make([]string, 0, len(urls))
+	for peer := range urls {
+		peers = append(peers, peer)
+	}
+	sort.Strings(peers)
+	return peers
 }
 
 func startLSMProcess(t *testing.T, bin string, configPath string) *startedLSMProcess {
@@ -231,6 +362,29 @@ func postKVPut(baseURL string, key []byte, value []byte) (int, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/kv/put", body)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	return resp.StatusCode, out.String(), nil
+}
+
+func postRaftAdd(baseURL string, nodeID string) (int, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		baseURL+"/cluster/nodes/"+nodeID+"/raft-add",
+		bytes.NewBufferString(`{}`),
+	)
 	if err != nil {
 		return 0, "", err
 	}
