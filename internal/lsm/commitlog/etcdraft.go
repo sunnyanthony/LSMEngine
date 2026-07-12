@@ -58,6 +58,11 @@ type etcdRaftConsensus struct {
 	lastErrorCode string
 	lastError     string
 	lastErrorAt   time.Time
+
+	closed    bool
+	closeOnce sync.Once
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 }
 
 const (
@@ -67,6 +72,7 @@ const (
 	etcdRaftMemberTimeout  = 10 * time.Second
 	etcdRaftAdvanceMaxStep = 2048
 	etcdRaftSendTimeout    = 2 * time.Second
+	etcdRaftTickInterval   = 100 * time.Millisecond
 )
 
 func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
@@ -120,6 +126,8 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		snapshotPolicy: cfg.SnapshotPolicy,
 		pending:        make(map[uint64]*pendingRaftProposal),
 		replicas:       len(peerIDs),
+		stopCh:         make(chan struct{}),
+		doneCh:         make(chan struct{}),
 	}
 	if hardState, _, err := storage.InitialState(); err == nil {
 		c.index = hardState.Commit
@@ -144,6 +152,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 			return nil, err
 		}
 	}
+	c.startBackgroundLoop()
 	return c, nil
 }
 
@@ -192,7 +201,7 @@ func (c *etcdRaftConsensus) CommitData(ctx context.Context, mutation DataMutatio
 func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rawNode == nil || c.storage == nil {
+	if c.closed || c.rawNode == nil || c.storage == nil {
 		err := fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
 		c.recordRuntimeErrorLocked(err)
 		return err
@@ -222,7 +231,7 @@ func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []r
 func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change MembershipChange) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rawNode == nil || c.storage == nil {
+	if c.closed || c.rawNode == nil || c.storage == nil {
 		err := fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
 		c.recordRuntimeErrorLocked(err)
 		return err
@@ -319,7 +328,7 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 		LastError:     c.lastError,
 		LastErrorAt:   c.lastErrorAt,
 	}
-	if c.rawNode == nil || c.storage == nil {
+	if c.closed || c.rawNode == nil || c.storage == nil {
 		status.Health = "unavailable"
 		return status
 	}
@@ -367,6 +376,66 @@ func (c *etcdRaftConsensus) SetStateSnapshotApplier(applier StateSnapshotApplier
 	return nil
 }
 
+func (c *etcdRaftConsensus) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.stopCh == nil || c.doneCh == nil {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		close(c.stopCh)
+		<-c.doneCh
+	})
+	return nil
+}
+
+func (c *etcdRaftConsensus) startBackgroundLoop() {
+	go func() {
+		defer close(c.doneCh)
+		initialDelay := time.Duration(c.nodeID%9+1) * (etcdRaftTickInterval / 10)
+		timer := time.NewTimer(initialDelay)
+		select {
+		case <-c.stopCh:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+		ticker := time.NewTicker(etcdRaftTickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case <-ticker.C:
+				c.backgroundTick()
+			}
+		}
+	}()
+}
+
+func (c *etcdRaftConsensus) backgroundTick() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.rawNode == nil || c.storage == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
+	defer cancel()
+	c.rawNode.Tick()
+	if err := c.advanceUntilStableLocked(ctx); err != nil {
+		c.recordRuntimeErrorLocked(err)
+	}
+}
+
 func (c *etcdRaftConsensus) commitMutation(
 	ctx context.Context,
 	proposal raftCommitProposal,
@@ -378,9 +447,9 @@ func (c *etcdRaftConsensus) commitMutation(
 	}
 
 	c.mu.Lock()
-	if c.rawNode == nil || c.storage == nil {
+	if c.closed || c.rawNode == nil || c.storage == nil {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("etcd raft commit log is unavailable")
+		return nil, fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
 	}
 	c.proposalSeq++
 	proposal.ID = c.proposalSeq
@@ -401,6 +470,11 @@ func (c *etcdRaftConsensus) commitMutation(
 
 	for {
 		c.mu.Lock()
+		if c.closed {
+			delete(c.pending, proposal.ID)
+			c.mu.Unlock()
+			return nil, fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
+		}
 		if pending.done {
 			c.mu.Unlock()
 			return pending, nil
@@ -428,7 +502,7 @@ func (c *etcdRaftConsensus) commitMutation(
 func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rawNode == nil || c.storage == nil {
+	if c.closed || c.rawNode == nil || c.storage == nil {
 		return fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
 	}
 	status := c.rawNode.Status()

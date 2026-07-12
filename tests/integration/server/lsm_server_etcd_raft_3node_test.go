@@ -23,6 +23,7 @@ type asyncInProcessRaftTransport struct {
 	mu      sync.RWMutex
 	nodes   map[uint64]*lsm.LSM
 	errs    []error
+	closed  bool
 	pending sync.WaitGroup
 }
 
@@ -43,6 +44,10 @@ func (t *asyncInProcessRaftTransport) Send(_ context.Context, messages []lsm.Raf
 		msg := message
 		msg.Payload = append([]byte(nil), message.Payload...)
 		t.mu.RLock()
+		if t.closed {
+			t.mu.RUnlock()
+			return nil
+		}
 		target := t.nodes[msg.To]
 		t.mu.RUnlock()
 		if target == nil {
@@ -51,6 +56,12 @@ func (t *asyncInProcessRaftTransport) Send(_ context.Context, messages []lsm.Raf
 		t.pending.Add(1)
 		go func() {
 			defer t.pending.Done()
+			t.mu.RLock()
+			closed := t.closed
+			t.mu.RUnlock()
+			if closed {
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			if err := target.HandlePeerMessages(ctx, []lsm.RaftPeerMessage{msg}); err != nil {
@@ -59,6 +70,13 @@ func (t *asyncInProcessRaftTransport) Send(_ context.Context, messages []lsm.Raf
 		}()
 	}
 	return nil
+}
+
+func (t *asyncInProcessRaftTransport) Close() {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+	t.pending.Wait()
 }
 
 func (t *asyncInProcessRaftTransport) Wait() {
@@ -112,6 +130,7 @@ func TestEtcdRaftThreeNodeWriteReplicatesToFollowers(t *testing.T) {
 		transport.Register(nodeID, store)
 	}
 	t.Cleanup(func() {
+		transport.Close()
 		for _, nodeID := range peers {
 			if err := stores[nodeID].Close(); err != nil {
 				t.Fatalf("close %s: %v", nodeID, err)

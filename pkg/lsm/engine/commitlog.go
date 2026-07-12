@@ -104,6 +104,17 @@ func (c *builtinCommitLogConsensus) RuntimeStatus() CommitLogRuntimeStatus {
 	return fromInternalRuntimeStatus(c.inner.RuntimeStatus())
 }
 
+func (c *builtinCommitLogConsensus) Close() error {
+	if c == nil || c.inner == nil {
+		return nil
+	}
+	closer, ok := c.inner.(interface{ Close() error })
+	if !ok {
+		return nil
+	}
+	return mapInternalCommitLogError(closer.Close())
+}
+
 func (c *builtinCommitLogConsensus) ObserveCommittedIndex(index uint64) {
 	observer, ok := c.inner.(internalCommitLogIndexObserver)
 	if !ok {
