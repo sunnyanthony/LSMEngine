@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 
 	"lsmengine/pkg/lsm"
 )
@@ -25,6 +26,7 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 	mux.HandleFunc("/gateway/status", handler.handleGatewayStatus)
 	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/range", handler.handleRange)
+	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
 	mux.HandleFunc("/kv/put", handler.handlePut)
 	mux.HandleFunc("/kv/delete", handler.handleDelete)
 	return mux
@@ -79,6 +81,14 @@ func (h *gatewayHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *gatewayHandler) handleRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.proxyClusterRead(w, r)
+}
+
+func (h *gatewayHandler) handleWriteStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -195,6 +205,9 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		h.proxyClusterGet(w, r, endpoints, nodeIDs)
 		return
 	}
+	writeStatusLookup := isWriteStatusRequest(r)
+	var firstNotFoundHeader http.Header
+	var firstNotFoundBody []byte
 	var lastErr error
 	for _, nodeID := range nodeIDs {
 		endpoint := endpoints[nodeID]
@@ -208,6 +221,15 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 			lastErr = err
 			continue
 		}
+		if writeStatusLookup && resp.StatusCode == http.StatusNotFound {
+			if firstNotFoundHeader == nil {
+				firstNotFoundHeader = resp.Header.Clone()
+				firstNotFoundBody, _ = io.ReadAll(resp.Body)
+			}
+			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
+			_ = resp.Body.Close()
+			continue
+		}
 		if resp.StatusCode == http.StatusOK || resp.StatusCode < http.StatusInternalServerError {
 			copyResponse(w, resp)
 			return
@@ -217,6 +239,10 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no node endpoints available")
+	}
+	if writeStatusLookup && firstNotFoundHeader != nil {
+		writeCapturedResponse(w, http.StatusNotFound, firstNotFoundHeader, firstNotFoundBody)
+		return
 	}
 	writeGatewayUnavailable(w, lastErr.Error())
 }
@@ -279,6 +305,10 @@ func writeGatewayUnavailable(w http.ResponseWriter, msg string) {
 	})
 }
 
+func isWriteStatusRequest(r *http.Request) bool {
+	return r != nil && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/kv/write-status/")
+}
+
 func sortedNodeEndpointIDs(endpoints map[string]string) []string {
 	nodeIDs := make([]string, 0, len(endpoints))
 	for nodeID, endpoint := range endpoints {
@@ -293,11 +323,16 @@ func sortedNodeEndpointIDs(endpoints map[string]string) []string {
 
 func copyResponse(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
-	for key, values := range resp.Header {
+	body, _ := io.ReadAll(resp.Body)
+	writeCapturedResponse(w, resp.StatusCode, resp.Header, body)
+}
+
+func writeCapturedResponse(w http.ResponseWriter, status int, header http.Header, body []byte) {
+	for key, values := range header {
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
