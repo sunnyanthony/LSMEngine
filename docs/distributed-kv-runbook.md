@@ -172,8 +172,27 @@ examples/kind-cluster/restart-smoke.sh
 This is still a static bootstrap path. `lsmctl raft-add-node`,
 `lsmctl raft-remove-node`, `lsmctl shard-add-replica`, and
 `lsmctl shard-remove-replica` provide manual membership primitives for
-operators, but service discovery, automated membership repair, and full node
-replacement orchestration remain outside this path.
+operators. `lsmctl replace-node` composes those primitives for a planned
+replacement when the replacement node is already running and reachable. Service
+discovery, automated membership repair, and process supervision remain outside
+this path.
+
+Manual replacement workflow:
+
+```bash
+go run ./cmd/lsmctl replace-node \
+  --old-node node-a \
+  --new-node node-d \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --node-endpoint node-d=http://127.0.0.1:8083
+```
+
+The command discovers shards that contain `--old-node`, adds `--new-node` as a
+raft voter, adds it as a shard replica for those shards, drains the old node,
+removes the old shard replicas, and removes the old raft voter. Use repeated
+`--shard` flags to constrain the replacement to specific shards.
 
 ## Failure Expectations
 
@@ -201,9 +220,9 @@ go test -tags test ./tests/integration/server \
 Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
-- process supervision and fully automated replacement workflows;
+- process supervision and automatic replacement triggers;
 - mixed-version compatibility tests;
-- policy-driven raft/shard membership lifecycle around node replacement;
+- richer policy for raft/shard membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
 
 The external dependency rule also applies here: etcd-raft remains behind the
