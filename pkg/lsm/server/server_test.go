@@ -107,6 +107,12 @@ func (p *writeControlStubProvider) Shards() []lsm.ShardStatus { return p.control
 func (p *writeControlStubProvider) TransferLeader(shardID, target string) error {
 	return p.control.TransferLeader(shardID, target)
 }
+func (p *writeControlStubProvider) AddReplica(shardID, target string) error {
+	return p.control.AddReplica(shardID, target)
+}
+func (p *writeControlStubProvider) RemoveReplica(shardID, target string) error {
+	return p.control.RemoveReplica(shardID, target)
+}
 func (p *writeControlStubProvider) TriggerSplit(shardID string, splitKey []byte) error {
 	return p.control.TriggerSplit(shardID, splitKey)
 }
@@ -118,6 +124,12 @@ func (p *writeControlStubProvider) PrepareDrain(nodeID string) error {
 }
 func (p *writeControlStubProvider) TransferLeaderWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
 	return p.control.TransferLeaderWithOptions(shardID, target, opts)
+}
+func (p *writeControlStubProvider) AddReplicaWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	return p.control.AddReplicaWithOptions(shardID, target, opts)
+}
+func (p *writeControlStubProvider) RemoveReplicaWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	return p.control.RemoveReplicaWithOptions(shardID, target, opts)
 }
 func (p *writeControlStubProvider) TriggerSplitWithOptions(shardID string, splitKey []byte, opts lsm.ControlWriteOptions) error {
 	return p.control.TriggerSplitWithOptions(shardID, splitKey, opts)
@@ -207,6 +219,14 @@ func (c *legacyControlStubProvider) TransferLeader(shardID, target string) error
 	return c.inner.TransferLeader(shardID, target)
 }
 
+func (c *legacyControlStubProvider) AddReplica(shardID, target string) error {
+	return c.inner.AddReplica(shardID, target)
+}
+
+func (c *legacyControlStubProvider) RemoveReplica(shardID, target string) error {
+	return c.inner.RemoveReplica(shardID, target)
+}
+
 func (c *legacyControlStubProvider) TriggerSplit(shardID string, splitKey []byte) error {
 	return c.inner.TriggerSplit(shardID, splitKey)
 }
@@ -285,6 +305,83 @@ func (c *controlStubProvider) TransferLeaderWithOptions(shardID, target string, 
 		c.state.shards[i].Leader = target
 		c.state.status.Revision++
 		c.recordOperationLocked(opts, "transfer:"+shardID+":"+target)
+		return nil
+	}
+	return errs.ErrShardNotFound
+}
+
+func (c *controlStubProvider) AddReplica(shardID, target string) error {
+	return c.AddReplicaWithOptions(shardID, target, lsm.ControlWriteOptions{})
+}
+
+func (c *controlStubProvider) AddReplicaWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fingerprint := "add-replica:" + shardID + ":" + target
+	applied, err := c.ensureControlWriteOptionsLocked(opts, fingerprint)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	for i := range c.state.shards {
+		if c.state.shards[i].ID != shardID {
+			continue
+		}
+		if !replicaStatusContains(c.state.shards[i].Replicas, target) {
+			c.state.shards[i].Replicas = append(c.state.shards[i].Replicas, lsm.ReplicaStatus{
+				NodeID:  target,
+				Role:    "follower",
+				Healthy: true,
+			})
+		}
+		c.state.status.Revision++
+		c.recordOperationLocked(opts, fingerprint)
+		return nil
+	}
+	return errs.ErrShardNotFound
+}
+
+func (c *controlStubProvider) RemoveReplica(shardID, target string) error {
+	return c.RemoveReplicaWithOptions(shardID, target, lsm.ControlWriteOptions{})
+}
+
+func (c *controlStubProvider) RemoveReplicaWithOptions(shardID, target string, opts lsm.ControlWriteOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fingerprint := "remove-replica:" + shardID + ":" + target
+	applied, err := c.ensureControlWriteOptionsLocked(opts, fingerprint)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	for i := range c.state.shards {
+		if c.state.shards[i].ID != shardID {
+			continue
+		}
+		next := make([]lsm.ReplicaStatus, 0, len(c.state.shards[i].Replicas)-1)
+		removed := false
+		for _, replica := range c.state.shards[i].Replicas {
+			if replica.NodeID != target {
+				next = append(next, replica)
+				continue
+			}
+			removed = true
+		}
+		if !removed {
+			c.state.status.Revision++
+			c.recordOperationLocked(opts, fingerprint)
+			return nil
+		}
+		if c.state.shards[i].Leader == target {
+			return errors.New("cannot remove leader replica")
+		}
+		c.state.shards[i].Replicas = next
+		c.state.status.Revision++
+		c.recordOperationLocked(opts, fingerprint)
 		return nil
 	}
 	return errs.ErrShardNotFound
@@ -369,6 +466,15 @@ func (c *controlStubProvider) recordOperationLocked(opts lsm.ControlWriteOptions
 	if opts.OperationID != "" {
 		c.state.ops[opts.OperationID] = fingerprint
 	}
+}
+
+func replicaStatusContains(replicas []lsm.ReplicaStatus, nodeID string) bool {
+	for _, replica := range replicas {
+		if replica.NodeID == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHandlerHealth(t *testing.T) {
@@ -570,6 +676,56 @@ func TestHandlerTransferLeader(t *testing.T) {
 	}
 	if got := p.Shards()[0].Leader; got != "node-b" {
 		t.Fatalf("expected leader node-b, got %q", got)
+	}
+}
+
+func TestHandlerAddReplica(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-c","operation_id":"add-c","expected_revision":0}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/add-replica", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	shard := p.Shards()[0]
+	if !replicaStatusContains(shard.Replicas, "node-c") {
+		t.Fatalf("expected node-c replica, got %+v", shard.Replicas)
+	}
+	if got := p.ClusterStatus().Revision; got != 1 {
+		t.Fatalf("expected revision 1, got %d", got)
+	}
+}
+
+func TestHandlerRemoveReplica(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-b","operation_id":"remove-b","expected_revision":0}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/remove-replica", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	shard := p.Shards()[0]
+	if replicaStatusContains(shard.Replicas, "node-b") {
+		t.Fatalf("expected node-b removed, got %+v", shard.Replicas)
+	}
+}
+
+func TestHandlerRemoveLeaderReplicaRejected(t *testing.T) {
+	p := newControlStubProvider()
+	handler := NewHandler(p)
+	body := bytes.NewBufferString(`{"target":"node-a"}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/shards/users/remove-replica", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !replicaStatusContains(p.Shards()[0].Replicas, "node-a") {
+		t.Fatalf("expected node-a leader replica to remain")
 	}
 }
 

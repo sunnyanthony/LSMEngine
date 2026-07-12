@@ -251,6 +251,33 @@ func TestEtcdRaftThreeNodeHTTPGatewayRoutesWriteToLeader(t *testing.T) {
 	assertNoAsyncRaftErrors(t, cluster.errCh)
 }
 
+func TestEtcdRaftThreeNodeHTTPReplicatesMembershipChanges(t *testing.T) {
+	cluster := newThreeNodeHTTPRaftCluster(t)
+	if err := cluster.stores["node-a"].AddReplica("users", "node-d"); err != nil {
+		t.Fatalf("add replica: %v", err)
+	}
+	for _, nodeID := range cluster.peers {
+		nodeID := nodeID
+		t.Run("add-"+nodeID, func(t *testing.T) {
+			eventually(t, 2*time.Second, func() bool {
+				return shardHasReplica(cluster.stores[nodeID].Shards(), "users", "node-d")
+			})
+		})
+	}
+	if err := cluster.stores["node-a"].RemoveReplica("users", "node-d"); err != nil {
+		t.Fatalf("remove replica: %v", err)
+	}
+	for _, nodeID := range cluster.peers {
+		nodeID := nodeID
+		t.Run("remove-"+nodeID, func(t *testing.T) {
+			eventually(t, 2*time.Second, func() bool {
+				return !shardHasReplica(cluster.stores[nodeID].Shards(), "users", "node-d")
+			})
+		})
+	}
+	assertNoAsyncRaftErrors(t, cluster.errCh)
+}
+
 type threeNodeHTTPRaftCluster struct {
 	peers  []string
 	urls   map[string]string
@@ -366,4 +393,18 @@ func eventually(t *testing.T, timeout time.Duration, ok func() bool) {
 	if !ok() {
 		t.Fatalf("condition not met within %s", timeout)
 	}
+}
+
+func shardHasReplica(shards []lsm.ShardStatus, shardID string, nodeID string) bool {
+	for _, shard := range shards {
+		if shard.ID != shardID {
+			continue
+		}
+		for _, replica := range shard.Replicas {
+			if replica.NodeID == nodeID {
+				return true
+			}
+		}
+	}
+	return false
 }
