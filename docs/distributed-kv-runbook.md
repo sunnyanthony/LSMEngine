@@ -129,8 +129,18 @@ The pod names are the raft node ids:
 - `lsm-cluster-2`.
 
 The smoke runs `lsmctl` inside the first pod and verifies committed writes from
-the other pods. This is still a static bootstrap path; it does not provide
-service discovery, automated membership repair, or persistent volumes.
+the other pods. The StatefulSet mounts a per-pod `ReadWriteOnce` PVC at `/data`,
+so committed raft state, WAL, SSTables, and control state survive pod
+replacement.
+
+Use the persistent restart smoke to verify pod replacement:
+
+```bash
+examples/kind-cluster/restart-smoke.sh
+```
+
+This is still a static bootstrap path; it does not provide service discovery,
+automated membership repair, or automatic node replacement.
 
 ## Failure Expectations
 
@@ -159,7 +169,6 @@ Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
 - orchestrated drain/restart workflows;
-- persistent volumes in Kubernetes examples;
 - mixed-version compatibility tests;
 - automatic raft membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
