@@ -29,7 +29,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - Shard replica membership operations (`add-replica` / `remove-replica`) are committed control mutations and are persisted with the same revision/idempotency safeguards as leader transfer, split, rebalance, and drain. They update shard metadata only; raft voter changes are explicit provider-level `AddRaftPeer` / `RemoveRaftPeer` operations so node networking/bootstrap readiness remains separate.
 - `pkg/lsm/server/server.go`: monitoring + control APIs + point reads and write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
   - Also exposes CDC recent-events endpoint (`/cdc/events`).
-- `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, and bounded write attempts).
+- `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, and bounded write attempts). Node endpoint lookup stays behind `NodeEndpointResolver`; static and reloaded file-backed resolvers live in `pkg/lsm/server/node_endpoint_*`.
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.
   - Tracks node-local control `revision` and applied `operation_id` fingerprints for optimistic concurrency plus bounded idempotent retry dedupe.
