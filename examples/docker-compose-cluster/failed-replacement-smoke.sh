@@ -89,6 +89,14 @@ cluster_config_args() {
   printf '%s\n' --config "$LSMCTL_CONFIG"
 }
 
+wait_cluster_ready() {
+  local min_ready="$1"
+  lsmctl wait-cluster \
+    $(cluster_config_args) \
+    --min-ready "$min_ready" \
+    --timeout 60s >/dev/null
+}
+
 put_cluster() {
   local key="$1"
   local value="$2"
@@ -132,6 +140,7 @@ compose up -d --build "${initial_services[@]}"
 for service in "${initial_services[@]}"; do
   wait_for_health "$(url_for_service "$service")"
 done
+wait_cluster_ready 3
 
 put_cluster "failed-replace-before" "old-cluster"
 for service in "${initial_services[@]}"; do
@@ -139,6 +148,7 @@ for service in "${initial_services[@]}"; do
 done
 
 compose stop node-a >/dev/null
+wait_cluster_ready 2
 
 put_cluster "failed-replace-quorum" "remaining-quorum"
 for service in node-b node-c; do
@@ -147,6 +157,7 @@ done
 
 compose --profile replacement up -d --build node-d
 wait_for_health "$(url_for_service node-d)"
+wait_cluster_ready 2
 
 plan_output="$(lsmctl replacement-plan \
   --new-node node-d \
@@ -174,6 +185,7 @@ require_contains "$apply_output" "step=raft-remove"
 
 wait_for_value node-d "failed-replace-before" "old-cluster"
 wait_for_value node-d "failed-replace-quorum" "remaining-quorum"
+wait_cluster_ready 3
 
 put_cluster "failed-replace-after" "new-cluster"
 for service in node-b node-c node-d; do

@@ -47,10 +47,11 @@ examples/docker-compose-cluster/rolling-restart.sh
 ```
 
 This starts the same static three-node cluster, drains one node at a time with
-`lsmctl drain-node`, stops it, uses `lsmctl put --cluster` to commit a write
-through the remaining quorum, restarts the stopped node with its existing
-volume, resumes it with `lsmctl resume-node`, and verifies all three nodes can
-read the write before the next node is restarted.
+`lsmctl drain-node`, stops it, uses `lsmctl wait-cluster --min-ready 2` to
+verify the remaining quorum, uses `lsmctl put --cluster` to commit a write,
+restarts the stopped node with its existing volume, resumes it with
+`lsmctl resume-node`, and verifies all three nodes can read the write before the
+next node is restarted.
 
 ## Replacement smoke
 
@@ -60,8 +61,9 @@ examples/docker-compose-cluster/replace-node-smoke.sh
 
 This starts node-a/node-b/node-c, writes a committed value, starts node-d with
 `raft.join: true`, preflights `lsmctl replace-node --dry-run`, runs
-`lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, then
-verifies node-b/node-c/node-d can accept and read a new committed write.
+`lsmctl replace-node --old-node node-a --new-node node-d`, verifies node-d can
+read the committed value, stops node-a, waits for the node-b/node-c/node-d
+quorum, then verifies it can accept and read a new committed write.
 
 ## Failed replacement smoke
 
@@ -70,10 +72,11 @@ examples/docker-compose-cluster/failed-replacement-smoke.sh
 ```
 
 This starts node-a/node-b/node-c, writes committed values, stops node-a before
-replacement, starts node-d with `raft.join: true`, runs `lsmctl
-replacement-plan`, then runs `lsmctl replacement-apply`. It verifies node-d
-catches up to values committed before and after node-a stopped, then verifies
-node-b/node-c/node-d can accept and read a new committed write.
+replacement, uses `lsmctl wait-cluster --min-ready 2` to verify the surviving
+quorum, starts node-d with `raft.join: true`, runs `lsmctl replacement-plan`,
+then runs `lsmctl replacement-apply`. It waits for the node-b/node-c/node-d
+quorum, verifies node-d catches up to values committed before and after node-a
+stopped, then verifies the new cluster can accept and read a committed write.
 
 ## Manual commands
 
