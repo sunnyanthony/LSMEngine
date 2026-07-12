@@ -13,7 +13,8 @@ The supported distributed shape is a static three-node cluster:
 - each node runs `lsmctl serve`;
 - `commitlog.provider` is `etcd-raft`;
 - all raft peers are declared at startup with `raft.peers`;
-- peer transport uses HTTP URLs from `raft.peer_urls`;
+- peer transport uses HTTP URLs from `raft.peer_urls`, `raft.join_peer_urls`, or
+  a reloaded `raft.peer_url_file`;
 - the shard replicas list contains the same three node ids;
 - writes use `local_committed` consistency when the caller needs the write to
   be committed and locally applied before the response.
@@ -177,6 +178,24 @@ replacement when the replacement node is already running and reachable.
 `raft.peer_url_file` can provide operator-managed endpoint updates for future
 joiners without restarting existing nodes. Automated membership repair and
 process supervision remain outside this path.
+
+Supervisor/operator preflight:
+
+```bash
+go run ./cmd/lsmctl replacement-plan \
+  --new-node node-d \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --node-endpoint node-d=http://127.0.0.1:8083
+```
+
+`replacement-plan` only reads status and shard metadata. If `--old-node` is not
+provided, it selects exactly one endpoint that is unreachable, missing status,
+or reporting `commit_log_runtime.health=unavailable`; multiple candidates are
+rejected. It reuses the same replacement preflight as `replace-node --dry-run`
+and prints suggested dry-run/apply commands. It does not submit raft membership,
+shard replica, or drain mutations.
 
 Manual replacement workflow:
 
