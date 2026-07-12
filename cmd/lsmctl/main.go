@@ -3,15 +3,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"lsmengine/pkg/lsm"
@@ -28,6 +33,12 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serveCmd(os.Args[2:])
+	case "get":
+		getCmd(os.Args[2:])
+	case "put":
+		putCmd(os.Args[2:])
+	case "delete":
+		deleteCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -39,7 +50,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|put|delete|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -197,6 +208,137 @@ func healthCmd(args []string) {
 	fmt.Printf("ready=%v reason=%s\n", health.Ready, health.Reason)
 }
 
+type kvGetResult struct {
+	Found       bool   `json:"found"`
+	KeyBase64   string `json:"key_base64"`
+	ValueBase64 string `json:"value_base64"`
+	Tombstone   bool   `json:"tombstone,omitempty"`
+	Seq         uint64 `json:"seq"`
+}
+
+type kvWriteRequest struct {
+	KeyBase64   string               `json:"key_base64"`
+	ValueBase64 string               `json:"value_base64,omitempty"`
+	Consistency lsm.WriteConsistency `json:"consistency,omitempty"`
+}
+
+func getCmd(args []string) {
+	fs := flag.NewFlagSet("get", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	key := fs.String("key", "", "key as UTF-8 text")
+	keyBase64 := fs.String("key-base64", "", "key as base64")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	keyBytes, err := parseKeyFlag(*key, *keyBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err := readKV(*addr, *dataDir, keyBytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	if !result.Found {
+		fmt.Println("found=false")
+		return
+	}
+	value, err := base64.StdEncoding.DecodeString(result.ValueBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("found=true\n")
+	fmt.Printf("value=%s\n", string(value))
+	fmt.Printf("seq=%d\n", result.Seq)
+}
+
+func putCmd(args []string) {
+	fs := flag.NewFlagSet("put", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	key := fs.String("key", "", "key as UTF-8 text")
+	keyBase64 := fs.String("key-base64", "", "key as base64")
+	value := fs.String("value", "", "value as UTF-8 text")
+	valueBase64 := fs.String("value-base64", "", "value as base64")
+	consistency := fs.String("consistency", string(lsm.WriteConsistencyLocalCommitted), "write consistency (accepted|local_committed)")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	keyBytes, err := parseKeyFlag(*key, *keyBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	valueBytes, err := parseValueFlag(*value, *valueBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mode, err := parseWriteConsistencyDefault(*consistency)
+	if err != nil {
+		log.Fatalf("invalid consistency: %v", err)
+	}
+	status, err := writeKVPut(*addr, *dataDir, keyBytes, valueBytes, mode)
+	if err != nil {
+		log.Fatal(err)
+	}
+	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
+func deleteCmd(args []string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	key := fs.String("key", "", "key as UTF-8 text")
+	keyBase64 := fs.String("key-base64", "", "key as base64")
+	consistency := fs.String("consistency", string(lsm.WriteConsistencyLocalCommitted), "write consistency (accepted|local_committed)")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	keyBytes, err := parseKeyFlag(*key, *keyBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mode, err := parseWriteConsistencyDefault(*consistency)
+	if err != nil {
+		log.Fatalf("invalid consistency: %v", err)
+	}
+	status, err := writeKVDelete(*addr, *dataDir, keyBytes, mode)
+	if err != nil {
+		log.Fatal(err)
+	}
+	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
 func readStats(addr, dataDir string) (lsm.Stats, error) {
 	if addr != "" {
 		var stats lsm.Stats
@@ -229,6 +371,97 @@ func readHealth(addr, dataDir string) (lsm.Health, error) {
 	return store.Health(), nil
 }
 
+func readKV(addr, dataDir string, key []byte) (kvGetResult, error) {
+	if addr != "" {
+		var result kvGetResult
+		err := getJSON(
+			normalizeHTTPBaseURL(addr)+"/kv/get?key_base64="+url.QueryEscape(base64.StdEncoding.EncodeToString(key)),
+			&result,
+		)
+		if err != nil {
+			var statusErr *httpStatusError
+			if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+				return kvGetResult{
+					Found:     false,
+					KeyBase64: base64.StdEncoding.EncodeToString(key),
+				}, nil
+			}
+			return kvGetResult{}, err
+		}
+		return result, nil
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return kvGetResult{}, err
+	}
+	defer store.Close()
+	entry, ok := store.Get(key)
+	if !ok || entry.Tombstone {
+		return kvGetResult{
+			Found:     false,
+			KeyBase64: base64.StdEncoding.EncodeToString(key),
+			Tombstone: entry.Tombstone,
+			Seq:       entry.Seq,
+		}, nil
+	}
+	return kvGetResult{
+		Found:       true,
+		KeyBase64:   base64.StdEncoding.EncodeToString(key),
+		ValueBase64: base64.StdEncoding.EncodeToString(entry.Value),
+		Seq:         entry.Seq,
+	}, nil
+}
+
+func writeKVPut(
+	addr string,
+	dataDir string,
+	key []byte,
+	value []byte,
+	consistency lsm.WriteConsistency,
+) (lsm.WriteRequestStatus, error) {
+	if addr != "" {
+		req := kvWriteRequest{
+			KeyBase64:   base64.StdEncoding.EncodeToString(key),
+			ValueBase64: base64.StdEncoding.EncodeToString(value),
+			Consistency: consistency,
+		}
+		return postKVWrite(normalizeHTTPBaseURL(addr)+"/kv/put", req)
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	defer store.Close()
+	if err := store.Put(key, value); err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	return localWriteStatus("put", consistency), nil
+}
+
+func writeKVDelete(
+	addr string,
+	dataDir string,
+	key []byte,
+	consistency lsm.WriteConsistency,
+) (lsm.WriteRequestStatus, error) {
+	if addr != "" {
+		req := kvWriteRequest{
+			KeyBase64:   base64.StdEncoding.EncodeToString(key),
+			Consistency: consistency,
+		}
+		return postKVWrite(normalizeHTTPBaseURL(addr)+"/kv/delete", req)
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	defer store.Close()
+	if err := store.Delete(key); err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	return localWriteStatus("delete", consistency), nil
+}
+
 func openLocal(dataDir string) (*lsm.LSM, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("requires --addr or --data-dir")
@@ -241,16 +474,105 @@ func openLocal(dataDir string) (*lsm.LSM, error) {
 
 func getJSON(url string, out any) error {
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(normalizeHTTPBaseURL(url))
 	if err != nil {
 		return err
 	}
+	return decodeHTTPJSON(resp, out)
+}
+
+func postKVWrite(url string, payload kvWriteRequest) (lsm.WriteRequestStatus, error) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(url, "application/json", &buf)
+	if err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	var status lsm.WriteRequestStatus
+	if err := decodeHTTPJSON(resp, &status); err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	return status, nil
+}
+
+func decodeHTTPJSON(resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http %d: %s", resp.StatusCode, string(body))
+		return &httpStatusError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+type httpStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("http %d: %s", e.StatusCode, e.Body)
+}
+
+func parseKeyFlag(key string, keyBase64 string) ([]byte, error) {
+	return parseBytesFlag("key", key, keyBase64)
+}
+
+func parseValueFlag(value string, valueBase64 string) ([]byte, error) {
+	return parseBytesFlag("value", value, valueBase64)
+}
+
+func parseBytesFlag(name string, text string, encoded string) ([]byte, error) {
+	if text != "" && encoded != "" {
+		return nil, fmt.Errorf("use --%s or --%s-base64, not both", name, name)
+	}
+	if encoded != "" {
+		out, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s-base64: %w", name, err)
+		}
+		return out, nil
+	}
+	if text == "" {
+		return nil, fmt.Errorf("--%s required", name)
+	}
+	return []byte(text), nil
+}
+
+func localWriteStatus(operation string, consistency lsm.WriteConsistency) lsm.WriteRequestStatus {
+	now := time.Now().UTC()
+	return lsm.WriteRequestStatus{
+		Operation:   operation,
+		Consistency: consistency,
+		State:       lsm.WriteRequestCommitted,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+}
+
+func writeKVStatus(w io.Writer, status lsm.WriteRequestStatus, jsonOut bool) {
+	if jsonOut {
+		writeJSON(w, status)
+		return
+	}
+	if status.RequestID != "" {
+		fmt.Fprintf(w, "request_id=%s\n", status.RequestID)
+	}
+	fmt.Fprintf(w, "operation=%s\n", status.Operation)
+	fmt.Fprintf(w, "state=%s\n", status.State)
+	fmt.Fprintf(w, "consistency=%s\n", status.Consistency)
+	if status.Error != "" {
+		fmt.Fprintf(w, "error=%s\n", status.Error)
+	}
+}
+
+func normalizeHTTPBaseURL(raw string) string {
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return strings.TrimRight(raw, "/")
+	}
+	return "http://" + strings.TrimRight(raw, "/")
 }
 
 func writeJSON(w io.Writer, payload any) {
