@@ -344,6 +344,79 @@ func TestEtcdRaftConsensusStateSnapshotterUsesObservedAppliedIndex(t *testing.T)
 	}
 }
 
+func TestEtcdRaftConsensusChangeMembershipAddsVoter(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("new consensus: %v", err)
+	}
+	if err := consensus.ChangeMembership(context.Background(), MembershipChange{
+		Type:   MembershipChangeAddNode,
+		NodeID: "node-b",
+	}); err != nil {
+		t.Fatalf("change membership: %v", err)
+	}
+	status := consensus.RuntimeStatus()
+	if status.Replicas != 2 {
+		t.Fatalf("expected 2 raft voters after add, got %+v", status)
+	}
+
+	consensus.mu.Lock()
+	conf := consensus.raftConfStateLocked()
+	consensus.mu.Unlock()
+	if !containsRaftID(conf.Voters, stableRaftNodeID("node-b")) {
+		t.Fatalf("expected node-b in raft voters, got %+v", conf.Voters)
+	}
+
+	if err := consensus.ChangeMembership(context.Background(), MembershipChange{
+		Type:   MembershipChangeAddNode,
+		NodeID: "node-b",
+	}); err != nil {
+		t.Fatalf("duplicate add should be idempotent: %v", err)
+	}
+}
+
+func TestEtcdRaftConsensusChangeMembershipRejectsKnownRemoteLeader(t *testing.T) {
+	transport := &recordingRaftTransport{}
+	consensus, err := newEtcdRaftConsensus(Config{
+		Provider:  ProviderEtcdRaft,
+		DataDir:   t.TempDir(),
+		NodeID:    "node-a",
+		Peers:     []string{"node-a", "node-b", "node-c"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("new consensus: %v", err)
+	}
+	remoteLeader := stableRaftNodeID("node-b")
+	messages, err := encodeRaftPeerMessages([]raftpb.Message{
+		{Type: raftpb.MsgHeartbeat, From: remoteLeader, To: consensus.nodeID, Term: 2, Commit: 3},
+	})
+	if err != nil {
+		t.Fatalf("encode peer messages: %v", err)
+	}
+	if err := consensus.HandlePeerMessages(context.Background(), messages); err != nil {
+		t.Fatalf("handle heartbeat: %v", err)
+	}
+
+	err = consensus.ChangeMembership(context.Background(), MembershipChange{
+		Type:   MembershipChangeAddNode,
+		NodeID: "node-d",
+	})
+	if !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("expected ErrNotLeader, got %v", err)
+	}
+	status := consensus.RuntimeStatus()
+	if status.LastErrorCode != "not_leader" {
+		t.Fatalf("expected not leader diagnostic, got %+v", status)
+	}
+}
+
 func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
@@ -366,6 +439,15 @@ func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 	if err := consensus.HandlePeerMessages(context.Background(), messages); err != nil {
 		t.Fatalf("handle peer messages: %v", err)
 	}
+}
+
+func containsRaftID(ids []uint64, target uint64) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEtcdRaftConsensusHandlePeerMessagesReturnsStepError(t *testing.T) {

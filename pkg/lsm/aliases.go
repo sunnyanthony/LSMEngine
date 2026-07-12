@@ -19,6 +19,8 @@ type CommitLogDataMutation = engine.CommitLogDataMutation
 type CommitLogCommit = engine.CommitLogCommit
 type CommitLogControlCommittedEntry = engine.CommitLogControlCommittedEntry
 type CommitLogDataCommittedEntry = engine.CommitLogDataCommittedEntry
+type CommitLogMembershipChangeType = engine.CommitLogMembershipChangeType
+type CommitLogMembershipChange = engine.CommitLogMembershipChange
 type CommitLogRuntimeStatus = engine.CommitLogRuntimeStatus
 type CommitLogPeerMessage = engine.CommitLogPeerMessage
 type CommitLogPeerTransport = engine.CommitLogPeerTransport
@@ -63,6 +65,11 @@ const (
 const (
 	CommitLogProviderLocal    = engine.CommitLogProviderLocal
 	CommitLogProviderEtcdRaft = engine.CommitLogProviderEtcdRaft
+)
+
+const (
+	CommitLogMembershipChangeAddNode    = engine.CommitLogMembershipChangeAddNode
+	CommitLogMembershipChangeRemoveNode = engine.CommitLogMembershipChangeRemoveNode
 )
 
 func New(opts Options) (*LSM, error) {
