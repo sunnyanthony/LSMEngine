@@ -81,9 +81,15 @@ go run ./cmd/lsmctl range --addr http://127.0.0.1:8082 --start user: --end user~
 go run ./cmd/lsmctl delete --addr http://127.0.0.1:8080 --key user:1
 ```
 
-For cluster-aware writes, provide the node endpoint map:
+For cluster-aware reads and writes, provide the node endpoint map:
 
 ```bash
+go run ./cmd/lsmctl get --cluster \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --key user:1
+
 go run ./cmd/lsmctl put --cluster \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
@@ -91,11 +97,13 @@ go run ./cmd/lsmctl put --cluster \
   --key user:1 --value alice
 ```
 
-`--cluster` polls the configured node endpoints, finds the current
-`commit_log_runtime.write_available` node, transfers shard leadership to that
-node if needed, and then sends the write there. Without `--cluster`, direct CLI
-users should retry against the current leader shown by `lsmctl cluster-status`
-or `/cluster/status` if a write is sent to a follower.
+For reads, `--cluster` tries the configured endpoints in stable node order and
+returns the first successful response. For writes, `--cluster` polls the
+configured node endpoints, finds the current `commit_log_runtime.write_available`
+node, transfers shard leadership to that node if needed, and then sends the
+write there. Without `--cluster`, direct CLI users should retry against the
+current leader shown by `lsmctl cluster-status` or `/cluster/status` if a write
+is sent to a follower.
 
 Cluster/operator commands can also load node endpoints from `--config` when the
 server config contains `raft.peer_url_file`, `raft.peer_urls`, or
