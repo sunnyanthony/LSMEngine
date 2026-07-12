@@ -26,6 +26,24 @@ kubectl_lsm() {
   kubectl -n "$NAMESPACE" exec pod/lsm-cluster-0 -- /usr/local/bin/lsmctl "$@"
 }
 
+retry_kubectl_lsm_contains() {
+  local needle="$1"
+  shift
+  local deadline=$((SECONDS + 60))
+  local output=""
+  until output="$(kubectl_lsm "$@" 2>&1)" && [[ "$output" == *"$needle"* ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for lsmctl output to contain: $needle" >&2
+      echo "$output" >&2
+      kubectl -n "$NAMESPACE" get pods -o wide >&2 || true
+      kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=120 >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$output"
+}
+
 require_contains() {
   local haystack="$1"
   local needle="$2"
@@ -51,21 +69,21 @@ kubectl apply -k "$ROOT_DIR/examples/kind-cluster"
 kubectl -n "$NAMESPACE" set image statefulset/lsm-cluster lsm="$IMAGE"
 kubectl -n "$NAMESPACE" rollout status statefulset/lsm-cluster --timeout=180s
 
-put_output="$(kubectl_lsm put --addr http://lsm-cluster-0.lsm-cluster:8080 --key kind --value ok)"
+put_output="$(retry_kubectl_lsm_contains "state=committed" put --addr http://lsm-cluster-0.lsm-cluster:8080 --key kind --value ok)"
 require_contains "$put_output" "state=committed"
 
-get_output="$(kubectl_lsm get --addr http://lsm-cluster-1.lsm-cluster:8080 --key kind)"
+get_output="$(retry_kubectl_lsm_contains "found=true" get --addr http://lsm-cluster-1.lsm-cluster:8080 --key kind)"
 require_contains "$get_output" "found=true"
 require_contains "$get_output" "value=ok"
 
-range_output="$(kubectl_lsm range --addr http://lsm-cluster-1.lsm-cluster:8080 --start kind --end kine --limit 1)"
+range_output="$(retry_kubectl_lsm_contains "key=kind" range --addr http://lsm-cluster-1.lsm-cluster:8080 --start kind --end kine --limit 1)"
 require_contains "$range_output" "key=kind"
 require_contains "$range_output" "value=ok"
 
-delete_output="$(kubectl_lsm delete --addr http://lsm-cluster-0.lsm-cluster:8080 --key kind)"
+delete_output="$(retry_kubectl_lsm_contains "state=committed" delete --addr http://lsm-cluster-0.lsm-cluster:8080 --key kind)"
 require_contains "$delete_output" "state=committed"
 
-missing_output="$(kubectl_lsm get --addr http://lsm-cluster-2.lsm-cluster:8080 --key kind)"
+missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr http://lsm-cluster-2.lsm-cluster:8080 --key kind)"
 require_contains "$missing_output" "found=false"
 
 echo "kind cluster smoke passed"

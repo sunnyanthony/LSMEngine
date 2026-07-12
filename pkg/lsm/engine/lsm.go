@@ -221,6 +221,14 @@ func (l *LSM) Close() error {
 		}
 		l.bg.Wait()
 		errOut := l.closeErr
+		if c, ok := l.commitLog.(interface{ Close() error }); ok {
+			if err := c.Close(); err != nil {
+				if l.logger != nil {
+					l.logger.Printf("commit log close: %v", err)
+				}
+				errOut = errors.Join(errOut, err)
+			}
+		}
 		if l.wal != nil {
 			if err := l.wal.Close(); err != nil {
 				if l.logger != nil {

@@ -52,6 +52,15 @@ func (r *recordingStateSnapshotApplier) ApplyStateSnapshot(index uint64, data []
 	return nil
 }
 
+func cleanupEtcdRaftConsensus(t *testing.T, consensus *etcdRaftConsensus) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := consensus.Close(); err != nil {
+			t.Fatalf("close consensus: %v", err)
+		}
+	})
+}
+
 func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
 	transport := &recordingRaftTransport{}
 	consensus, err := newEtcdRaftConsensus(Config{
@@ -64,6 +73,7 @@ func TestEtcdRaftConsensusSendsPeerMessagesViaTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 
 	consensus.mu.Lock()
 	defer consensus.mu.Unlock()
@@ -116,6 +126,7 @@ func TestEtcdRaftConsensusJoinModeSkipsBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new join consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	lastIndex, err := consensus.storage.LastIndex()
 	if err != nil {
 		t.Fatalf("last index: %v", err)
@@ -141,6 +152,7 @@ func TestEtcdRaftConsensusKnownRemoteLeaderRejectsLocalCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	remoteLeader := stableRaftNodeID("node-b")
 	messages, err := encodeRaftPeerMessages([]raftpb.Message{
 		{Type: raftpb.MsgHeartbeat, From: remoteLeader, To: consensus.nodeID, Term: 2, Commit: 3},
@@ -187,6 +199,7 @@ func TestEtcdRaftConsensusElectionTimeoutRecordsUnavailableStatus(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	_, err = consensus.CommitData(ctx, DataMutation{
@@ -230,6 +243,9 @@ func TestEtcdRaftConsensusPersistsLogAcrossRestart(t *testing.T) {
 	if firstEntry.Commit.Index == 0 || firstEntry.Commit.Term == 0 {
 		t.Fatalf("expected committed raft position, got %+v", firstEntry.Commit)
 	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first consensus: %v", err)
+	}
 
 	restarted, err := newEtcdRaftConsensus(Config{
 		Provider: ProviderEtcdRaft,
@@ -239,6 +255,7 @@ func TestEtcdRaftConsensusPersistsLogAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, restarted)
 	status := restarted.RuntimeStatus()
 	if status.Index < firstEntry.Commit.Index {
 		t.Fatalf("expected restored index >= %d, got %d", firstEntry.Commit.Index, status.Index)
@@ -271,6 +288,7 @@ func TestEtcdRaftConsensusSnapshotPolicyCompactsAppliedLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	var last DataCommittedEntry
 	for i := 0; i < 5; i++ {
 		last, err = consensus.CommitData(context.Background(), DataMutation{
@@ -306,6 +324,9 @@ func TestEtcdRaftConsensusSnapshotPolicyCompactsAppliedLog(t *testing.T) {
 		t.Fatalf("expected compacted first index %d, got %d",
 			status.SnapshotIndex+1, firstIndex)
 	}
+	if err := consensus.Close(); err != nil {
+		t.Fatalf("close consensus before restart: %v", err)
+	}
 
 	restarted, err := newEtcdRaftConsensus(Config{
 		Provider: ProviderEtcdRaft,
@@ -319,6 +340,7 @@ func TestEtcdRaftConsensusSnapshotPolicyCompactsAppliedLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, restarted)
 	restartedStatus := restarted.RuntimeStatus()
 	if restartedStatus.SnapshotIndex != status.SnapshotIndex {
 		t.Fatalf("expected restored snapshot index %d, got %d",
@@ -339,6 +361,7 @@ func TestEtcdRaftConsensusStateSnapshotterUsesObservedAppliedIndex(t *testing.T)
 	if err != nil {
 		t.Fatalf("new consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	snapshotter := &recordingStateSnapshotter{}
 	if err := consensus.SetStateSnapshotter(snapshotter); err != nil {
 		t.Fatalf("set state snapshotter: %v", err)
@@ -390,6 +413,7 @@ func TestEtcdRaftConsensusAppliesIncomingSnapshotData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	applier := &recordingStateSnapshotApplier{}
 	if err := consensus.SetStateSnapshotApplier(applier); err != nil {
 		t.Fatalf("set snapshot applier: %v", err)
@@ -432,6 +456,7 @@ func TestEtcdRaftConsensusChangeMembershipAddsVoter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	if err := consensus.ChangeMembership(context.Background(), MembershipChange{
 		Type:   MembershipChangeAddNode,
 		NodeID: "node-b",
@@ -470,6 +495,7 @@ func TestEtcdRaftConsensusHandlePeerMessagesIgnoresOtherTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	other := stableRaftNodeID("node-b")
 	messages, err := encodeRaftPeerMessages([]raftpb.Message{
 		{Type: raftpb.MsgHeartbeat, From: other, To: other, Term: 1},
@@ -500,6 +526,7 @@ func TestEtcdRaftConsensusHandlePeerMessagesReturnsStepError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new etcd raft consensus: %v", err)
 	}
+	cleanupEtcdRaftConsensus(t, consensus)
 	messages, err := encodeRaftPeerMessages([]raftpb.Message{
 		{Type: raftpb.MsgHup, To: consensus.nodeID},
 	})
