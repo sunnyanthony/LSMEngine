@@ -46,9 +46,10 @@ LSM_COMPOSE_KEEP=1 examples/docker-compose-cluster/smoke.sh
 Then inspect runtime state:
 
 ```bash
-curl -s http://127.0.0.1:8080/cluster/status
-curl -s http://127.0.0.1:8081/cluster/status
-curl -s http://127.0.0.1:8082/cluster/status
+go run ./cmd/lsmctl cluster-status \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082
 ```
 
 The useful fields are:
@@ -86,8 +87,8 @@ go run ./cmd/lsmctl put --cluster \
 `--cluster` polls the configured node endpoints, finds the current
 `commit_log_runtime.write_available` node, transfers shard leadership to that
 node if needed, and then sends the write there. Without `--cluster`, direct CLI
-users should retry against the current leader shown by `/cluster/status` if a
-write is sent to a follower.
+users should retry against the current leader shown by `lsmctl cluster-status`
+or `/cluster/status` if a write is sent to a follower.
 
 ## Rolling Restart Check
 
@@ -108,7 +109,7 @@ examples/docker-compose-cluster/rolling-restart.sh
 For manual Compose validation:
 
 1. Start the cluster with `LSM_COMPOSE_KEEP=1`.
-2. Find the current write leader from `/cluster/status`.
+2. Find the current write leader from `lsmctl cluster-status`.
 3. Restart one non-leader first:
 
    ```bash
