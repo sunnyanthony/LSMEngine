@@ -28,6 +28,13 @@ func (s lsmStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) 
 	return s.l.exportStateSnapshotAt(index)
 }
 
+func (s lsmStateSnapshotter) ApplyStateSnapshot(index uint64, data []byte) error {
+	if s.l == nil {
+		return fmt.Errorf("nil lsm")
+	}
+	return s.l.applyStateSnapshotToEmptyAt(index, data)
+}
+
 func (l *LSM) exportStateSnapshot() ([]byte, error) {
 	return l.exportStateSnapshotAt(0)
 }
@@ -66,6 +73,10 @@ func (l *LSM) exportStateSnapshotAt(index uint64) ([]byte, error) {
 }
 
 func (l *LSM) applyStateSnapshotToEmpty(data []byte) error {
+	return l.applyStateSnapshotToEmptyAt(0, data)
+}
+
+func (l *LSM) applyStateSnapshotToEmptyAt(index uint64, data []byte) error {
 	if l == nil {
 		return fmt.Errorf("nil lsm")
 	}
@@ -78,6 +89,9 @@ func (l *LSM) applyStateSnapshotToEmpty(data []byte) error {
 	}
 	if err := validateLSMStateSnapshot(snapshot); err != nil {
 		return err
+	}
+	if index != 0 && snapshot.CommitLogAppliedIndex != index {
+		return fmt.Errorf("state snapshot applied index %d does not match raft snapshot index %d", snapshot.CommitLogAppliedIndex, index)
 	}
 
 	l.commitApplyMu.Lock()
