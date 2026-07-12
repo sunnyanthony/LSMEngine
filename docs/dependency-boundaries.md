@@ -28,10 +28,10 @@ kernel-assisted IO behavior.
   `internal/lsm/commitlog`.
 - Cluster endpoints: raft peer transport uses the LSM-owned
   `RaftPeerResolver`, while client/operator traffic and route-aware writes use
-  `NodeEndpointResolver`. Static config, reloaded endpoint files, Kubernetes,
-  DNS, or another service registry should plug in through those contracts
-  instead of leaking provider SDK types into `lsmctl`, gateway routing, or HTTP
-  request/response types.
+  `NodeEndpointResolver`. Static config and reloaded endpoint files are current
+  implementations; Kubernetes, DNS, or another service registry should plug in
+  through those contracts instead of leaking provider SDK types into `lsmctl`,
+  gateway routing, or HTTP request/response types.
 
 ## Boundary Status
 

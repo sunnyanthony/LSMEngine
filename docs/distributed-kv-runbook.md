@@ -129,9 +129,11 @@ explicit `--addr` and repeated `--node-endpoint` flags still override config
 values for one-off commands.
 
 Internally, `lsmctl` cluster commands and the route-aware `server.Gateway` use
-the LSM-owned `NodeEndpointResolver` contract. Future Kubernetes, DNS, or
-service-registry discovery should plug into that resolver layer instead of
-adding provider-specific lookups directly to CLI commands or gateway routing.
+the LSM-owned `NodeEndpointResolver` contract. Static maps and a reloaded
+node-endpoint file resolver are available behind that layer for long-running
+gateways or supervisors. Future Kubernetes, DNS, or service-registry discovery
+should plug into the same resolver layer instead of adding provider-specific
+lookups directly to CLI commands or gateway routing.
 
 ## Rolling Restart Check
 

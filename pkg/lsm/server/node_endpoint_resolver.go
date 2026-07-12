@@ -22,14 +22,9 @@ type StaticNodeEndpointResolver struct {
 // NewStaticNodeEndpointResolver returns a resolver backed by a copied endpoint
 // map.
 func NewStaticNodeEndpointResolver(endpoints map[string]string) (*StaticNodeEndpointResolver, error) {
-	resolved := make(map[string]string, len(endpoints))
-	for nodeID, endpoint := range endpoints {
-		nodeID = strings.TrimSpace(nodeID)
-		endpoint = strings.TrimSpace(endpoint)
-		if nodeID == "" || endpoint == "" {
-			return nil, fmt.Errorf("invalid node endpoint mapping")
-		}
-		resolved[nodeID] = NormalizeHTTPBaseURL(endpoint)
+	resolved, err := normalizeNodeEndpointMapStrict(endpoints)
+	if err != nil {
+		return nil, err
 	}
 	if len(resolved) == 0 {
 		return nil, fmt.Errorf("node endpoints required")
