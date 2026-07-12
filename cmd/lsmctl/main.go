@@ -383,10 +383,24 @@ type replaceNodeResult struct {
 }
 
 type replaceNodePreflightResult struct {
-	OldEndpoint         string `json:"old_endpoint"`
-	NewEndpoint         string `json:"new_endpoint"`
-	WriteLeader         string `json:"write_leader"`
-	WriteLeaderEndpoint string `json:"write_leader_endpoint"`
+	OldEndpoint         string                  `json:"old_endpoint"`
+	NewEndpoint         string                  `json:"new_endpoint"`
+	WriteLeader         string                  `json:"write_leader"`
+	WriteLeaderEndpoint string                  `json:"write_leader_endpoint"`
+	Policy              replacementPolicyResult `json:"policy"`
+}
+
+type replacementPolicyResult struct {
+	Shards []replacementShardPolicyResult `json:"shards"`
+}
+
+type replacementShardPolicyResult struct {
+	Shard                   string   `json:"shard"`
+	ReplicaCount            int      `json:"replica_count"`
+	RequiredHealthy         int      `json:"required_healthy"`
+	HealthyRemaining        int      `json:"healthy_remaining"`
+	HealthyRemainingNodes   []string `json:"healthy_remaining_nodes"`
+	UnavailableReplicaNodes []string `json:"unavailable_replica_nodes,omitempty"`
 }
 
 type replacementPlanResult struct {
@@ -1792,6 +1806,10 @@ func preflightReplaceClusterNode(endpoints map[string]string, opts replaceNodeOp
 	if err := validateReplacementEndpointIdentity(statuses, newNode, newEndpoint, true); err != nil {
 		return replaceNodePlan{}, err
 	}
+	policy, err := validateReplacementPolicy(shards, shardIDs, statuses, oldNode)
+	if err != nil {
+		return replaceNodePlan{}, err
+	}
 	return replaceNodePlan{
 		oldNode:  oldNode,
 		newNode:  newNode,
@@ -1801,6 +1819,7 @@ func preflightReplaceClusterNode(endpoints map[string]string, opts replaceNodeOp
 			NewEndpoint:         newEndpoint,
 			WriteLeader:         nodeID,
 			WriteLeaderEndpoint: endpoint,
+			Policy:              policy,
 		},
 		statuses: statuses,
 	}, nil
@@ -1840,6 +1859,79 @@ func validateReplacementEndpointIdentity(statuses clusterStatusResult, nodeID, e
 		return fmt.Errorf("endpoint for node %q reports node id %q", nodeID, matched.Status.NodeID)
 	}
 	return nil
+}
+
+func validateReplacementPolicy(shards []lsm.ShardStatus, shardIDs []string, statuses clusterStatusResult, oldNode string) (replacementPolicyResult, error) {
+	byID := make(map[string]lsm.ShardStatus, len(shards))
+	for _, shard := range shards {
+		byID[shard.ID] = shard
+	}
+	out := replacementPolicyResult{
+		Shards: make([]replacementShardPolicyResult, 0, len(shardIDs)),
+	}
+	for _, shardID := range shardIDs {
+		shard, ok := byID[shardID]
+		if !ok {
+			return replacementPolicyResult{}, fmt.Errorf("unknown shard %q", shardID)
+		}
+		policy := replacementShardPolicy(shard, statuses, oldNode)
+		if policy.HealthyRemaining < policy.RequiredHealthy {
+			return replacementPolicyResult{}, fmt.Errorf(
+				"replacement quorum policy failed for shard %q: healthy remaining replicas %d below required %d",
+				shard.ID,
+				policy.HealthyRemaining,
+				policy.RequiredHealthy,
+			)
+		}
+		out.Shards = append(out.Shards, policy)
+	}
+	return out, nil
+}
+
+func replacementShardPolicy(shard lsm.ShardStatus, statuses clusterStatusResult, oldNode string) replacementShardPolicyResult {
+	policy := replacementShardPolicyResult{
+		Shard:                 shard.ID,
+		ReplicaCount:          len(shard.Replicas),
+		RequiredHealthy:       len(shard.Replicas)/2 + 1,
+		HealthyRemainingNodes: make([]string, 0, len(shard.Replicas)),
+	}
+	statusByNode := clusterStatusesByNode(statuses)
+	for _, replica := range shard.Replicas {
+		nodeID := strings.TrimSpace(replica.NodeID)
+		if nodeID == "" || nodeID == oldNode {
+			continue
+		}
+		if replica.Healthy && clusterNodeReplacementHealthy(statusByNode[nodeID]) {
+			policy.HealthyRemaining++
+			policy.HealthyRemainingNodes = append(policy.HealthyRemainingNodes, nodeID)
+			continue
+		}
+		policy.UnavailableReplicaNodes = append(policy.UnavailableReplicaNodes, nodeID)
+	}
+	sort.Strings(policy.HealthyRemainingNodes)
+	sort.Strings(policy.UnavailableReplicaNodes)
+	return policy
+}
+
+func clusterStatusesByNode(statuses clusterStatusResult) map[string]clusterStatusNodeResult {
+	out := make(map[string]clusterStatusNodeResult, len(statuses.Nodes))
+	for _, node := range statuses.Nodes {
+		if strings.TrimSpace(node.Node) != "" {
+			out[strings.TrimSpace(node.Node)] = node
+		}
+		if node.Status != nil && strings.TrimSpace(node.Status.NodeID) != "" {
+			out[strings.TrimSpace(node.Status.NodeID)] = node
+		}
+	}
+	return out
+}
+
+func clusterNodeReplacementHealthy(node clusterStatusNodeResult) bool {
+	if node.Error != "" || node.Status == nil {
+		return false
+	}
+	health := strings.TrimSpace(node.Status.CommitLogRuntime.Health)
+	return health == "ready" || health == "follower"
 }
 
 func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (replacementPlanResult, error) {
@@ -2086,6 +2178,7 @@ func writeReplaceNodeResult(w io.Writer, result replaceNodeResult) {
 		result.Preflight.OldEndpoint,
 		result.Preflight.NewEndpoint,
 	)
+	writeReplacementPolicy(w, result.Preflight.Policy)
 	for _, step := range result.Steps {
 		if step.Shard != "" {
 			fmt.Fprintf(w, "step=%s shard=%s node=%s submitted_to=%s\n", step.Operation, step.Shard, step.Node, step.SubmittedTo)
@@ -2115,9 +2208,24 @@ func writeReplacementPlan(w io.Writer, result replacementPlanResult) {
 		result.Preflight.OldEndpoint,
 		result.Preflight.NewEndpoint,
 	)
+	writeReplacementPolicy(w, result.Preflight.Policy)
 	fmt.Fprintf(w, "dry_run_command=%s\n", strings.Join(result.DryRunCommand, " "))
 	fmt.Fprintf(w, "apply_command=%s\n", strings.Join(result.ApplyCommand, " "))
 	writeClusterStatuses(w, result.Statuses)
+}
+
+func writeReplacementPolicy(w io.Writer, policy replacementPolicyResult) {
+	for _, shard := range policy.Shards {
+		fmt.Fprintf(
+			w,
+			"policy=quorum shard=%s healthy_remaining=%d required=%d healthy_nodes=%s unavailable_nodes=%s\n",
+			shard.Shard,
+			shard.HealthyRemaining,
+			shard.RequiredHealthy,
+			strings.Join(shard.HealthyRemainingNodes, ","),
+			strings.Join(shard.UnavailableReplicaNodes, ","),
+		)
+	}
 }
 
 func writeReplacementApply(w io.Writer, result replacementApplyResult) {
