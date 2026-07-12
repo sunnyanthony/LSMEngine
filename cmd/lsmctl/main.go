@@ -42,6 +42,10 @@ func main() {
 		putCmd(os.Args[2:])
 	case "delete":
 		deleteCmd(os.Args[2:])
+	case "async-put":
+		asyncPutCmd(os.Args[2:])
+	case "async-delete":
+		asyncDeleteCmd(os.Args[2:])
 	case "write-status":
 		writeStatusCmd(os.Args[2:])
 	case "stats":
@@ -55,7 +59,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|write-status|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -391,6 +395,70 @@ func deleteCmd(args []string) {
 		log.Fatalf("invalid consistency: %v", err)
 	}
 	status, err := writeKVDelete(*addr, *dataDir, keyBytes, mode)
+	if err != nil {
+		log.Fatal(err)
+	}
+	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
+func asyncPutCmd(args []string) {
+	fs := flag.NewFlagSet("async-put", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	key := fs.String("key", "", "key as UTF-8 text")
+	keyBase64 := fs.String("key-base64", "", "key as base64")
+	value := fs.String("value", "", "value as UTF-8 text")
+	valueBase64 := fs.String("value-base64", "", "value as base64")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	keyBytes, err := parseKeyFlag(*key, *keyBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	valueBytes, err := parseValueFlag(*value, *valueBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	status, err := writeKVPut(*addr, *dataDir, keyBytes, valueBytes, lsm.WriteConsistencyAccepted)
+	if err != nil {
+		log.Fatal(err)
+	}
+	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
+func asyncDeleteCmd(args []string) {
+	fs := flag.NewFlagSet("async-delete", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	key := fs.String("key", "", "key as UTF-8 text")
+	keyBase64 := fs.String("key-base64", "", "key as base64")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	keyBytes, err := parseKeyFlag(*key, *keyBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	status, err := writeKVDelete(*addr, *dataDir, keyBytes, lsm.WriteConsistencyAccepted)
 	if err != nil {
 		log.Fatal(err)
 	}

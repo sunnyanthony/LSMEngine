@@ -89,10 +89,11 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl range --addr <url> --start <key> --end <key> --limit <n>` scans a bounded key range; `--start-base64` / `--end-base64` support binary bounds.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
+- `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
-- Deferred CLI command: `async-put`.
+- Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
 ## Config and deployment
 - Provide a minimal YAML config for server mode (addr, data dir, timeouts, auth hooks).
