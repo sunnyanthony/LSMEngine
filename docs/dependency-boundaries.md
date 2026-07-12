@@ -20,10 +20,18 @@ kernel-assisted IO behavior.
 - IO: `internal/lsm/iofs` is the reference pattern. WAL, SSTable, manifest, and
   compaction code talk to LSM-owned filesystem interfaces while concrete
   backends can use OS files, async wrappers, or future platform-specific IO.
-- Commit log / raft: etcd-raft should remain an implementation detail of the
-  builtin `etcd-raft` provider. Engine code should reason in terms of
-  committed control/data entries, commit positions, runtime status, shard
-  metadata, and state-machine snapshot payloads.
+- Commit log / raft: the builtin etcd-raft integration lives behind the
+  commit-log provider layer. Public and server callers use LSM-owned concepts
+  such as `CommitLogOptions`, committed entries, `CommitLogPeerMessage`,
+  runtime status, shard metadata, and state-machine snapshot contracts. etcd
+  `raftpb` messages, raft storage details, and ConfChange mechanics stay inside
+  `internal/lsm/commitlog`.
+- Cluster endpoints: raft peer transport uses the LSM-owned
+  `RaftPeerResolver`, while client/operator traffic and route-aware writes use
+  `NodeEndpointResolver`. Static config, reloaded endpoint files, Kubernetes,
+  DNS, or another service registry should plug in through those contracts
+  instead of leaking provider SDK types into `lsmctl`, gateway routing, or HTTP
+  request/response types.
 
 ## Boundary Status
 

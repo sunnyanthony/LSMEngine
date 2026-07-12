@@ -35,8 +35,9 @@ examples/docker-compose-cluster/smoke.sh
 ```
 
 The script builds the server image, starts node-a/node-b/node-c, waits for
-`/healthz`, writes with `local_committed`, verifies follower reads and range
-reads, deletes the key, then tears the cluster down.
+`/healthz`, waits for cluster readiness, writes with cluster-aware
+`local_committed` routing, verifies follower reads and range reads, deletes the
+key, then tears the cluster down.
 
 The Compose server configs use `raft.peer_url_file` mounted at
 `/etc/lsm/peer-urls.yaml` for peer transport. The rolling restart and
@@ -126,6 +127,11 @@ server config contains `raft.peer_url_file`, `raft.peer_urls`, or
 updates node-to-URL discovery data independently of the running server process;
 explicit `--addr` and repeated `--node-endpoint` flags still override config
 values for one-off commands.
+
+Internally, `lsmctl` cluster commands and the route-aware `server.Gateway` use
+the LSM-owned `NodeEndpointResolver` contract. Future Kubernetes, DNS, or
+service-registry discovery should plug into that resolver layer instead of
+adding provider-specific lookups directly to CLI commands or gateway routing.
 
 ## Rolling Restart Check
 
