@@ -37,7 +37,7 @@ Goals:
 - M1 write consistency API surface: server supports point reads (`/kv/get`) and `consistency=accepted|local_committed` for data writes with request-status tracking (`/kv/put`, `/kv/delete`, `/kv/write-status/{id}`). `local_committed` means the write is committed and applied on this node; cluster-wide linearizability is deferred until raft quorum semantics are wired.
 - M1 server consistency policy: default write consistency is configurable (`write_consistency_default`) and used when request-level consistency is omitted.
 - M1 routing metadata/retry surface: server exposes route table snapshots (`/cluster/routes`) and write errors include retryable route hints (`revision/shard/leader`); `server.Gateway` uses cached routes, route-hint updates, refresh fallback, and bounded write attempts for route-aware client writes.
-- M1 CDC foundation: server exposes node-local retained per-shard change events via `/cdc/events` with `offset/limit` and retention signaling (`dropped_before`).
+- M1 CDC foundation: server exposes node-local retained per-shard change events via `/cdc/events` with `offset/limit` and retention signaling (`dropped_before`). The current contract is intentionally not WAL-backed durable CDC: events are emitted from applied writes, retained in memory per node, and lost on restart or retention overflow. Durable CDC replay from WAL/raft log is deferred until the replication/snapshot model is stable.
 - Shard routing hardening: startup validates shard ranges (ordered, non-overlapping, bounded correctness), and key routing uses a deterministic ordered route index.
 - Control operation safety: mutations carry a node-local monotonic `revision` and an optional `operation_id` for bounded idempotent retries (current retention window: 256 remembered control mutations).
 - Metadata: manifest log + checkpoint; table metadata carries level, key range, size, seq bounds.
@@ -86,6 +86,7 @@ Data plane (TableSet) -> metadata snapshot -> Planner (control)
 ## Recovery behavior
 - WAL replay rehydrates memtables and will flush to SSTables when the memtable limit is reached.
 - Manifest load favors checkpoints but can fall back to log replay or SSTable scanning when needed.
+- CDC streams are not reconstructed during recovery in the current phase. Consumers must treat `/cdc/events` as a recent node-local feed, use `oldest_offset` / `dropped_before` to detect gaps, and fall back to application-level resync when a gap or restart occurs.
 
 ### Ownership model (single copy)
 LSM performs a single copy of key/value into memtable-owned memory and passes the

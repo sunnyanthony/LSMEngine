@@ -7,7 +7,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/engine/new.go`: wiring and startup.
 - `pkg/lsm/engine/write.go`: write path entry points (Put/Delete).
 - `pkg/lsm/engine/write_service.go`: write mutation execution via commit-log adapter then local materialization.
-- `pkg/lsm/engine/cdc.go`: per-shard retained change stream buffer and read API (`ReadCDCEvents`).
+- `pkg/lsm/engine/cdc.go`: per-shard retained change stream buffer and read API (`ReadCDCEvents`); node-local and in-memory only, not WAL-backed durable CDC.
 - `pkg/lsm/engine/read.go`: point reads.
 - `pkg/lsm/engine/snapshot.go`: snapshot + range scans.
 - `pkg/lsm/engine/compaction.go`: compaction wiring + state snapshots.

@@ -55,6 +55,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - Returns per-shard ordered events after `offset`.
   - Response includes `next_offset`, `oldest_offset`, and `dropped_before` (retention signal).
   - Delivery contract at this stage: node-local and in-memory only; events are readable while retained and are not rebuilt from WAL on restart.
+  - Durability decision for the current phase: CDC is a recent-observation API, not a durable changefeed. Clients must handle `dropped_before` or restart gaps by resyncing from the KV API. WAL-backed or raft-log-backed CDC remains deferred until full state-machine snapshot/catch-up semantics are implemented.
 
 ### Async writes (webhook callback)
 - `AsyncPut(key, value, callback_url, callback_token, request_id?) -> request_id`
