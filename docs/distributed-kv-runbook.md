@@ -109,8 +109,16 @@ examples/docker-compose-cluster/rolling-restart.sh
 For manual Compose validation:
 
 1. Start the cluster with `LSM_COMPOSE_KEEP=1`.
-2. Find the current write leader from `lsmctl cluster-status`.
-3. Restart one non-leader first:
+2. Drain the node that will be restarted:
+
+   ```bash
+   go run ./cmd/lsmctl drain-node --node node-b \
+     --node-endpoint node-a=http://127.0.0.1:8080 \
+     --node-endpoint node-b=http://127.0.0.1:8081 \
+     --node-endpoint node-c=http://127.0.0.1:8082
+   ```
+
+3. Restart one drained node:
 
    ```bash
    docker compose -p lsmengine-cluster \
@@ -118,12 +126,22 @@ For manual Compose validation:
    ```
 
 4. Wait for `curl -fsS http://127.0.0.1:8081/healthz`.
-5. Write through the current write leader and read from every node.
-6. Repeat one node at a time. Keep two nodes online throughout the operation.
+5. Resume the restarted node:
 
-The current foundation does not include automatic leader drain or automated
-raft leadership transfer. Operator tooling should therefore restart one node at
-a time and verify quorum health between steps.
+   ```bash
+   go run ./cmd/lsmctl resume-node --node node-b \
+     --node-endpoint node-a=http://127.0.0.1:8080 \
+     --node-endpoint node-b=http://127.0.0.1:8081 \
+     --node-endpoint node-c=http://127.0.0.1:8082
+   ```
+
+6. Write through the current write leader and read from every node.
+7. Repeat one node at a time. Keep two nodes online throughout the operation.
+
+The current foundation now includes CLI-assisted drain/resume for static peers.
+It still does not include automatic service discovery, process supervision, or
+full raft membership replacement orchestration. Operator tooling should restart
+one node at a time and verify quorum health between steps.
 
 ## Kubernetes Path
 

@@ -37,11 +37,11 @@ Useful environment overrides:
 examples/docker-compose-cluster/rolling-restart.sh
 ```
 
-This starts the same static three-node cluster, stops one node at a time,
-uses `lsmctl put --cluster` to find the current write leader and commit a write
+This starts the same static three-node cluster, drains one node at a time with
+`lsmctl drain-node`, stops it, uses `lsmctl put --cluster` to commit a write
 through the remaining quorum, restarts the stopped node with its existing
-volume, and verifies all three nodes can read the write before the next node is
-restarted.
+volume, resumes it with `lsmctl resume-node`, and verifies all three nodes can
+read the write before the next node is restarted.
 
 ## Manual commands
 

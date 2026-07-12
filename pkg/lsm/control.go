@@ -23,6 +23,17 @@ type ControlProviderWithOptions interface {
 	PrepareDrainWithOptions(nodeID string, opts ControlWriteOptions) error
 }
 
+// ControlResumeProvider exposes drain resume APIs without widening ControlProvider.
+type ControlResumeProvider interface {
+	ResumeDrain(nodeID string) error
+}
+
+// ControlResumeProviderWithOptions extends ControlResumeProvider with concurrency APIs.
+type ControlResumeProviderWithOptions interface {
+	ControlResumeProvider
+	ResumeDrainWithOptions(nodeID string, opts ControlWriteOptions) error
+}
+
 // RaftMembershipProvider exposes provider-level raft voter membership hooks.
 //
 // This is intentionally separate from shard replica metadata. Operators should

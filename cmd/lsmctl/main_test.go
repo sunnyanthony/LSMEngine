@@ -197,6 +197,157 @@ func TestWriteClusterStatuses(t *testing.T) {
 	}
 }
 
+func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {
+	var drainCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:   "node-a",
+				Draining: true,
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/nodes/node-a/drain":
+			drainCalls.Add(1)
+			var req drainRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode drain: %v", err)
+			}
+			if req.OperationID != "drain-node-a" {
+				t.Fatalf("expected operation id drain-node-a, got %q", req.OperationID)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Leader:   "node-b",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	result, err := drainClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+	}, "node-a", controlRequestOptions{OperationID: "drain-node-a"})
+	if err != nil {
+		t.Fatalf("drain node: %v", err)
+	}
+	if result.Target != "node-a" || result.SubmittedTo != "node-b" {
+		t.Fatalf("unexpected drain result: %+v", result)
+	}
+	if drainCalls.Load() != 1 {
+		t.Fatalf("expected one drain call, got %d", drainCalls.Load())
+	}
+	if len(result.Shards) != 1 || result.Shards[0].Leader != "node-b" {
+		t.Fatalf("expected shard leader node-b, got %+v", result.Shards)
+	}
+}
+
+func TestResumeClusterNodeSubmitsToWriteLeaderAndWaitsForResume(t *testing.T) {
+	var resumeCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:   "node-a",
+				Draining: false,
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/nodes/node-a/resume":
+			resumeCalls.Add(1)
+			var req drainRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode resume: %v", err)
+			}
+			if req.OperationID != "resume-node-a" {
+				t.Fatalf("expected operation id resume-node-a, got %q", req.OperationID)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Leader:   "node-b",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	result, err := resumeClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+	}, "node-a", controlRequestOptions{OperationID: "resume-node-a"})
+	if err != nil {
+		t.Fatalf("resume node: %v", err)
+	}
+	if result.Target != "node-a" || result.SubmittedTo != "node-b" {
+		t.Fatalf("unexpected resume result: %+v", result)
+	}
+	if resumeCalls.Load() != 1 {
+		t.Fatalf("expected one resume call, got %d", resumeCalls.Load())
+	}
+}
+
 func TestWriteKVPutClusterTransfersShardToCurrentWriteLeader(t *testing.T) {
 	var transferCalls atomic.Int32
 	var putCalls atomic.Int32
