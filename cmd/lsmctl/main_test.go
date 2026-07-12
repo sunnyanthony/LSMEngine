@@ -566,6 +566,24 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 	}))
 	defer nodeC.Close()
 
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/cluster/status":
@@ -582,10 +600,11 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 			replicas := []lsm.ReplicaStatus{
 				{NodeID: "node-a", Role: "leader", Healthy: true},
 				{NodeID: "node-b", Role: "follower", Healthy: true},
+				{NodeID: "node-c", Role: "follower", Healthy: true},
 			}
 			leader := "node-a"
 			if addReplicaCalls.Load() > 0 {
-				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-c", Role: "follower", Healthy: true})
+				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-d", Role: "follower", Healthy: true})
 			}
 			if drainCalls.Load() > 0 {
 				leader = "node-b"
@@ -615,7 +634,7 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 					Replicas: replicas,
 				},
 			})
-		case "/cluster/nodes/node-c/raft-add":
+		case "/cluster/nodes/node-d/raft-add":
 			raftAddCalls.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case "/cluster/shards/users/add-replica":
@@ -624,7 +643,7 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode add replica: %v", err)
 			}
-			if req.Target != "node-c" || req.OperationID != "replace-node-a-with-node-c-add-users-node-c" {
+			if req.Target != "node-d" || req.OperationID != "replace-node-a-with-node-d-add-users-node-d" {
 				t.Fatalf("unexpected add request: %+v", req)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -637,7 +656,7 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode remove replica: %v", err)
 			}
-			if req.Target != "node-a" || req.OperationID != "replace-node-a-with-node-c-remove-users-node-a" {
+			if req.Target != "node-a" || req.OperationID != "replace-node-a-with-node-d-remove-users-node-a" {
 				t.Fatalf("unexpected remove request: %+v", req)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -654,14 +673,15 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 		"node-a": nodeA.URL,
 		"node-b": nodeB.URL,
 		"node-c": nodeC.URL,
+		"node-d": nodeD.URL,
 	}, replaceNodeOptions{
 		OldNode: "node-a",
-		NewNode: "node-c",
+		NewNode: "node-d",
 	})
 	if err != nil {
 		t.Fatalf("replace node: %v", err)
 	}
-	if result.OldNode != "node-a" || result.NewNode != "node-c" {
+	if result.OldNode != "node-a" || result.NewNode != "node-d" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	if len(result.Shards) != 1 || result.Shards[0] != "users" {
@@ -714,6 +734,25 @@ func TestReplaceClusterNodeDryRunOnlyPreflights(t *testing.T) {
 	}))
 	defer nodeC.Close()
 
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/cluster/status":
@@ -734,6 +773,7 @@ func TestReplaceClusterNodeDryRunOnlyPreflights(t *testing.T) {
 					Replicas: []lsm.ReplicaStatus{
 						{NodeID: "node-a", Role: "leader", Healthy: true},
 						{NodeID: "node-b", Role: "follower", Healthy: true},
+						{NodeID: "node-c", Role: "follower", Healthy: true},
 					},
 				},
 			})
@@ -748,9 +788,10 @@ func TestReplaceClusterNodeDryRunOnlyPreflights(t *testing.T) {
 		"node-a": nodeA.URL,
 		"node-b": nodeB.URL,
 		"node-c": nodeC.URL,
+		"node-d": nodeD.URL,
 	}, replaceNodeOptions{
 		OldNode: "node-a",
-		NewNode: "node-c",
+		NewNode: "node-d",
 		DryRun:  true,
 	})
 	if err != nil {
@@ -943,6 +984,7 @@ func TestPlanReplacementNodeSelectsUnavailableCandidate(t *testing.T) {
 					Replicas: []lsm.ReplicaStatus{
 						{NodeID: "node-a", Role: "follower", Healthy: false},
 						{NodeID: "node-b", Role: "leader", Healthy: true},
+						{NodeID: "node-c", Role: "follower", Healthy: true},
 					},
 				},
 			})
@@ -1032,6 +1074,75 @@ func TestPlanReplacementNodeRequiresExplicitOldNodeForMultipleCandidates(t *test
 	}
 }
 
+func TestPlanReplacementNodeRejectsInsufficientHealthyRemainingReplicas(t *testing.T) {
+	nodeA := httptest.NewServer(http.NotFoundHandler())
+	nodeAURL := nodeA.URL
+	nodeA.Close()
+	nodeC := httptest.NewServer(http.NotFoundHandler())
+	nodeCURL := nodeC.URL
+	nodeC.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-b",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "follower", Healthy: false},
+						{NodeID: "node-b", Role: "leader", Healthy: true},
+						{NodeID: "node-c", Role: "follower", Healthy: false},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	_, err := planReplacementNode(map[string]string{
+		"node-a": nodeAURL,
+		"node-b": nodeB.URL,
+		"node-c": nodeCURL,
+		"node-d": nodeD.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-d",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatalf("expected replacement quorum policy error")
+	}
+	if !strings.Contains(err.Error(), "replacement quorum policy failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestApplyPlannedReplacementExecutesSelectedCandidate(t *testing.T) {
 	var raftAddCalls atomic.Int32
 	var raftRemoveCalls atomic.Int32
@@ -1072,6 +1183,7 @@ func TestApplyPlannedReplacementExecutesSelectedCandidate(t *testing.T) {
 			replicas := []lsm.ReplicaStatus{
 				{NodeID: "node-a", Role: "follower", Healthy: false},
 				{NodeID: "node-b", Role: "leader", Healthy: true},
+				{NodeID: "node-c", Role: "follower", Healthy: true},
 			}
 			if addReplicaCalls.Load() > 0 {
 				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-d", Role: "follower", Healthy: true})

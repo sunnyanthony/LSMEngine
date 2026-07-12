@@ -197,6 +197,13 @@ rejected. It reuses the same replacement preflight as `replace-node --dry-run`
 and prints suggested dry-run/apply commands. It does not submit raft membership,
 shard replica, or drain mutations.
 
+Replacement preflight also enforces a quorum policy per affected shard: existing
+replicas other than the old node must still have a healthy majority according to
+`/cluster/shards` and `/cluster/status`. For the default three-node shape,
+node-b and node-c must both be healthy before replacing node-a. This prevents
+the replacement workflow from converting a degraded cluster into a non-quorum
+membership change.
+
 One-shot supervisor/operator execution:
 
 ```bash
