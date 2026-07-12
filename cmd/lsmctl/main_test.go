@@ -495,6 +495,157 @@ func TestShardReplicaActionCompleteForRemove(t *testing.T) {
 	}
 }
 
+func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
+	var raftAddCalls atomic.Int32
+	var raftRemoveCalls atomic.Int32
+	var addReplicaCalls atomic.Int32
+	var drainCalls atomic.Int32
+	var removeReplicaCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:   "node-a",
+				Draining: drainCalls.Load() > 0,
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			replicas := []lsm.ReplicaStatus{
+				{NodeID: "node-a", Role: "leader", Healthy: true},
+				{NodeID: "node-b", Role: "follower", Healthy: true},
+			}
+			leader := "node-a"
+			if addReplicaCalls.Load() > 0 {
+				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-c", Role: "follower", Healthy: true})
+			}
+			if drainCalls.Load() > 0 {
+				leader = "node-b"
+				for i := range replicas {
+					if replicas[i].NodeID == "node-b" {
+						replicas[i].Role = "leader"
+					} else {
+						replicas[i].Role = "follower"
+					}
+				}
+			}
+			if removeReplicaCalls.Load() > 0 {
+				next := replicas[:0]
+				for _, replica := range replicas {
+					if replica.NodeID != "node-a" {
+						next = append(next, replica)
+					}
+				}
+				replicas = next
+			}
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Leader:   leader,
+					Replicas: replicas,
+				},
+			})
+		case "/cluster/nodes/node-c/raft-add":
+			raftAddCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/add-replica":
+			addReplicaCalls.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode add replica: %v", err)
+			}
+			if req.Target != "node-c" || req.OperationID != "replace-node-a-with-node-c-add-users-node-c" {
+				t.Fatalf("unexpected add request: %+v", req)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/drain":
+			drainCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/remove-replica":
+			removeReplicaCalls.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode remove replica: %v", err)
+			}
+			if req.Target != "node-a" || req.OperationID != "replace-node-a-with-node-c-remove-users-node-a" {
+				t.Fatalf("unexpected remove request: %+v", req)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/raft-remove":
+			raftRemoveCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	result, err := replaceClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-c",
+	})
+	if err != nil {
+		t.Fatalf("replace node: %v", err)
+	}
+	if result.OldNode != "node-a" || result.NewNode != "node-c" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(result.Shards) != 1 || result.Shards[0] != "users" {
+		t.Fatalf("unexpected replacement shards: %+v", result.Shards)
+	}
+	if raftAddCalls.Load() != 1 || addReplicaCalls.Load() != 1 || drainCalls.Load() != 1 || removeReplicaCalls.Load() != 1 || raftRemoveCalls.Load() != 1 {
+		t.Fatalf("unexpected call counts raftAdd=%d add=%d drain=%d remove=%d raftRemove=%d",
+			raftAddCalls.Load(), addReplicaCalls.Load(), drainCalls.Load(), removeReplicaCalls.Load(), raftRemoveCalls.Load())
+	}
+}
+
 func TestWriteKVPutClusterTransfersShardToCurrentWriteLeader(t *testing.T) {
 	var transferCalls atomic.Int32
 	var putCalls atomic.Int32

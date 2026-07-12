@@ -11,9 +11,9 @@ It is a packaging smoke test for the current raft foundation:
 - reads verify that committed data is applied on followers.
 
 This is not full dynamic cluster management yet. The CLI has manual raft and
-shard membership commands, but automated replacement policy, full LSM
-state-machine snapshot transfer orchestration, and service discovery remain
-future work.
+shard membership commands plus a planned `replace-node` workflow, but automated
+replacement triggers, full LSM state-machine snapshot transfer orchestration,
+and service discovery remain future work.
 
 ## Run
 

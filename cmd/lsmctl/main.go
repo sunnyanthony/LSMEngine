@@ -64,6 +64,8 @@ func main() {
 		shardAddReplicaCmd(os.Args[2:])
 	case "shard-remove-replica":
 		shardRemoveReplicaCmd(os.Args[2:])
+	case "replace-node":
+		replaceNodeCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -75,7 +77,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -280,6 +282,24 @@ type drainRequest struct {
 
 type nodeEndpointFlags map[string]string
 
+type stringListFlags []string
+
+func (f *stringListFlags) String() string {
+	if f == nil || len(*f) == 0 {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlags) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("value must not be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
 func (f *nodeEndpointFlags) String() string {
 	if f == nil || len(*f) == 0 {
 		return ""
@@ -345,6 +365,22 @@ type membershipActionResult struct {
 	Endpoint    string              `json:"endpoint"`
 	Shards      []lsm.ShardStatus   `json:"shards,omitempty"`
 	Statuses    clusterStatusResult `json:"statuses"`
+}
+
+type replaceNodeResult struct {
+	OldNode  string                   `json:"old_node"`
+	NewNode  string                   `json:"new_node"`
+	Shards   []string                 `json:"shards"`
+	Steps    []membershipActionResult `json:"steps"`
+	Drain    drainNodeResult          `json:"drain"`
+	Statuses clusterStatusResult      `json:"statuses"`
+}
+
+type replaceNodeOptions struct {
+	OldNode         string
+	NewNode         string
+	ShardIDs        []string
+	OperationPrefix string
 }
 
 func getCmd(args []string) {
@@ -823,6 +859,51 @@ func shardReplicaCmd(command string, args []string, action string) {
 		return
 	}
 	writeMembershipActionResult(os.Stdout, result)
+}
+
+func replaceNodeCmd(args []string) {
+	fs := flag.NewFlagSet("replace-node", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	oldNode := fs.String("old-node", "", "node id being replaced")
+	newNode := fs.String("new-node", "", "replacement node id")
+	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
+	var shardIDs stringListFlags
+	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing --old-node")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if strings.TrimSpace(*oldNode) == "" {
+		log.Fatal("--old-node required")
+	}
+	if strings.TrimSpace(*newNode) == "" {
+		log.Fatal("--new-node required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatal("replace-node requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
+		OldNode:         *oldNode,
+		NewNode:         *newNode,
+		ShardIDs:        []string(shardIDs),
+		OperationPrefix: *operationPrefix,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeReplaceNodeResult(os.Stdout, result)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -1455,10 +1536,158 @@ func hasShardReplica(shard lsm.ShardStatus, node string) bool {
 	return false
 }
 
+func replaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (replaceNodeResult, error) {
+	oldNode := strings.TrimSpace(opts.OldNode)
+	newNode := strings.TrimSpace(opts.NewNode)
+	if oldNode == "" {
+		return replaceNodeResult{}, fmt.Errorf("old node required")
+	}
+	if newNode == "" {
+		return replaceNodeResult{}, fmt.Errorf("new node required")
+	}
+	if oldNode == newNode {
+		return replaceNodeResult{}, fmt.Errorf("old node and new node must differ")
+	}
+	nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+	if err != nil {
+		return replaceNodeResult{}, err
+	}
+	shards, err := readShards(endpoint)
+	if err != nil {
+		return replaceNodeResult{}, err
+	}
+	shardIDs, err := replacementShardIDs(shards, oldNode, opts.ShardIDs)
+	if err != nil {
+		return replaceNodeResult{}, err
+	}
+	prefix := strings.TrimSpace(opts.OperationPrefix)
+	if prefix == "" {
+		prefix = "replace-" + oldNode + "-with-" + newNode
+	}
+	result := replaceNodeResult{
+		OldNode: oldNode,
+		NewNode: newNode,
+		Shards:  shardIDs,
+	}
+	raftAdd, err := changeRaftMembership(endpoints, "raft-add", newNode)
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, raftAdd)
+	for _, shardID := range shardIDs {
+		step, err := changeShardReplica(endpoints, "add-replica", shardID, newNode, controlRequestOptions{
+			OperationID: prefix + "-add-" + shardID + "-" + newNode,
+		})
+		if err != nil {
+			return result, err
+		}
+		result.Steps = append(result.Steps, step)
+	}
+	drain, err := drainClusterNode(endpoints, oldNode, controlRequestOptions{
+		OperationID: prefix + "-drain-" + oldNode,
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Drain = drain
+	for _, shardID := range shardIDs {
+		step, err := changeShardReplica(endpoints, "remove-replica", shardID, oldNode, controlRequestOptions{
+			OperationID: prefix + "-remove-" + shardID + "-" + oldNode,
+		})
+		if err != nil {
+			return result, err
+		}
+		result.Steps = append(result.Steps, step)
+	}
+	raftRemove, err := changeRaftMembership(endpoints, "raft-remove", oldNode)
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, raftRemove)
+	statuses, err := readClusterStatuses(endpoints)
+	if err != nil {
+		return result, err
+	}
+	result.Statuses = statuses
+	if result.Drain.SubmittedTo == "" {
+		result.Drain.SubmittedTo = nodeID
+		result.Drain.Endpoint = endpoint
+	}
+	return result, nil
+}
+
+func readShards(endpoint string) ([]lsm.ShardStatus, error) {
+	var shards []lsm.ShardStatus
+	if err := getJSON(endpoint+"/cluster/shards", &shards); err != nil {
+		return nil, err
+	}
+	return shards, nil
+}
+
+func replacementShardIDs(shards []lsm.ShardStatus, oldNode string, requested []string) ([]string, error) {
+	if len(requested) > 0 {
+		known := make(map[string]lsm.ShardStatus, len(shards))
+		for _, shard := range shards {
+			known[shard.ID] = shard
+		}
+		out := make([]string, 0, len(requested))
+		seen := make(map[string]struct{}, len(requested))
+		for _, shardID := range requested {
+			shardID = strings.TrimSpace(shardID)
+			if shardID == "" {
+				continue
+			}
+			if _, ok := seen[shardID]; ok {
+				continue
+			}
+			shard, ok := known[shardID]
+			if !ok {
+				return nil, fmt.Errorf("unknown shard %q", shardID)
+			}
+			if !hasShardReplica(shard, oldNode) {
+				return nil, fmt.Errorf("old node %q is not a replica of shard %q", oldNode, shardID)
+			}
+			seen[shardID] = struct{}{}
+			out = append(out, shardID)
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("no replacement shards selected")
+		}
+		sort.Strings(out)
+		return out, nil
+	}
+	out := make([]string, 0)
+	for _, shard := range shards {
+		if hasShardReplica(shard, oldNode) {
+			out = append(out, shard.ID)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("old node %q is not a replica of any shard", oldNode)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func writeDrainNodeResult(w io.Writer, result drainNodeResult) {
 	fmt.Fprintf(w, "target=%s submitted_to=%s endpoint=%s\n", result.Target, result.SubmittedTo, result.Endpoint)
 	for _, shard := range result.Shards {
 		fmt.Fprintf(w, "shard=%s leader=%s\n", shard.ID, shard.Leader)
+	}
+	writeClusterStatuses(w, result.Statuses)
+}
+
+func writeReplaceNodeResult(w io.Writer, result replaceNodeResult) {
+	fmt.Fprintf(w, "old_node=%s new_node=%s shards=%s\n", result.OldNode, result.NewNode, strings.Join(result.Shards, ","))
+	for _, step := range result.Steps {
+		if step.Shard != "" {
+			fmt.Fprintf(w, "step=%s shard=%s node=%s submitted_to=%s\n", step.Operation, step.Shard, step.Node, step.SubmittedTo)
+			continue
+		}
+		fmt.Fprintf(w, "step=%s node=%s submitted_to=%s\n", step.Operation, step.Node, step.SubmittedTo)
+	}
+	if result.Drain.Target != "" {
+		fmt.Fprintf(w, "step=drain-node node=%s submitted_to=%s\n", result.Drain.Target, result.Drain.SubmittedTo)
 	}
 	writeClusterStatuses(w, result.Statuses)
 }
