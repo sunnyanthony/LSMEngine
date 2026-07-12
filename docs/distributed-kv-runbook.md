@@ -173,9 +173,10 @@ This is still a static bootstrap path. `lsmctl raft-add-node`,
 `lsmctl raft-remove-node`, `lsmctl shard-add-replica`, and
 `lsmctl shard-remove-replica` provide manual membership primitives for
 operators. `lsmctl replace-node` composes those primitives for a planned
-replacement when the replacement node is already running and reachable. Service
-discovery, automated membership repair, and process supervision remain outside
-this path.
+replacement when the replacement node is already running and reachable.
+`raft.peer_url_file` can provide operator-managed endpoint updates for future
+joiners without restarting existing nodes. Automated membership repair and
+process supervision remain outside this path.
 
 Manual replacement workflow:
 
