@@ -8,9 +8,6 @@ KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
 GATEWAY_ADDR="${LSM_GATEWAY_ADDR:-127.0.0.1:8090}"
 GATEWAY_URL="http://$GATEWAY_ADDR"
-GATEWAY_PID=""
-TMP_DIR="$(mktemp -d)"
-GATEWAY_LOG="$TMP_DIR/gateway.log"
 
 compose() {
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -25,14 +22,9 @@ lsmctl() {
 }
 
 cleanup() {
-  if [[ -n "$GATEWAY_PID" ]]; then
-    kill "$GATEWAY_PID" >/dev/null 2>&1 || true
-    wait "$GATEWAY_PID" >/dev/null 2>&1 || true
-  fi
   if [[ "$KEEP" != "1" ]]; then
-    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    compose --profile gateway down -v --remove-orphans >/dev/null 2>&1 || true
   fi
-  rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
@@ -49,11 +41,8 @@ wait_for_health() {
   until curl -fsS "$url/healthz" >/dev/null; do
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for $url/healthz" >&2
-      compose ps >&2 || true
-      compose logs --tail=80 >&2 || true
-      if [[ -f "$GATEWAY_LOG" ]]; then
-        cat "$GATEWAY_LOG" >&2
-      fi
+      compose --profile gateway ps >&2 || true
+      compose --profile gateway logs --tail=100 >&2 || true
       return 1
     fi
     sleep 1
@@ -70,7 +59,7 @@ require_contains() {
   fi
 }
 
-compose up -d --build
+compose --profile gateway up -d --build node-a node-b node-c
 wait_for_health "http://127.0.0.1:8080"
 wait_for_health "http://127.0.0.1:8081"
 wait_for_health "http://127.0.0.1:8082"
@@ -78,12 +67,7 @@ wait_for_health "http://127.0.0.1:8082"
 wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s)"
 require_contains "$wait_output" "ready=true"
 
-lsmctl gateway \
-  --listen "$GATEWAY_ADDR" \
-  --bootstrap-url "http://127.0.0.1:8080" \
-  --write-consistency-default local_committed \
-  $(node_endpoint_args) >"$GATEWAY_LOG" 2>&1 &
-GATEWAY_PID="$!"
+compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"

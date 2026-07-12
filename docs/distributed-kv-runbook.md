@@ -164,6 +164,10 @@ Compose gateway smoke for a repeatable local check:
 examples/docker-compose-cluster/gateway-smoke.sh
 ```
 
+The smoke runs gateway as a Docker Compose service using the `gateway` profile
+and exposes it at `http://127.0.0.1:8090`, so the local client talks to one
+stable endpoint while raft peer traffic stays inside the Compose network.
+
 ## Rolling Restart Check
 
 The integration suite covers this workflow with real `lsmctl serve` processes:
