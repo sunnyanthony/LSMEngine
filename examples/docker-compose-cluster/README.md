@@ -9,6 +9,8 @@ It is a packaging smoke test for the current raft foundation:
 - node peer traffic uses Compose service names;
 - writes are issued through node-a with `local_committed` consistency;
 - reads verify that committed data is applied on followers.
+- optional node-d replacement coverage is available through the `replacement`
+  profile.
 
 This is not full dynamic cluster management yet. The CLI has manual raft and
 shard membership commands plus a planned `replace-node` workflow, but automated
@@ -43,6 +45,17 @@ This starts the same static three-node cluster, drains one node at a time with
 through the remaining quorum, restarts the stopped node with its existing
 volume, resumes it with `lsmctl resume-node`, and verifies all three nodes can
 read the write before the next node is restarted.
+
+## Replacement smoke
+
+```bash
+examples/docker-compose-cluster/replace-node-smoke.sh
+```
+
+This starts node-a/node-b/node-c, writes a committed value, starts node-d with
+`raft.join: true`, runs `lsmctl replace-node --old-node node-a --new-node
+node-d`, stops node-a, then verifies node-b/node-c/node-d can accept and read a
+new committed write.
 
 ## Manual commands
 

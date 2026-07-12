@@ -32,7 +32,20 @@ services:
       - ./node-c.yaml:/etc/lsm/server.yaml:ro
       - node-c-data:/data
 
+  node-d:
+    profiles: ["replacement"]
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.server
+    command: ["serve", "--config", "/etc/lsm/server.yaml"]
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./node-d.yaml:/etc/lsm/server.yaml:ro
+      - node-d-data:/data
+
 volumes:
   node-a-data:
   node-b-data:
   node-c-data:
+  node-d-data:

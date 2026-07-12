@@ -1,5 +1,5 @@
 data_dir: "/data"
-node_id: "node-a"
+node_id: "node-d"
 cluster_id: "compose-cluster"
 storage_mode: "local"
 control_state_path: "/data/control_state.json"
@@ -13,16 +13,16 @@ commitlog:
     applied_entries: 8
     retain_entries: 4
 raft:
-  peers: ["node-a", "node-b", "node-c"]
+  join: true
+  peers: ["node-a", "node-b", "node-c", "node-d"]
   peer_urls:
     node-a: "http://node-a:8080"
     node-b: "http://node-b:8080"
     node-c: "http://node-c:8080"
-  join_peer_urls:
     node-d: "http://node-d:8080"
 shards:
   - id: "users"
     start_key: "a"
     end_key: "z"
-    replicas: ["node-a", "node-b", "node-c"]
+    replicas: ["node-a", "node-b", "node-c", "node-d"]
     leader: "node-a"
