@@ -170,6 +170,39 @@ func TestClusterNodeEndpointsFromConfigRejectsInvalidPeerURLFile(t *testing.T) {
 	}
 }
 
+func TestGatewayNodeEndpointResolverUsesEndpointFileWithFallback(t *testing.T) {
+	path := t.TempDir() + "/gateway-endpoints.yaml"
+	if err := os.WriteFile(path, []byte(`node-a: "http://file-a:8080"`), 0o644); err != nil {
+		t.Fatalf("write endpoint file: %v", err)
+	}
+	resolver, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{
+		NodeID: "node-a",
+		Raft: serverconfig.RaftConfig{
+			PeerURLs: map[string]string{
+				"node-b": "http://static-b:8080",
+			},
+		},
+	}, "http://bootstrap-a:8080", path, nodeEndpointFlags{
+		"node-c": "http://override-c:8080",
+	})
+	if err != nil {
+		t.Fatalf("gateway resolver: %v", err)
+	}
+	got, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve gateway endpoints: %v", err)
+	}
+	if got["node-a"] != "http://file-a:8080" {
+		t.Fatalf("expected file endpoint for node-a, got %+v", got)
+	}
+	if got["node-b"] != "http://static-b:8080" {
+		t.Fatalf("expected static fallback for node-b, got %+v", got)
+	}
+	if got["node-c"] != "http://override-c:8080" {
+		t.Fatalf("expected override fallback for node-c, got %+v", got)
+	}
+}
+
 func TestReadClusterStatusesRecordsPartialFailures(t *testing.T) {
 	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cluster/status" {

@@ -400,6 +400,106 @@ node-b: "http://new-b"
 	}
 }
 
+func TestGatewayAlignsShardLeaderToCommitLogWriteLeader(t *testing.T) {
+	var transfers atomic.Int32
+	var writes atomic.Int32
+	shardLeader := atomic.Value{}
+	shardLeader.Store("node-a")
+
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			writeJSON(w, http.StatusOK, []lsm.ShardStatus{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Leader:   shardLeader.Load().(string),
+				},
+			})
+		case "/cluster/shards/users/transfer-leader":
+			transfers.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode transfer: %v", err)
+			}
+			if req.Target != "node-b" {
+				t.Fatalf("expected transfer target node-b, got %q", req.Target)
+			}
+			shardLeader.Store("node-b")
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		case "/kv/put":
+			writes.Add(1)
+			if shardLeader.Load().(string) != "node-b" {
+				t.Fatalf("write happened before shard leader aligned")
+			}
+			writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+				RequestID:   "aligned-1",
+				Operation:   "put",
+				Consistency: lsm.WriteConsistencyLocalCommitted,
+				State:       lsm.WriteRequestCommitted,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+		AlignWriteLeader: true,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	status, err := gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("expected committed status, got %+v", status)
+	}
+	if transfers.Load() != 1 {
+		t.Fatalf("expected one shard leader transfer, got %d", transfers.Load())
+	}
+	if writes.Load() != 1 {
+		t.Fatalf("expected one write, got %d", writes.Load())
+	}
+}
+
 func TestGatewayStopsAfterMaxWriteAttempts(t *testing.T) {
 	var writes atomic.Int32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

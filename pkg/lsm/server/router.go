@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ type GatewayOptions struct {
 	HTTPClient           *http.Client
 	MaxWriteAttempts     int
 	WriteRetryBackoff    time.Duration
+	AlignWriteLeader     bool
 }
 
 // Gateway routes writes by shard metadata and performs bounded retries on retryable write errors.
@@ -32,6 +34,7 @@ type Gateway struct {
 	client           *http.Client
 	maxAttempts      int
 	retryBackoff     time.Duration
+	alignWriteLeader bool
 
 	mu     sync.RWMutex
 	routes cachedRoutes
@@ -99,6 +102,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		client:           client,
 		maxAttempts:      maxAttempts,
 		retryBackoff:     opts.WriteRetryBackoff,
+		alignWriteLeader: opts.AlignWriteLeader,
 	}, nil
 }
 
@@ -194,6 +198,20 @@ func (g *Gateway) writeOnce(
 	value []byte,
 	consistency lsm.WriteConsistency,
 ) (lsm.WriteRequestStatus, error) {
+	if g.alignWriteLeader {
+		endpoints, err := g.endpointResolver.ResolveNodeEndpoints(ctx)
+		if err != nil {
+			return lsm.WriteRequestStatus{}, err
+		}
+		nodeID, endpoint, err := g.currentWriteLeader(ctx, endpoints)
+		if err != nil {
+			return lsm.WriteRequestStatus{}, err
+		}
+		if err := g.alignShardLeader(ctx, endpoint, key, nodeID); err != nil {
+			return lsm.WriteRequestStatus{}, err
+		}
+		return g.postWrite(ctx, endpoint, operation, key, value, consistency)
+	}
 	leader, err := g.leaderForKey(ctx, key)
 	if err != nil {
 		return lsm.WriteRequestStatus{}, err
@@ -206,6 +224,17 @@ func (g *Gateway) writeOnce(
 	if !ok {
 		return lsm.WriteRequestStatus{}, fmt.Errorf("node endpoint missing for leader %q", leader)
 	}
+	return g.postWrite(ctx, endpoint, operation, key, value, consistency)
+}
+
+func (g *Gateway) postWrite(
+	ctx context.Context,
+	endpoint string,
+	operation string,
+	key []byte,
+	value []byte,
+	consistency lsm.WriteConsistency,
+) (lsm.WriteRequestStatus, error) {
 	path := "/kv/put"
 	var payload any
 	switch operation {
@@ -256,6 +285,99 @@ func (g *Gateway) writeOnce(
 		Status:   resp.StatusCode,
 		Response: writeErr,
 	}
+}
+
+func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]string) (string, string, error) {
+	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	var lastErr error
+	for _, nodeID := range nodeIDs {
+		endpoint := endpoints[nodeID]
+		var status lsm.ClusterStatus
+		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			lastErr = err
+			continue
+		}
+		if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
+			if strings.TrimSpace(status.NodeID) != "" {
+				nodeID = status.NodeID
+			}
+			return nodeID, endpoint, nil
+		}
+	}
+	if lastErr != nil {
+		return "", "", lastErr
+	}
+	return "", "", fmt.Errorf("cluster write leader not available")
+}
+
+func (g *Gateway) alignShardLeader(ctx context.Context, endpoint string, key []byte, target string) error {
+	shard, ok, err := g.shardForKey(ctx, endpoint, key)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("route not found for key")
+	}
+	if shard.Leader == target {
+		return nil
+	}
+	return g.postControlAction(ctx, endpoint+"/cluster/shards/"+url.PathEscape(shard.ID)+"/transfer-leader", targetRequest{
+		Target: target,
+	})
+}
+
+func (g *Gateway) shardForKey(ctx context.Context, endpoint string, key []byte) (lsm.ShardStatus, bool, error) {
+	var shards []lsm.ShardStatus
+	if err := g.getJSON(ctx, endpoint+"/cluster/shards", &shards); err != nil {
+		return lsm.ShardStatus{}, false, err
+	}
+	for _, shard := range shards {
+		if len(shard.StartKey) > 0 && bytes.Compare(key, shard.StartKey) < 0 {
+			continue
+		}
+		if len(shard.EndKey) > 0 && bytes.Compare(key, shard.EndKey) >= 0 {
+			continue
+		}
+		return shard, true, nil
+	}
+	return lsm.ShardStatus{}, false, nil
+}
+
+func (g *Gateway) postControlAction(ctx context.Context, rawURL string, payload any) error {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(payload); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("control action status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (g *Gateway) getJSON(ctx context.Context, rawURL string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("get %s status %d", rawURL, resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func (g *Gateway) leaderForKey(ctx context.Context, key []byte) (string, error) {

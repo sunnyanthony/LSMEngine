@@ -36,6 +36,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serveCmd(os.Args[2:])
+	case "gateway":
+		gatewayCmd(os.Args[2:])
 	case "get":
 		getCmd(os.Args[2:])
 	case "range":
@@ -83,7 +85,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -178,6 +180,72 @@ func serveCmd(args []string) {
 
 func serveSignals() []os.Signal {
 	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
+
+func gatewayCmd(args []string) {
+	fs := flag.NewFlagSet("gateway", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	listen := fs.String("listen", ":8090", "gateway listen address")
+	bootstrapURL := fs.String("bootstrap-url", "", "server URL used to refresh cluster routes")
+	endpointFile := fs.String("endpoint-file", "", "absolute YAML/JSON node endpoint file")
+	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
+	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
+	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+
+	cfg := loadConfigOrExit(*configPath)
+	if *bootstrapURL == "" {
+		*bootstrapURL = cfg.Addr
+	}
+	if strings.TrimSpace(*bootstrapURL) == "" {
+		log.Fatal("gateway requires --bootstrap-url or config addr")
+	}
+	consistencyDefault := *writeConsistencyDefault
+	if consistencyDefault == "" {
+		consistencyDefault = cfg.WriteConsistencyDefault
+	}
+	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, *endpointFile, nodeEndpoints)
+	if err != nil {
+		log.Fatalf("gateway endpoints: %v", err)
+	}
+	gateway, err := server.NewGateway(server.GatewayOptions{
+		BootstrapURL:         normalizeHTTPBaseURL(*bootstrapURL),
+		NodeEndpointResolver: resolver,
+		MaxWriteAttempts:     *maxWriteAttempts,
+		WriteRetryBackoff:    *writeRetryBackoff,
+		AlignWriteLeader:     true,
+	})
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
+	srv := &http.Server{
+		Addr: *listen,
+		Handler: server.NewGatewayHandler(gateway, server.HandlerOptions{
+			WriteConsistencyDefault: mustWriteConsistencyDefault(consistencyDefault),
+		}),
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), serveSignals()...)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("gateway shutdown: %v", err)
+		}
+	}()
+
+	log.Printf("gateway listening on %s", *listen)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("gateway listen: %v", err)
+	}
 }
 
 func statsCmd(args []string) {
@@ -2857,6 +2925,31 @@ func clusterNodeEndpointsFromConfig(
 ) (map[string]string, error) {
 	resolver := server.NewNodeEndpointConfigResolverFromConfig(cfg, addr, overrides)
 	return resolver.ResolveNodeEndpoints(context.Background())
+}
+
+func gatewayNodeEndpointResolverFromConfig(
+	cfg serverconfig.Config,
+	bootstrapURL string,
+	endpointFile string,
+	overrides nodeEndpointFlags,
+) (server.NodeEndpointResolver, error) {
+	endpointFile = strings.TrimSpace(endpointFile)
+	if endpointFile == "" {
+		endpointFile = strings.TrimSpace(cfg.Raft.PeerURLFile)
+	}
+	fallbackCfg := cfg
+	fallbackCfg.Raft.PeerURLFile = ""
+	fallback, err := clusterNodeEndpointsFromConfig(fallbackCfg, bootstrapURL, overrides)
+	if err != nil {
+		return nil, err
+	}
+	if endpointFile != "" {
+		return server.NewNodeEndpointFileResolver(server.NodeEndpointFileResolverOptions{
+			Path:                  endpointFile,
+			FallbackNodeEndpoints: fallback,
+		})
+	}
+	return server.NewStaticNodeEndpointResolver(fallback)
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {
