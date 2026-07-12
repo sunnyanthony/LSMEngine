@@ -39,20 +39,21 @@ type pendingRaftProposal struct {
 type etcdRaftConsensus struct {
 	mu sync.Mutex
 
-	nodeID         uint64
-	rawNode        *raft.RawNode
-	storage        *raftPersistentStorage
-	transport      PeerTransport
-	observer       CommittedEntryObserver
-	snapshotter    StateSnapshotter
-	proposalSeq    uint64
-	pending        map[uint64]*pendingRaftProposal
-	committed      []raftCommittedProposal
-	index          uint64
-	term           uint64
-	snapshotPolicy SnapshotPolicy
-	snapshotIndex  uint64
-	replicas       int
+	nodeID          uint64
+	rawNode         *raft.RawNode
+	storage         *raftPersistentStorage
+	transport       PeerTransport
+	observer        CommittedEntryObserver
+	snapshotter     StateSnapshotter
+	snapshotApplier StateSnapshotApplier
+	proposalSeq     uint64
+	pending         map[uint64]*pendingRaftProposal
+	committed       []raftCommittedProposal
+	index           uint64
+	term            uint64
+	snapshotPolicy  SnapshotPolicy
+	snapshotIndex   uint64
+	replicas        int
 
 	lastErrorCode string
 	lastError     string
@@ -343,6 +344,13 @@ func (c *etcdRaftConsensus) SetStateSnapshotter(snapshotter StateSnapshotter) er
 	return nil
 }
 
+func (c *etcdRaftConsensus) SetStateSnapshotApplier(applier StateSnapshotApplier) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshotApplier = applier
+	return nil
+}
+
 func (c *etcdRaftConsensus) commitMutation(
 	ctx context.Context,
 	proposal raftCommitProposal,
@@ -499,10 +507,9 @@ func (c *etcdRaftConsensus) advanceUntilStableLocked(ctx context.Context) error 
 func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 	rd := c.rawNode.Ready()
 	if !raft.IsEmptySnap(rd.Snapshot) {
-		if err := c.storage.ApplySnapshot(rd.Snapshot); err != nil {
-			return fmt.Errorf("raft storage apply snapshot: %w", err)
+		if err := c.applyIncomingSnapshotLocked(rd.Snapshot); err != nil {
+			return err
 		}
-		c.snapshotIndex = rd.Snapshot.Metadata.Index
 	}
 	if !raft.IsEmptyHardState(rd.HardState) {
 		if err := c.storage.SetHardState(rd.HardState); err != nil {
@@ -553,6 +560,25 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		}
 	}
 	c.rawNode.Advance(rd)
+	return nil
+}
+
+func (c *etcdRaftConsensus) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot) error {
+	if err := c.storage.ApplySnapshot(snapshot); err != nil {
+		return fmt.Errorf("raft storage apply snapshot: %w", err)
+	}
+	c.snapshotIndex = snapshot.Metadata.Index
+	if snapshot.Metadata.Index > c.index {
+		c.index = snapshot.Metadata.Index
+	}
+	c.updateReplicaCountLocked()
+	if len(snapshot.Data) == 0 || c.snapshotApplier == nil {
+		return nil
+	}
+	data := append([]byte(nil), snapshot.Data...)
+	if err := c.snapshotApplier.ApplyStateSnapshot(snapshot.Metadata.Index, data); err != nil {
+		return fmt.Errorf("apply raft state snapshot data: %w", err)
+	}
 	return nil
 }
 

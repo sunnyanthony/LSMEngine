@@ -118,6 +118,30 @@ func TestStateSnapshotRestoreRejectsNonEmptyEngine(t *testing.T) {
 	}
 }
 
+func TestStateSnapshotRestoreRejectsMismatchedRaftIndex(t *testing.T) {
+	source, err := New(Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	defer source.Close()
+	if err := source.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	payload, err := source.exportStateSnapshot()
+	if err != nil {
+		t.Fatalf("export snapshot: %v", err)
+	}
+
+	target, err := New(Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new target: %v", err)
+	}
+	defer target.Close()
+	if err := target.applyStateSnapshotToEmptyAt(source.commitLogAppliedIndex+1, payload); err == nil {
+		t.Fatalf("expected mismatched raft index rejection")
+	}
+}
+
 func TestEtcdRaftSnapshotPersistsLSMStatePayloadAfterEngineApply(t *testing.T) {
 	dataDir := t.TempDir()
 	db, err := New(Options{
