@@ -55,7 +55,8 @@ single gateway endpoint. The gateway routes writes to the current raft write
 leader, loads node endpoints from the mounted `peer-urls.yaml`, and uses
 best-effort endpoint fallback for reads. The smoke also verifies
 `lsmctl gateway-status --addr http://127.0.0.1:8090` reports all three backend
-nodes and the current write leader.
+nodes and the current write leader, then checks accepted write-status lookup
+through the same gateway endpoint.
 
 ## Rolling restart smoke
 

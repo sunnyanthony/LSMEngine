@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 
 	"lsmengine/pkg/lsm"
 )
@@ -25,6 +26,7 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 	mux.HandleFunc("/gateway/status", handler.handleGatewayStatus)
 	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/range", handler.handleRange)
+	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
 	mux.HandleFunc("/kv/put", handler.handlePut)
 	mux.HandleFunc("/kv/delete", handler.handleDelete)
 	return mux
@@ -72,6 +74,14 @@ func (h *gatewayHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *gatewayHandler) handleRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.proxyClusterRead(w, r)
+}
+
+func (h *gatewayHandler) handleWriteStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -197,6 +207,11 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 			lastErr = err
 			continue
 		}
+		if isWriteStatusRequest(r) && resp.StatusCode == http.StatusNotFound {
+			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
+			_ = resp.Body.Close()
+			continue
+		}
 		if resp.StatusCode == http.StatusOK || resp.StatusCode < http.StatusInternalServerError {
 			copyResponse(w, resp)
 			return
@@ -212,6 +227,10 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		Code:      "gateway_unavailable",
 		Retryable: true,
 	})
+}
+
+func isWriteStatusRequest(r *http.Request) bool {
+	return r != nil && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/kv/write-status/")
 }
 
 func sortedNodeEndpointIDs(endpoints map[string]string) []string {

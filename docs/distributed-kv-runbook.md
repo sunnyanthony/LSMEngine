@@ -152,13 +152,16 @@ Clients can then use normal non-cluster commands against the gateway:
 ```bash
 go run ./cmd/lsmctl put --addr http://127.0.0.1:8090 --key user:1 --value alice
 go run ./cmd/lsmctl get --addr http://127.0.0.1:8090 --key user:1
+go run ./cmd/lsmctl async-put --addr http://127.0.0.1:8090 --key user:2 --value bob
+go run ./cmd/lsmctl write-status --addr http://127.0.0.1:8090 --request-id <request_id>
 go run ./cmd/lsmctl gateway-status --addr http://127.0.0.1:8090
 ```
 
-The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`, `/healthz`,
-and `/gateway/status`. Writes are route-aware and retry stale leader metadata
-through `server.Gateway`; reads use the same best-effort first-healthy endpoint
-fallback as `lsmctl get/range --cluster`, not a linearizable read protocol.
+The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`,
+`/kv/write-status/{request_id}`, `/healthz`, and `/gateway/status`. Writes are
+route-aware and retry stale leader metadata through `server.Gateway`; accepted
+write status lookups and reads use best-effort endpoint fallback, not a
+linearizable read protocol.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. Use the Compose gateway smoke for a repeatable

@@ -148,6 +148,56 @@ func TestGatewayHandlerGetFallsBackAcrossEndpoints(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerWriteStatusFallsBackOnNotFound(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/write-status/req-1" {
+			http.NotFound(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/write-status/req-1" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{
+			RequestID:   "req-1",
+			Operation:   "put",
+			Consistency: lsm.WriteConsistencyAccepted,
+			State:       lsm.WriteRequestCommitted,
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/write-status/req-1", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out lsm.WriteRequestStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if out.RequestID != "req-1" || out.State != lsm.WriteRequestCommitted {
+		t.Fatalf("unexpected write status: %+v", out)
+	}
+}
+
 func TestGatewayHandlerHealth(t *testing.T) {
 	resolver, err := NewStaticNodeEndpointResolver(map[string]string{"node-a": "http://node-a"})
 	if err != nil {

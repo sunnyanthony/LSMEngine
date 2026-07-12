@@ -98,6 +98,18 @@ get_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$get_output" "found=true"
 require_contains "$get_output" "value=ok"
 
+async_output="$(lsmctl async-put --addr "$GATEWAY_URL" --key gateway-async --value ok)"
+require_contains "$async_output" "state=pending"
+request_id="$(awk -F= '/^request_id=/{print $2; exit}' <<<"$async_output")"
+if [[ -z "$request_id" ]]; then
+  echo "async-put did not return request_id" >&2
+  echo "$async_output" >&2
+  exit 1
+fi
+
+status_output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$request_id")"
+require_contains "$status_output" "state=committed"
+
 delete_output="$(lsmctl delete --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$delete_output" "state=committed"
 
