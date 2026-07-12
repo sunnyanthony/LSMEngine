@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,18 @@ import (
 
 	"lsmengine/pkg/lsm"
 )
+
+type testRaftPeerResolver struct {
+	endpoints map[uint64]string
+}
+
+func (r testRaftPeerResolver) ResolveRaftPeer(_ context.Context, peerID uint64) (string, error) {
+	endpoint, ok := r.endpoints[peerID]
+	if !ok {
+		return "", fmt.Errorf("missing peer %d", peerID)
+	}
+	return endpoint, nil
+}
 
 func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	peerID := lsm.RaftPeerID("node-b")
@@ -36,7 +49,7 @@ func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 		t.Fatalf("new raft http transport: %v", err)
 	}
 
-	err = transport.Send(context.Background(), []lsm.RaftPeerMessage{
+	err = transport.Send(context.Background(), []lsm.CommitLogPeerMessage{
 		{From: lsm.RaftPeerID("node-a"), To: peerID, Term: 4, Type: "MsgApp", Payload: []byte{1, 2, 3}},
 	})
 	if err != nil {
@@ -59,6 +72,39 @@ func TestRaftHTTPTransportPostsMessagesToConfiguredPeer(t *testing.T) {
 	}
 }
 
+func TestRaftHTTPTransportUsesConfiguredPeerResolver(t *testing.T) {
+	peerID := lsm.RaftPeerID("node-b")
+	got := make(chan struct{}, 1)
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != RaftPeerMessagesPath {
+			t.Fatalf("expected path %s, got %s", RaftPeerMessagesPath, r.URL.Path)
+		}
+		got <- struct{}{}
+		writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
+	}))
+	defer peer.Close()
+	transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{
+		PeerResolver: testRaftPeerResolver{
+			endpoints: map[uint64]string{peerID: peer.URL},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new raft http transport: %v", err)
+	}
+
+	err = transport.Send(context.Background(), []lsm.CommitLogPeerMessage{
+		{From: lsm.RaftPeerID("node-a"), To: peerID, Term: 4, Type: "MsgApp"},
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for resolver-backed peer request")
+	}
+}
+
 func TestRaftHTTPTransportRejectsUnknownPeer(t *testing.T) {
 	transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{
 		PeerURLs: map[uint64]string{lsm.RaftPeerID("node-b"): "http://127.0.0.1:1"},
@@ -66,7 +112,7 @@ func TestRaftHTTPTransportRejectsUnknownPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new raft http transport: %v", err)
 	}
-	err = transport.Send(context.Background(), []lsm.RaftPeerMessage{
+	err = transport.Send(context.Background(), []lsm.CommitLogPeerMessage{
 		{From: 1, To: lsm.RaftPeerID("node-c"), Type: "MsgApp"},
 	})
 	if err == nil {

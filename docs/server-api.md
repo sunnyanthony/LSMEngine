@@ -113,6 +113,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `raft.peers` (optional): static peer list used to bootstrap etcd-raft node IDs.
   - `raft.peer_urls` (optional): node-name to server URL map used by `lsmctl serve` to build the HTTP raft peer transport when `commitlog.provider=etcd-raft` and `raft.peers` has more than one node.
   - `raft.join_peer_urls` (optional): node-name to server URL map for future raft joiners. These URLs are added to the HTTP raft transport, but the node names are not part of the initial bootstrap voters.
+  - Server-mode peer endpoint lookup goes through the LSM-owned `RaftPeerResolver` contract. The YAML-backed resolver is static today; automatic service discovery remains a later orchestration layer.
   - `raft.join` (optional): when true, a fresh node skips local raft bootstrap and waits for an existing cluster to add it through raft membership change messages.
     - Multi-peer etcd-raft configs are validated before server startup: `raft.peers` must include the local `node_id`, must not contain empty/duplicate names, `raft.peer_urls` must contain an absolute URL for every configured peer with no unknown peer names, and `raft.join_peer_urls` entries must be absolute URLs for nodes outside the initial peer set.
   - `commitlog.snapshot_policy.applied_entries` (optional): when greater than zero, enables builtin etcd-raft provider-owned raft log snapshots after this many newly applied entries.
