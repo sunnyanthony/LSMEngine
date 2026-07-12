@@ -7,6 +7,7 @@ Start here for the overall architecture and entry points:
 - `refactor.md` (roadmap, boundary audit, backlog)
 
 Component specs:
+- `docs/dependency-boundaries.md`
 - `docs/memtable.md`
 - `docs/sstable.md`
 - `docs/wal.md`
