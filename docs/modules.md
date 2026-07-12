@@ -20,12 +20,12 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - dependency boundary: public peer transport/ingress uses LSM-owned `RaftPeerMessage` envelopes. The builtin etcd-raft adapter encodes/decodes raftpb messages internally, so server/engine callers do not depend on etcd raft protocol structs. This is the same dependency rule as `internal/lsm/iofs`: external libraries must be hidden behind an LSM-owned adapter before they influence public/server APIs.
   - server transport: `pkg/lsm/server/raft_transport.go` provides an async HTTP adapter that posts `RaftPeerMessage` envelopes to peer server endpoints; YAML `raft.peer_urls` maps configured node names to URLs and is converted through `lsm.RaftPeerID`.
   - follower apply: `pkg/lsm/engine/commitlog_apply.go` observes builtin raft committed entries that do not belong to a local pending proposal and applies them to control state or WAL/memtable state.
-  - smoke coverage: `tests/integration/server/lsm_server_etcd_raft_3node_test.go` verifies three-node leader writes replicate to followers through in-process and HTTP peer delivery.
+  - smoke coverage: `tests/integration/server/lsm_server_etcd_raft_3node_test.go` verifies three-node leader writes replicate to followers through in-process and HTTP peer delivery; `tests/integration/server/lsm_server_etcd_raft_multiprocess_test.go` verifies the same path across real `lsmctl serve` processes.
   - error boundary: `internal/lsm/commitlog/errors.go` defines builtin provider errors; `pkg/lsm/engine/commitlog.go` maps them to public LSM errors before server write handlers translate them into retryable HTTP responses and route hints.
   - storage boundary: `internal/lsm/commitlog/raft_storage.go` persists builtin etcd-raft hard state, snapshots, and segmented log entries under `<data>/raft/commitlog-<node-id>/`; provider-owned raft log snapshot/compaction policy stays behind the same provider layer, while full LSM state-machine snapshot transfer and membership catch-up work remain deferred.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress and operational health (`mode/index/term/leader/replicas/write_available/leader_known/health/last_error_*`).
-- `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
+- `pkg/lsm/server/server.go`: monitoring + control APIs + point reads and write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.
   - Also exposes CDC recent-events endpoint (`/cdc/events`).
 - `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, and bounded write attempts).
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.

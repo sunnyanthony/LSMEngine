@@ -15,6 +15,7 @@ import (
 
 	"lsmengine/pkg/lsm"
 	"lsmengine/pkg/lsm/errs"
+	"lsmengine/pkg/lsm/types"
 )
 
 type stubProvider struct{}
@@ -131,6 +132,9 @@ func (p *writeControlStubProvider) Put(key []byte, value []byte) error {
 	return p.write.Put(key, value)
 }
 func (p *writeControlStubProvider) Delete(key []byte) error { return p.write.Delete(key) }
+func (p *writeControlStubProvider) Get(key []byte) (types.Entry, bool) {
+	return p.write.Get(key)
+}
 
 func newWriteStubProvider() *writeStubProvider {
 	return &writeStubProvider{
@@ -159,6 +163,20 @@ func (w *writeStubProvider) Delete(key []byte) error {
 	defer w.mu.Unlock()
 	delete(w.data, string(key))
 	return nil
+}
+
+func (w *writeStubProvider) Get(key []byte) (types.Entry, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	value, ok := w.data[string(key)]
+	if !ok {
+		return types.Entry{}, false
+	}
+	return types.Entry{
+		Key:   append([]byte(nil), key...),
+		Value: append([]byte(nil), value...),
+		Seq:   1,
+	}, true
 }
 
 func (w *writeStubProvider) Value(key string) ([]byte, bool) {
@@ -730,6 +748,73 @@ func TestHandlerPutLocalCommitted(t *testing.T) {
 	}
 	if got, ok := p.Value("a"); !ok || string(got) != "1" {
 		t.Fatalf("expected stored value 1, got %q found=%v", string(got), ok)
+	}
+}
+
+func TestHandlerGetReturnsValue(t *testing.T) {
+	p := newWriteStubProvider()
+	if err := p.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	handler := NewHandler(p)
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64="+base64.StdEncoding.EncodeToString([]byte("a")), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Found       bool   `json:"found"`
+		KeyBase64   string `json:"key_base64"`
+		ValueBase64 string `json:"value_base64"`
+		Seq         uint64 `json:"seq"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Found {
+		t.Fatalf("expected found=true")
+	}
+	if key, err := base64.StdEncoding.DecodeString(out.KeyBase64); err != nil || string(key) != "a" {
+		t.Fatalf("unexpected key %q err=%v", out.KeyBase64, err)
+	}
+	if value, err := base64.StdEncoding.DecodeString(out.ValueBase64); err != nil || string(value) != "1" {
+		t.Fatalf("unexpected value %q err=%v", out.ValueBase64, err)
+	}
+	if out.Seq == 0 {
+		t.Fatalf("expected non-zero seq")
+	}
+}
+
+func TestHandlerGetMissingReturnsNotFound(t *testing.T) {
+	handler := NewHandler(newWriteStubProvider())
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64="+base64.StdEncoding.EncodeToString([]byte("missing")), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Found bool `json:"found"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Found {
+		t.Fatalf("expected found=false")
+	}
+}
+
+func TestHandlerGetInvalidKey(t *testing.T) {
+	handler := NewHandler(newWriteStubProvider())
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=%%%", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
 }
 

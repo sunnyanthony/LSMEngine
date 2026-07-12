@@ -24,6 +24,10 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `Range(start, end, limit) -> stream<entry>`
 
 ### M1 control-plane HTTP
+- `GET /kv/get?key_base64=<base64>`: point read from the local node; returns `200` with `found/key_base64/value_base64/seq` when present and `404` with `found=false` when absent.
+- `POST /kv/put` with `{ "key_base64": "<base64>", "value_base64": "<base64>", "consistency": "accepted|local_committed" }`.
+- `POST /kv/delete` with `{ "key_base64": "<base64>", "consistency": "accepted|local_committed" }`.
+- `GET /kv/write-status/{request_id}`: async write lifecycle state for `accepted` writes.
 - `GET /cluster/status`: node id, cluster id, storage mode, commit log provider, commit-log runtime (`mode/index/term/leader/replicas/write_available/leader_known/health/last_error_*`), raft, shard count, draining, `revision`.
 - `GET /cluster/shards`: shard ids, key ranges, leader and replica roles.
 - `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
@@ -36,7 +40,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - Stage-1 default: `local` (single-node ordered commit, then deterministic local apply).
   - Stage-1 foundation: `etcd-raft` is wired for cluster-of-one propose/commit/apply.
   - Static multi-peer bootstrap can use server-mode HTTP peer delivery with `raft.peer_urls`, or embedded callers can inject `CommitLogOptions.Transport`. Inbound peer-message handling is available via `POST /cluster/raft/messages` and `HandlePeerMessages`. Both use LSM-owned `RaftPeerMessage` envelopes; etcd raftpb payloads remain a builtin provider implementation detail. The builtin provider persists raft hard state, snapshots, and segmented log entries under `<data>/raft/commitlog-<node-id>/`; provider-owned raft log snapshot/compaction can be enabled with `commitlog.snapshot_policy`, but full LSM state-machine snapshot transfer, quorum-backed commits, and membership lifecycle are deferred.
-  - Follower committed-entry apply exists as a foundation: committed entries received without a local pending proposal are applied to local control/data state after the commit-log provider reports them. Three-node smoke tests cover in-process and HTTP peer delivery, but full LSM state-machine snapshot transfer, membership lifecycle, and higher-level service discovery/load balancing remain deferred.
+  - Follower committed-entry apply exists as a foundation: committed entries received without a local pending proposal are applied to local control/data state after the commit-log provider reports them. Three-node smoke tests cover in-process delivery, HTTP peer delivery, and a real multi-process `lsmctl serve` cluster, but full LSM state-machine snapshot transfer, membership lifecycle, and higher-level service discovery/load balancing remain deferred.
   - Write errors are route-aware where possible: known non-local raft leaders return `409` with code `not_leader` plus retryable route hints, while leader-election/apply timeouts return retryable `503` with code `commit_log_unavailable`. `server.Gateway` consumes these hints with bounded retries and route-refresh fallback.
   - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
