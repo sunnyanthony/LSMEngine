@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: lsm-cluster
+  namespace: lsm-cluster
+spec:
+  serviceName: lsm-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lsm-cluster
+  template:
+    metadata:
+      labels:
+        app: lsm-cluster
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: lsm
+          image: lsmengine-server:kind
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              cat > /tmp/server.yaml <<EOF
+              data_dir: "/data"
+              node_id: "${HOSTNAME}"
+              cluster_id: "kind-cluster"
+              storage_mode: "local"
+              control_state_path: "/data/control_state.json"
+              addr: "0.0.0.0:8080"
+              read_timeout: "5s"
+              write_timeout: "5s"
+              write_consistency_default: "local_committed"
+              commitlog:
+                provider: "etcd-raft"
+                snapshot_policy:
+                  applied_entries: 8
+                  retain_entries: 4
+              raft:
+                peers: ["lsm-cluster-0", "lsm-cluster-1", "lsm-cluster-2"]
+                peer_urls:
+                  lsm-cluster-0: "http://lsm-cluster-0.lsm-cluster:8080"
+                  lsm-cluster-1: "http://lsm-cluster-1.lsm-cluster:8080"
+                  lsm-cluster-2: "http://lsm-cluster-2.lsm-cluster:8080"
+              shards:
+                - id: "users"
+                  start_key: "a"
+                  end_key: "z"
+                  replicas: ["lsm-cluster-0", "lsm-cluster-1", "lsm-cluster-2"]
+                  leader: "lsm-cluster-0"
+              EOF
+              exec /usr/local/bin/lsmctl serve --config /tmp/server.yaml
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

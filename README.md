@@ -54,6 +54,7 @@ Internal engine components (subject to change):
 - Build test image (runs verbose tests during build): `docker build -f docker/Dockerfile.test -t lsmengine-test .`
 - Run tests via image (verbose): `docker run --rm lsmengine-test`
 - Run a static three-node server smoke with Docker Compose: `examples/docker-compose-cluster/smoke.sh`
+- Run a static three-node server smoke in kind: `examples/kind-cluster/smoke.sh`
 
 ## Scripts
 - `scripts/docker-test.sh`: default mode runs `go test -v -tags test ./...` inside Docker with mounted module/build caches.
