@@ -38,6 +38,12 @@ The script builds the server image, starts node-a/node-b/node-c, waits for
 `/healthz`, writes with `local_committed`, verifies follower reads and range
 reads, deletes the key, then tears the cluster down.
 
+The Compose server configs use `raft.peer_url_file` mounted at
+`/etc/lsm/peer-urls.yaml` for peer transport. The rolling restart and
+replacement smoke scripts also generate a host-side `lsmctl --config` with a
+`raft.peer_url_file`, so operator commands do not need repeated
+`--node-endpoint` flags in that path.
+
 Keep the cluster running for manual inspection:
 
 ```bash

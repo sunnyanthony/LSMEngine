@@ -14,12 +14,7 @@ commitlog:
     retain_entries: 4
 raft:
   peers: ["node-a", "node-b", "node-c"]
-  peer_urls:
-    node-a: "http://node-a:8080"
-    node-b: "http://node-b:8080"
-    node-c: "http://node-c:8080"
-  join_peer_urls:
-    node-d: "http://node-d:8080"
+  peer_url_file: "/etc/lsm/peer-urls.yaml"
 shards:
   - id: "users"
     start_key: "a"

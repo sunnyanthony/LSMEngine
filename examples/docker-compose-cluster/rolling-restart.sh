@@ -6,6 +6,9 @@ COMPOSE_FILE="$ROOT_DIR/examples/docker-compose-cluster/docker-compose.yml"
 PROJECT="${LSM_COMPOSE_PROJECT:-lsmengine-cluster}"
 KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
+TMP_DIR="$(mktemp -d)"
+LSMCTL_PEER_URL_FILE="$TMP_DIR/peer-urls.yaml"
+LSMCTL_CONFIG="$TMP_DIR/lsmctl.yaml"
 
 services=(node-a node-b node-c)
 
@@ -22,12 +25,25 @@ lsmctl() {
 }
 
 cleanup() {
+  rm -rf "$TMP_DIR"
   if [[ "$KEEP" == "1" ]]; then
     return
   fi
   compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+write_lsmctl_config() {
+  cat >"$LSMCTL_PEER_URL_FILE" <<EOF
+node-a: "$(url_for_service node-a)"
+node-b: "$(url_for_service node-b)"
+node-c: "$(url_for_service node-c)"
+EOF
+  cat >"$LSMCTL_CONFIG" <<EOF
+raft:
+  peer_url_file: "$LSMCTL_PEER_URL_FILE"
+EOF
+}
 
 url_for_service() {
   case "$1" in
@@ -63,11 +79,8 @@ wait_for_cluster() {
   done
 }
 
-node_endpoint_args() {
-  printf '%s\n' \
-    --node-endpoint "node-a=$(url_for_service node-a)" \
-    --node-endpoint "node-b=$(url_for_service node-b)" \
-    --node-endpoint "node-c=$(url_for_service node-c)"
+cluster_config_args() {
+  printf '%s\n' --config "$LSMCTL_CONFIG"
 }
 
 drain_service() {
@@ -75,7 +88,7 @@ drain_service() {
   lsmctl drain-node \
     --node "$service" \
     --operation-id "rolling-drain-$service" \
-    $(node_endpoint_args)
+    $(cluster_config_args)
 }
 
 resume_service() {
@@ -83,7 +96,7 @@ resume_service() {
   lsmctl resume-node \
     --node "$service" \
     --operation-id "rolling-resume-$service" \
-    $(node_endpoint_args)
+    $(cluster_config_args)
 }
 
 put_on_any_live_node() {
@@ -95,7 +108,7 @@ put_on_any_live_node() {
   while (( SECONDS < deadline )); do
     if output="$(lsmctl put \
       --cluster \
-      $(node_endpoint_args) \
+      $(cluster_config_args) \
       --key "$key" \
       --value "$value" 2>&1)" &&
       [[ "$output" == *"state=committed"* ]]; then
@@ -129,6 +142,7 @@ wait_for_value() {
   return 1
 }
 
+write_lsmctl_config
 compose up -d --build
 wait_for_cluster
 
