@@ -11,6 +11,8 @@ It is still a static raft foundation:
 - peer URLs use the headless service DNS names;
 - all three pods are configured as shard replicas with `lsm-cluster-0` as the
   shard leader;
+- each pod mounts a `ReadWriteOnce` PVC at `/data`, so raft state, WAL, SSTables,
+  and control state survive pod replacement;
 - dynamic raft membership, node bootstrap/join, and full state-machine snapshot
   catch-up remain future work.
 
@@ -23,6 +25,16 @@ examples/kind-cluster/smoke.sh
 The script creates or reuses a kind cluster, builds and loads the server image,
 waits for the StatefulSet, and verifies writes/read/range/delete through
 `kubectl exec` using the `lsmctl` binary inside the image.
+
+## Persistent restart smoke
+
+```bash
+examples/kind-cluster/restart-smoke.sh
+```
+
+This uses the same StatefulSet, writes a committed value, deletes each pod one
+at a time, waits for Kubernetes to recreate it with the same PVC, and verifies
+the restarted pod can still read the committed value.
 
 Useful environment overrides:
 
