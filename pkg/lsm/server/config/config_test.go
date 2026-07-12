@@ -29,6 +29,7 @@ raft:
     node-c: "http://127.0.0.1:9092"
   join_peer_urls:
     node-d: "http://127.0.0.1:9093"
+  peer_url_file: "/var/lib/lsm/raft-peers.yaml"
 shards:
   - id: "users-a-m"
     start_key: "a"
@@ -101,6 +102,9 @@ io_async_max_in_flight: 8
 	if cfg.Raft.JoinPeerURLs["node-d"] != "http://127.0.0.1:9093" {
 		t.Fatalf("expected node-d join peer url, got %q", cfg.Raft.JoinPeerURLs["node-d"])
 	}
+	if cfg.Raft.PeerURLFile != "/var/lib/lsm/raft-peers.yaml" {
+		t.Fatalf("expected raft peer url file, got %q", cfg.Raft.PeerURLFile)
+	}
 	if len(cfg.Shards) != 2 {
 		t.Fatalf("expected shard configs, got %d", len(cfg.Shards))
 	}
@@ -165,6 +169,38 @@ func TestValidateEtcdRaftRequiresPeerURLs(t *testing.T) {
 	}
 	if err := Validate(cfg); err == nil {
 		t.Fatalf("expected missing peer url validation error")
+	}
+}
+
+func TestValidateEtcdRaftAllowsPeerURLFile(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers:       []string{"node-a", "node-b", "node-c"},
+			PeerURLFile: "/var/lib/lsm/raft-peers.yaml",
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestValidateEtcdRaftRejectsRelativePeerURLFile(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers:       []string{"node-a", "node-b", "node-c"},
+			PeerURLFile: "raft-peers.yaml",
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected relative peer url file validation error")
 	}
 }
 

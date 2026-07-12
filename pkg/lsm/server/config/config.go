@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ type RaftConfig struct {
 	Peers             []string          `yaml:"peers"`
 	PeerURLs          map[string]string `yaml:"peer_urls"`
 	JoinPeerURLs      map[string]string `yaml:"join_peer_urls"`
+	PeerURLFile       string            `yaml:"peer_url_file"`
 	Join              bool              `yaml:"join"`
 }
 
@@ -100,22 +102,30 @@ func Validate(cfg Config) error {
 	if _, ok := peers[nodeID]; !ok {
 		return fmt.Errorf("raft peers must include local node %q", nodeID)
 	}
-	for peer := range peers {
-		rawURL := strings.TrimSpace(cfg.Raft.PeerURLs[peer])
-		if rawURL == "" {
-			return fmt.Errorf("raft peer_urls missing peer %q", peer)
-		}
-		parsed, err := url.Parse(rawURL)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return fmt.Errorf("raft peer_urls[%q] must be an absolute URL", peer)
+	peerURLFile := strings.TrimSpace(cfg.Raft.PeerURLFile)
+	if peerURLFile != "" && !filepath.IsAbs(peerURLFile) {
+		return fmt.Errorf("raft peer_url_file must be an absolute path")
+	}
+	if peerURLFile == "" {
+		for peer := range peers {
+			rawURL := strings.TrimSpace(cfg.Raft.PeerURLs[peer])
+			if rawURL == "" {
+				return fmt.Errorf("raft peer_urls missing peer %q", peer)
+			}
+			if err := validateAbsoluteURL(rawURL); err != nil {
+				return fmt.Errorf("raft peer_urls[%q] must be an absolute URL", peer)
+			}
 		}
 	}
-	for peer := range cfg.Raft.PeerURLs {
+	for peer, rawURL := range cfg.Raft.PeerURLs {
 		if strings.TrimSpace(peer) == "" {
 			return fmt.Errorf("raft peer_urls contains empty peer name")
 		}
 		if _, ok := peers[peer]; !ok {
 			return fmt.Errorf("raft peer_urls contains unknown peer %q", peer)
+		}
+		if err := validateAbsoluteURL(rawURL); err != nil {
+			return fmt.Errorf("raft peer_urls[%q] must be an absolute URL", peer)
 		}
 	}
 	for peer, rawURL := range cfg.Raft.JoinPeerURLs {
@@ -125,10 +135,17 @@ func Validate(cfg Config) error {
 		if _, ok := peers[peer]; ok {
 			return fmt.Errorf("raft join_peer_urls contains existing peer %q", peer)
 		}
-		parsed, err := url.Parse(strings.TrimSpace(rawURL))
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		if err := validateAbsoluteURL(rawURL); err != nil {
 			return fmt.Errorf("raft join_peer_urls[%q] must be an absolute URL", peer)
 		}
+	}
+	return nil
+}
+
+func validateAbsoluteURL(rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("absolute URL required")
 	}
 	return nil
 }

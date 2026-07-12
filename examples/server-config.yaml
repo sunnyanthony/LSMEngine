@@ -27,6 +27,10 @@ raft:
   # these nodes are not bootstrap voters until raft-add commits.
   # join_peer_urls:
   #   node-d: "http://127.0.0.1:8083"
+  # peer_url_file points at an absolute YAML/JSON node-to-URL map that is
+  # reloaded by the raft HTTP transport resolver. It can provide endpoints for
+  # future joiners without restarting existing nodes.
+  # peer_url_file: "/var/lib/lsm/raft-peers.yaml"
 shards:
   # shards are ordered by key-range routing; keep non-overlapping ranges.
   - id: "users-a-m"

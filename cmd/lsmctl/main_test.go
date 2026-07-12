@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 	serverconfig "lsmengine/pkg/lsm/server/config"
@@ -964,6 +966,46 @@ func TestToCommitLogOptionsBuildsTransportWithJoinPeerURLs(t *testing.T) {
 	}
 	if got == nil || got.Transport == nil {
 		t.Fatalf("expected raft transport")
+	}
+}
+
+func TestToCommitLogOptionsBuildsTransportWithPeerURLFile(t *testing.T) {
+	peerID := lsm.RaftPeerID("node-c")
+	got := make(chan struct{}, 1)
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/raft/messages" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		got <- struct{}{}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"accepted": true})
+	}))
+	defer peer.Close()
+
+	path := t.TempDir() + "/peers.yaml"
+	if err := os.WriteFile(path, []byte("node-c: "+peer.URL+"\n"), 0o644); err != nil {
+		t.Fatalf("write peer url file: %v", err)
+	}
+	opts, err := toCommitLogOptions(
+		serverconfig.CommitLogConfig{Provider: string(lsm.CommitLogProviderEtcdRaft)},
+		serverconfig.RaftConfig{
+			PeerURLFile: path,
+		},
+	)
+	if err != nil {
+		t.Fatalf("to commit log options: %v", err)
+	}
+	if opts == nil || opts.Transport == nil {
+		t.Fatalf("expected raft transport")
+	}
+	if err := opts.Transport.Send(context.Background(), []lsm.RaftPeerMessage{
+		{From: lsm.RaftPeerID("node-a"), To: peerID, Type: "MsgApp"},
+	}); err != nil {
+		t.Fatalf("send peer message: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for peer message")
 	}
 }
 
