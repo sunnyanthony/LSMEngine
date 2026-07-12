@@ -50,6 +50,8 @@ func main() {
 		asyncDeleteCmd(os.Args[2:])
 	case "write-status":
 		writeStatusCmd(os.Args[2:])
+	case "cluster-status":
+		clusterStatusCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -61,7 +63,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|async-put|async-delete|write-status|cluster-status|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -292,6 +294,17 @@ func (f *nodeEndpointFlags) Set(value string) error {
 type clusterWriteOptions struct {
 	Enabled       bool
 	NodeEndpoints map[string]string
+}
+
+type clusterStatusResult struct {
+	Nodes []clusterStatusNodeResult `json:"nodes"`
+}
+
+type clusterStatusNodeResult struct {
+	Node     string             `json:"node"`
+	Endpoint string             `json:"endpoint"`
+	Status   *lsm.ClusterStatus `json:"status,omitempty"`
+	Error    string             `json:"error,omitempty"`
 }
 
 func getCmd(args []string) {
@@ -553,6 +566,35 @@ func writeStatusCmd(args []string) {
 		log.Fatal(err)
 	}
 	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
+func clusterStatusCmd(args []string) {
+	fs := flag.NewFlagSet("cluster-status", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for one server node")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+	if len(endpoints) == 0 {
+		log.Fatal("cluster-status requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	statuses, err := readClusterStatuses(endpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, statuses)
+		return
+	}
+	writeClusterStatuses(os.Stdout, statuses)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -829,6 +871,69 @@ func currentClusterWriteLeader(endpoints map[string]string) (string, string, err
 	return "", "", fmt.Errorf("cluster write leader not available")
 }
 
+func readClusterStatuses(endpoints map[string]string) (clusterStatusResult, error) {
+	nodes := sortedEndpointNodes(endpoints)
+	result := clusterStatusResult{
+		Nodes: make([]clusterStatusNodeResult, 0, len(nodes)),
+	}
+	successes := 0
+	var lastErr error
+	for _, nodeID := range nodes {
+		endpoint := endpoints[nodeID]
+		var status lsm.ClusterStatus
+		err := getJSON(endpoint+"/cluster/status", &status)
+		node := clusterStatusNodeResult{
+			Node:     nodeID,
+			Endpoint: endpoint,
+		}
+		if err != nil {
+			node.Error = err.Error()
+			lastErr = err
+		} else {
+			successes++
+			if strings.TrimSpace(status.NodeID) != "" {
+				node.Node = status.NodeID
+			}
+			node.Status = &status
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	if successes == 0 && lastErr != nil {
+		return result, lastErr
+	}
+	return result, nil
+}
+
+func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
+	for _, node := range result.Nodes {
+		if node.Error != "" {
+			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, node.Error)
+			continue
+		}
+		status := node.Status
+		if status == nil {
+			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, "missing status")
+			continue
+		}
+		runtime := status.CommitLogRuntime
+		fmt.Fprintf(
+			w,
+			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
+			status.NodeID,
+			node.Endpoint,
+			runtime.Health,
+			runtime.Leader,
+			runtime.WriteAvailable,
+			runtime.LeaderKnown,
+			runtime.Term,
+			runtime.Index,
+			status.Revision,
+			status.ShardCount,
+			status.Draining,
+		)
+	}
+}
+
 func alignShardLeader(endpoint string, key []byte, target string) error {
 	shard, ok, err := shardForKey(endpoint, key)
 	if err != nil || !ok {
@@ -1084,6 +1189,21 @@ func clusterWriteOptionsFromConfig(
 	if !enabled {
 		return clusterWriteOptions{}, nil
 	}
+	endpoints := clusterNodeEndpointsFromConfig(cfg, addr, overrides)
+	if len(endpoints) == 0 {
+		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls in config, --addr, or --node-endpoint")
+	}
+	return clusterWriteOptions{
+		Enabled:       true,
+		NodeEndpoints: endpoints,
+	}, nil
+}
+
+func clusterNodeEndpointsFromConfig(
+	cfg serverconfig.Config,
+	addr string,
+	overrides nodeEndpointFlags,
+) map[string]string {
 	endpoints := make(map[string]string)
 	for nodeID, endpoint := range cfg.Raft.PeerURLs {
 		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
@@ -1095,19 +1215,19 @@ func clusterWriteOptionsFromConfig(
 			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
 		}
 	}
-	if strings.TrimSpace(cfg.NodeID) != "" && strings.TrimSpace(addr) != "" {
-		endpoints[strings.TrimSpace(cfg.NodeID)] = normalizeHTTPBaseURL(addr)
+	if strings.TrimSpace(addr) != "" {
+		nodeID := strings.TrimSpace(cfg.NodeID)
+		if nodeID == "" {
+			nodeID = "addr"
+		}
+		endpoints[nodeID] = normalizeHTTPBaseURL(addr)
 	}
 	for nodeID, endpoint := range overrides {
-		endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
+			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+		}
 	}
-	if len(endpoints) == 0 {
-		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls in config or --node-endpoint")
-	}
-	return clusterWriteOptions{
-		Enabled:       true,
-		NodeEndpoints: endpoints,
-	}, nil
+	return endpoints
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {

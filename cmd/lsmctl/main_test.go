@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -101,6 +103,97 @@ func TestClusterWriteOptionsFromConfigMergesPeerURLsAndOverrides(t *testing.T) {
 	}
 	if got := opts.NodeEndpoints["node-b"]; got != "http://127.0.0.1:8081" {
 		t.Fatalf("expected explicit override for node-b, got %q", got)
+	}
+}
+
+func TestClusterNodeEndpointsFromConfigUsesAddrFallback(t *testing.T) {
+	got := clusterNodeEndpointsFromConfig(serverconfig.Config{}, "127.0.0.1:8080", nil)
+	if got["addr"] != "http://127.0.0.1:8080" {
+		t.Fatalf("expected addr fallback endpoint, got %+v", got)
+	}
+}
+
+func TestReadClusterStatusesRecordsPartialFailures(t *testing.T) {
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+			NodeID:     "node-b",
+			Revision:   7,
+			ShardCount: 2,
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:         "ready",
+				Leader:         true,
+				LeaderKnown:    true,
+				WriteAvailable: true,
+				Term:           3,
+				Index:          9,
+			},
+		})
+	}))
+	defer okServer.Close()
+
+	downServer := httptest.NewServer(http.NotFoundHandler())
+	downURL := downServer.URL
+	downServer.Close()
+
+	got, err := readClusterStatuses(map[string]string{
+		"node-a": downURL,
+		"node-b": okServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("read cluster statuses: %v", err)
+	}
+	if len(got.Nodes) != 2 {
+		t.Fatalf("expected two nodes, got %+v", got)
+	}
+	if got.Nodes[0].Node != "node-a" || got.Nodes[0].Error == "" {
+		t.Fatalf("expected node-a error, got %+v", got.Nodes[0])
+	}
+	if got.Nodes[1].Node != "node-b" || got.Nodes[1].Status == nil {
+		t.Fatalf("expected node-b status, got %+v", got.Nodes[1])
+	}
+	if !got.Nodes[1].Status.CommitLogRuntime.WriteAvailable {
+		t.Fatalf("expected node-b write availability")
+	}
+}
+
+func TestWriteClusterStatuses(t *testing.T) {
+	var buf bytes.Buffer
+	writeClusterStatuses(&buf, clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID:     "node-a",
+					Revision:   4,
+					ShardCount: 1,
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+						Term:           2,
+						Index:          11,
+					},
+				},
+			},
+		},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"node=node-a",
+		"ok=true",
+		"health=ready",
+		"write_available=true",
+		"term=2",
+		"index=11",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
 	}
 }
 
