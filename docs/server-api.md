@@ -91,6 +91,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
 - `lsmctl put/delete --cluster --node-endpoint node-a=http://...` performs a cluster-aware remote write: it discovers the current commit-log write leader from `/cluster/status`, transfers shard leadership to that node when needed, and writes through that node.
+- `lsmctl cluster-status --node-endpoint node-a=http://... --node-endpoint node-b=http://...` polls `/cluster/status` across configured endpoints and prints health, write availability, leader state, term/index, revision, shard count, and per-node errors.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.
