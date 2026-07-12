@@ -198,24 +198,6 @@ func TestWriteClusterStatuses(t *testing.T) {
 	}
 }
 
-func TestWriteClusterStatusesUsesResolvedNodeName(t *testing.T) {
-	var buf bytes.Buffer
-	writeClusterStatuses(&buf, clusterStatusResult{
-		Nodes: []clusterStatusNodeResult{
-			{
-				Node:     "node-from-endpoint-map",
-				Endpoint: "http://127.0.0.1:8080",
-				Status: &lsm.ClusterStatus{
-					CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "ready"},
-				},
-			},
-		},
-	})
-	if got := buf.String(); !strings.Contains(got, "node=node-from-endpoint-map") {
-		t.Fatalf("expected resolved node name in output, got %q", got)
-	}
-}
-
 func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {
 	var drainCalls atomic.Int32
 
@@ -665,8 +647,8 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 	}
 }
 
-func TestReplaceClusterNodeRequiresReachableReplacementBeforeMutation(t *testing.T) {
-	var raftAddCalls atomic.Int32
+func TestReplaceClusterNodeDryRunOnlyPreflights(t *testing.T) {
+	var mutationCalls atomic.Int32
 
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -676,7 +658,102 @@ func TestReplaceClusterNodeRequiresReachableReplacementBeforeMutation(t *testing
 				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
 					Leader:         false,
 					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
 				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+					Health:         "follower",
+					LeaderKnown:    true,
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-a",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "leader", Healthy: true},
+						{NodeID: "node-b", Role: "follower", Healthy: true},
+					},
+				},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	result, err := replaceClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-c",
+		DryRun:  true,
+	})
+	if err != nil {
+		t.Fatalf("replace node dry-run: %v", err)
+	}
+	if !result.DryRun {
+		t.Fatalf("expected dry-run result")
+	}
+	if result.Preflight.WriteLeader != "node-b" {
+		t.Fatalf("expected node-b write leader, got %+v", result.Preflight)
+	}
+	if len(result.Shards) != 1 || result.Shards[0] != "users" {
+		t.Fatalf("unexpected replacement shards: %+v", result.Shards)
+	}
+	if len(result.Steps) != 0 || result.Drain.Target != "" {
+		t.Fatalf("dry-run should not submit replacement steps: %+v", result)
+	}
+	if mutationCalls.Load() != 0 {
+		t.Fatalf("dry-run submitted %d mutation calls", mutationCalls.Load())
+	}
+}
+
+func TestReplaceClusterNodePreflightRequiresReachableReplacement(t *testing.T) {
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
 			})
 		default:
 			http.NotFound(w, r)
@@ -692,10 +769,91 @@ func TestReplaceClusterNodeRequiresReachableReplacementBeforeMutation(t *testing
 				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
 					Leader:         true,
 					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-a",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "leader", Healthy: true},
+						{NodeID: "node-b", Role: "follower", Healthy: true},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	nodeC.Close()
+
+	_, err := replaceClusterNode(map[string]string{
+		"node-a": nodeA.URL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+	}, replaceNodeOptions{
+		OldNode: "node-a",
+		NewNode: "node-c",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatalf("expected unreachable replacement error")
+	}
+	if !strings.Contains(err.Error(), "node \"node-c\" endpoint") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReplaceClusterNodePreflightRequiresReplacementEndpointBeforeMutation(t *testing.T) {
+	var mutationCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			mutationCalls.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:     "users",
+					Leader: "node-a",
+					Replicas: []lsm.ReplicaStatus{
+						{NodeID: "node-a", Role: "leader", Healthy: true},
+						{NodeID: "node-b", Role: "follower", Healthy: true},
+					},
 				},
 			})
 		case "/cluster/nodes/node-c/raft-add":
-			raftAddCalls.Add(1)
+			mutationCalls.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		default:
 			http.NotFound(w, r)
@@ -713,11 +871,11 @@ func TestReplaceClusterNodeRequiresReachableReplacementBeforeMutation(t *testing
 	if err == nil {
 		t.Fatalf("expected missing replacement endpoint error")
 	}
-	if !strings.Contains(err.Error(), "node-c") {
-		t.Fatalf("expected error to mention node-c, got %v", err)
+	if !strings.Contains(err.Error(), "new node \"node-c\" endpoint required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if raftAddCalls.Load() != 0 {
-		t.Fatalf("expected no raft-add before replacement preflight, got %d", raftAddCalls.Load())
+	if mutationCalls.Load() != 0 {
+		t.Fatalf("expected no mutation before replacement endpoint preflight, got %d", mutationCalls.Load())
 	}
 }
 

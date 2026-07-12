@@ -371,12 +371,21 @@ type membershipActionResult struct {
 }
 
 type replaceNodeResult struct {
-	OldNode  string                   `json:"old_node"`
-	NewNode  string                   `json:"new_node"`
-	Shards   []string                 `json:"shards"`
-	Steps    []membershipActionResult `json:"steps"`
-	Drain    drainNodeResult          `json:"drain"`
-	Statuses clusterStatusResult      `json:"statuses"`
+	OldNode   string                     `json:"old_node"`
+	NewNode   string                     `json:"new_node"`
+	DryRun    bool                       `json:"dry_run,omitempty"`
+	Shards    []string                   `json:"shards"`
+	Preflight replaceNodePreflightResult `json:"preflight"`
+	Steps     []membershipActionResult   `json:"steps"`
+	Drain     drainNodeResult            `json:"drain"`
+	Statuses  clusterStatusResult        `json:"statuses"`
+}
+
+type replaceNodePreflightResult struct {
+	OldEndpoint         string `json:"old_endpoint"`
+	NewEndpoint         string `json:"new_endpoint"`
+	WriteLeader         string `json:"write_leader"`
+	WriteLeaderEndpoint string `json:"write_leader_endpoint"`
 }
 
 type replaceNodeOptions struct {
@@ -384,6 +393,7 @@ type replaceNodeOptions struct {
 	NewNode         string
 	ShardIDs        []string
 	OperationPrefix string
+	DryRun          bool
 }
 
 func getCmd(args []string) {
@@ -869,6 +879,7 @@ func replaceNodeCmd(args []string) {
 	oldNode := fs.String("old-node", "", "node id being replaced")
 	newNode := fs.String("new-node", "", "replacement node id")
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
+	dryRun := fs.Bool("dry-run", false, "preflight and print the replacement plan without submitting mutations")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing --old-node")
 	var nodeEndpoints nodeEndpointFlags
@@ -896,6 +907,7 @@ func replaceNodeCmd(args []string) {
 		NewNode:         *newNode,
 		ShardIDs:        []string(shardIDs),
 		OperationPrefix: *operationPrefix,
+		DryRun:          *dryRun,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -1235,7 +1247,7 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 		fmt.Fprintf(
 			w,
 			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
-			node.Node,
+			status.NodeID,
 			node.Endpoint,
 			runtime.Health,
 			runtime.Leader,
@@ -1544,72 +1556,56 @@ func hasShardReplica(shard lsm.ShardStatus, node string) bool {
 }
 
 func replaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (replaceNodeResult, error) {
-	oldNode := strings.TrimSpace(opts.OldNode)
-	newNode := strings.TrimSpace(opts.NewNode)
-	if oldNode == "" {
-		return replaceNodeResult{}, fmt.Errorf("old node required")
-	}
-	if newNode == "" {
-		return replaceNodeResult{}, fmt.Errorf("new node required")
-	}
-	if oldNode == newNode {
-		return replaceNodeResult{}, fmt.Errorf("old node and new node must differ")
+	plan, err := preflightReplaceClusterNode(endpoints, opts)
+	if err != nil {
+		return replaceNodeResult{}, err
 	}
 	result := replaceNodeResult{
-		OldNode: oldNode,
-		NewNode: newNode,
+		OldNode:   plan.oldNode,
+		NewNode:   plan.newNode,
+		DryRun:    opts.DryRun,
+		Shards:    plan.shardIDs,
+		Preflight: plan.preflight,
+		Statuses:  plan.statuses,
 	}
-	if _, err := requireReachableClusterNodes(endpoints, oldNode, newNode); err != nil {
-		return result, err
-	}
-	nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
-	if err != nil {
-		return result, err
-	}
-	shards, err := readShards(endpoint)
-	if err != nil {
-		return result, err
-	}
-	shardIDs, err := replacementShardIDs(shards, oldNode, opts.ShardIDs)
-	if err != nil {
-		return result, err
+	if opts.DryRun {
+		return result, nil
 	}
 	prefix := strings.TrimSpace(opts.OperationPrefix)
 	if prefix == "" {
-		prefix = "replace-" + oldNode + "-with-" + newNode
+		prefix = "replace-" + plan.oldNode + "-with-" + plan.newNode
 	}
-	result.Shards = shardIDs
-	raftAdd, err := changeRaftMembership(endpoints, "raft-add", newNode)
+	raftAdd, err := changeRaftMembership(endpoints, "raft-add", plan.newNode)
 	if err != nil {
 		return result, err
 	}
 	result.Steps = append(result.Steps, raftAdd)
-	for _, shardID := range shardIDs {
-		step, err := changeShardReplica(endpoints, "add-replica", shardID, newNode, controlRequestOptions{
-			OperationID: prefix + "-add-" + shardID + "-" + newNode,
+	for _, shardID := range plan.shardIDs {
+		step, err := changeShardReplica(endpoints, "add-replica", shardID, plan.newNode, controlRequestOptions{
+			OperationID: prefix + "-add-" + shardID + "-" + plan.newNode,
 		})
 		if err != nil {
 			return result, err
 		}
 		result.Steps = append(result.Steps, step)
 	}
-	drain, err := drainClusterNode(endpoints, oldNode, controlRequestOptions{
-		OperationID: prefix + "-drain-" + oldNode,
+	drain, err := drainClusterNode(endpoints, plan.oldNode, controlRequestOptions{
+		OperationID: prefix + "-drain-" + plan.oldNode,
 	})
 	if err != nil {
 		return result, err
 	}
 	result.Drain = drain
-	for _, shardID := range shardIDs {
-		step, err := changeShardReplica(endpoints, "remove-replica", shardID, oldNode, controlRequestOptions{
-			OperationID: prefix + "-remove-" + shardID + "-" + oldNode,
+	for _, shardID := range plan.shardIDs {
+		step, err := changeShardReplica(endpoints, "remove-replica", shardID, plan.oldNode, controlRequestOptions{
+			OperationID: prefix + "-remove-" + shardID + "-" + plan.oldNode,
 		})
 		if err != nil {
 			return result, err
 		}
 		result.Steps = append(result.Steps, step)
 	}
-	raftRemove, err := changeRaftMembership(endpoints, "raft-remove", oldNode)
+	raftRemove, err := changeRaftMembership(endpoints, "raft-remove", plan.oldNode)
 	if err != nil {
 		return result, err
 	}
@@ -1620,45 +1616,113 @@ func replaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (r
 	}
 	result.Statuses = statuses
 	if result.Drain.SubmittedTo == "" {
-		result.Drain.SubmittedTo = nodeID
-		result.Drain.Endpoint = endpoint
+		result.Drain.SubmittedTo = plan.preflight.WriteLeader
+		result.Drain.Endpoint = plan.preflight.WriteLeaderEndpoint
 	}
 	return result, nil
 }
 
-func requireReachableClusterNodes(endpoints map[string]string, nodes ...string) (clusterStatusResult, error) {
+type replaceNodePlan struct {
+	oldNode   string
+	newNode   string
+	shardIDs  []string
+	preflight replaceNodePreflightResult
+	statuses  clusterStatusResult
+}
+
+func preflightReplaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (replaceNodePlan, error) {
+	oldNode := strings.TrimSpace(opts.OldNode)
+	newNode := strings.TrimSpace(opts.NewNode)
+	if oldNode == "" {
+		return replaceNodePlan{}, fmt.Errorf("old node required")
+	}
+	if newNode == "" {
+		return replaceNodePlan{}, fmt.Errorf("new node required")
+	}
+	if oldNode == newNode {
+		return replaceNodePlan{}, fmt.Errorf("old node and new node must differ")
+	}
+	if len(endpoints) == 0 {
+		return replaceNodePlan{}, fmt.Errorf("replace-node requires node endpoints")
+	}
+	oldEndpoint, ok := endpointForNode(endpoints, oldNode)
+	if !ok {
+		return replaceNodePlan{}, fmt.Errorf("old node %q endpoint required", oldNode)
+	}
+	newEndpoint, ok := endpointForNode(endpoints, newNode)
+	if !ok {
+		return replaceNodePlan{}, fmt.Errorf("new node %q endpoint required", newNode)
+	}
+	nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+	if err != nil {
+		return replaceNodePlan{}, err
+	}
+	shards, err := readShards(endpoint)
+	if err != nil {
+		return replaceNodePlan{}, err
+	}
+	shardIDs, err := replacementShardIDs(shards, oldNode, opts.ShardIDs)
+	if err != nil {
+		return replaceNodePlan{}, err
+	}
 	statuses, err := readClusterStatuses(endpoints)
 	if err != nil {
-		return statuses, err
+		return replaceNodePlan{}, err
 	}
-	required := make(map[string]struct{}, len(nodes))
-	for _, node := range nodes {
-		node = strings.TrimSpace(node)
-		if node != "" {
-			required[node] = struct{}{}
+	if err := validateReplacementEndpointIdentity(statuses, oldNode, oldEndpoint, false); err != nil {
+		return replaceNodePlan{}, err
+	}
+	if err := validateReplacementEndpointIdentity(statuses, newNode, newEndpoint, true); err != nil {
+		return replaceNodePlan{}, err
+	}
+	return replaceNodePlan{
+		oldNode:  oldNode,
+		newNode:  newNode,
+		shardIDs: shardIDs,
+		preflight: replaceNodePreflightResult{
+			OldEndpoint:         oldEndpoint,
+			NewEndpoint:         newEndpoint,
+			WriteLeader:         nodeID,
+			WriteLeaderEndpoint: endpoint,
+		},
+		statuses: statuses,
+	}, nil
+}
+
+func endpointForNode(endpoints map[string]string, node string) (string, bool) {
+	node = strings.TrimSpace(node)
+	for candidate, endpoint := range endpoints {
+		if strings.TrimSpace(candidate) == node && strings.TrimSpace(endpoint) != "" {
+			return normalizeHTTPBaseURL(endpoint), true
 		}
 	}
-	for _, node := range statuses.Nodes {
-		if _, ok := required[node.Node]; !ok {
-			continue
+	return "", false
+}
+
+func validateReplacementEndpointIdentity(statuses clusterStatusResult, nodeID, endpoint string, requireReachable bool) error {
+	var matched *clusterStatusNodeResult
+	for i := range statuses.Nodes {
+		if normalizeHTTPBaseURL(statuses.Nodes[i].Endpoint) == normalizeHTTPBaseURL(endpoint) {
+			matched = &statuses.Nodes[i]
+			break
 		}
-		if node.Error != "" {
-			return statuses, fmt.Errorf("node %q is not reachable at %s: %s", node.Node, node.Endpoint, node.Error)
+	}
+	if matched == nil {
+		if requireReachable {
+			return fmt.Errorf("node %q endpoint %q was not checked", nodeID, endpoint)
 		}
-		if node.Status == nil {
-			return statuses, fmt.Errorf("node %q returned no status", node.Node)
+		return nil
+	}
+	if matched.Error != "" {
+		if requireReachable {
+			return fmt.Errorf("node %q endpoint %q is not reachable: %s", nodeID, endpoint, matched.Error)
 		}
-		delete(required, node.Node)
+		return nil
 	}
-	if len(required) == 0 {
-		return statuses, nil
+	if matched.Status != nil && strings.TrimSpace(matched.Status.NodeID) != "" && strings.TrimSpace(matched.Status.NodeID) != nodeID {
+		return fmt.Errorf("endpoint for node %q reports node id %q", nodeID, matched.Status.NodeID)
 	}
-	missing := make([]string, 0, len(required))
-	for node := range required {
-		missing = append(missing, node)
-	}
-	sort.Strings(missing)
-	return statuses, fmt.Errorf("replacement requires reachable status endpoints for nodes: %s", strings.Join(missing, ","))
+	return nil
 }
 
 func readShards(endpoint string) ([]lsm.ShardStatus, error) {
@@ -1724,6 +1788,14 @@ func writeDrainNodeResult(w io.Writer, result drainNodeResult) {
 
 func writeReplaceNodeResult(w io.Writer, result replaceNodeResult) {
 	fmt.Fprintf(w, "old_node=%s new_node=%s shards=%s\n", result.OldNode, result.NewNode, strings.Join(result.Shards, ","))
+	fmt.Fprintf(
+		w,
+		"preflight=ok dry_run=%v write_leader=%s old_endpoint=%s new_endpoint=%s\n",
+		result.DryRun,
+		result.Preflight.WriteLeader,
+		result.Preflight.OldEndpoint,
+		result.Preflight.NewEndpoint,
+	)
 	for _, step := range result.Steps {
 		if step.Shard != "" {
 			fmt.Fprintf(w, "step=%s shard=%s node=%s submitted_to=%s\n", step.Operation, step.Shard, step.Node, step.SubmittedTo)

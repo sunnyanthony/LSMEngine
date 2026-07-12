@@ -183,16 +183,28 @@ Manual replacement workflow:
 go run ./cmd/lsmctl replace-node \
   --old-node node-a \
   --new-node node-d \
+  --dry-run \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --node-endpoint node-d=http://127.0.0.1:8083
+
+go run ./cmd/lsmctl replace-node \
+  --old-node node-a \
+  --new-node node-d \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
   --node-endpoint node-c=http://127.0.0.1:8082 \
   --node-endpoint node-d=http://127.0.0.1:8083
 ```
 
-The command discovers shards that contain `--old-node`, adds `--new-node` as a
-raft voter, adds it as a shard replica for those shards, drains the old node,
-removes the old shard replicas, and removes the old raft voter. Use repeated
-`--shard` flags to constrain the replacement to specific shards.
+The dry run checks endpoint wiring, discovers the current commit-log write
+leader, verifies the replacement endpoint reports the expected node id, and
+prints the shard replacement plan without submitting mutations. The real command
+uses the same preflight before it adds `--new-node` as a raft voter, adds it as a
+shard replica for those shards, drains the old node, removes the old shard
+replicas, and removes the old raft voter. Use repeated `--shard` flags to
+constrain the replacement to specific shards.
 
 Use the Compose replacement smoke for a repeatable local check:
 
@@ -201,9 +213,9 @@ examples/docker-compose-cluster/replace-node-smoke.sh
 ```
 
 The script starts the static three-node cluster, starts node-d as a join-mode
-replacement service, runs `lsmctl replace-node --old-node node-a --new-node
-node-d`, stops node-a, and verifies node-b/node-c/node-d can still commit and
-read data.
+replacement service, runs `lsmctl replace-node --dry-run`, runs the real
+`lsmctl replace-node --old-node node-a --new-node node-d`, stops node-a, and
+verifies node-b/node-c/node-d can still commit and read data.
 
 ## Failure Expectations
 

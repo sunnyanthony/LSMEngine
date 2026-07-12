@@ -126,6 +126,18 @@ done
 compose --profile replacement up -d --build node-d
 wait_for_health "$(url_for_service node-d)"
 
+dry_run_output="$(lsmctl replace-node \
+  --old-node node-a \
+  --new-node node-d \
+  --operation-prefix compose-replace-node-a-node-d \
+  --dry-run \
+  $(node_endpoint_args) 2>&1)"
+require_contains "$dry_run_output" "preflight=ok"
+require_contains "$dry_run_output" "dry_run=true"
+require_contains "$dry_run_output" "write_leader="
+require_contains "$dry_run_output" "old_endpoint=http://127.0.0.1:8080"
+require_contains "$dry_run_output" "new_endpoint=http://127.0.0.1:8083"
+
 replace_output="$(lsmctl replace-node \
   --old-node node-a \
   --new-node node-d \
