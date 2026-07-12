@@ -73,10 +73,21 @@ go run ./cmd/lsmctl range --addr http://127.0.0.1:8082 --start user: --end user~
 go run ./cmd/lsmctl delete --addr http://127.0.0.1:8080 --key user:1
 ```
 
-If the command is sent to a follower, the server may return a retryable
-`not_leader` route hint. `server.Gateway` consumes those hints for embedded
-clients; direct CLI users should retry against the current leader shown by
-`/cluster/status`.
+For cluster-aware writes, provide the node endpoint map:
+
+```bash
+go run ./cmd/lsmctl put --cluster \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --key user:1 --value alice
+```
+
+`--cluster` polls the configured node endpoints, finds the current
+`commit_log_runtime.write_available` node, transfers shard leadership to that
+node if needed, and then sends the write there. Without `--cluster`, direct CLI
+users should retry against the current leader shown by `/cluster/status` if a
+write is sent to a follower.
 
 ## Rolling Restart Check
 
