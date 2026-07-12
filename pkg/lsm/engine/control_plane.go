@@ -652,6 +652,11 @@ func (c *controlPlane) applyControlMutation(
 	if errors.Is(err, errControlNoop) {
 		return nil
 	}
+	if err == nil {
+		if observer, ok := c.consensus.(commitLogIndexObserver); ok {
+			observer.ObserveCommittedIndex(entry.Commit.Index)
+		}
+	}
 	return err
 }
 

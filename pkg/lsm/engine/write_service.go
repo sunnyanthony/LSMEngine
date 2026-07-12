@@ -106,8 +106,12 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 
 func (s *writeService) applyCommittedData(entry dataCommittedEntry) (uint64, error) {
 	s.l.commitApplyMu.Lock()
-	defer s.l.commitApplyMu.Unlock()
-	return s.applyCommittedDataLocked(entry)
+	seq, err := s.applyCommittedDataLocked(entry)
+	s.l.commitApplyMu.Unlock()
+	if err == nil {
+		s.l.observeCommitLogAppliedIndex(entry.Commit.Index)
+	}
+	return seq, err
 }
 
 func (s *writeService) applyCommittedDataLocked(entry dataCommittedEntry) (uint64, error) {
