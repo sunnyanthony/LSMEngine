@@ -6,3 +6,8 @@ import "lsmengine/pkg/lsm/types"
 type ReadProvider interface {
 	Get(key []byte) (types.Entry, bool)
 }
+
+// RangeProvider exposes bounded snapshot range scans to external transports.
+type RangeProvider interface {
+	Snapshot() *Snapshot
+}

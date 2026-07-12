@@ -171,6 +171,48 @@ func TestReadKVRemoteNotFound(t *testing.T) {
 	}
 }
 
+func TestReadKVRangeRemote(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/range" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("start_key_base64"); got != base64.StdEncoding.EncodeToString([]byte("a")) {
+			t.Fatalf("unexpected start query %q", got)
+		}
+		if got := r.URL.Query().Get("end_key_base64"); got != base64.StdEncoding.EncodeToString([]byte("z")) {
+			t.Fatalf("unexpected end query %q", got)
+		}
+		if got := r.URL.Query().Get("limit"); got != "2" {
+			t.Fatalf("unexpected limit query %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(kvRangeResult{
+			Entries: []kvRangeEntry{
+				{
+					KeyBase64:   base64.StdEncoding.EncodeToString([]byte("a")),
+					ValueBase64: base64.StdEncoding.EncodeToString([]byte("1")),
+					Seq:         1,
+				},
+			},
+			Limit: 2,
+		})
+	}))
+	defer server.Close()
+
+	got, err := readKVRange(server.URL, "", []byte("a"), []byte("z"), 2)
+	if err != nil {
+		t.Fatalf("read range: %v", err)
+	}
+	if len(got.Entries) != 1 || got.Limit != 2 {
+		t.Fatalf("unexpected range result: %+v", got)
+	}
+}
+
+func TestReadKVRangeRejectsInvalidLimit(t *testing.T) {
+	if _, err := readKVRange("http://example.test", "", nil, nil, 0); err == nil {
+		t.Fatalf("expected limit error")
+	}
+}
+
 func TestWriteKVPutRemote(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/kv/put" {

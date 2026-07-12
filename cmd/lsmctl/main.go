@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,8 @@ func main() {
 		serveCmd(os.Args[2:])
 	case "get":
 		getCmd(os.Args[2:])
+	case "range":
+		rangeCmd(os.Args[2:])
 	case "put":
 		putCmd(os.Args[2:])
 	case "delete":
@@ -52,7 +55,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|put|delete|write-status|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|range|put|delete|write-status|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -218,6 +221,19 @@ type kvGetResult struct {
 	Seq         uint64 `json:"seq"`
 }
 
+type kvRangeResult struct {
+	Entries   []kvRangeEntry `json:"entries"`
+	Limit     int            `json:"limit"`
+	Truncated bool           `json:"truncated"`
+}
+
+type kvRangeEntry struct {
+	KeyBase64   string `json:"key_base64"`
+	ValueBase64 string `json:"value_base64"`
+	Tombstone   bool   `json:"tombstone"`
+	Seq         uint64 `json:"seq"`
+}
+
 type kvWriteRequest struct {
 	KeyBase64   string               `json:"key_base64"`
 	ValueBase64 string               `json:"value_base64,omitempty"`
@@ -265,6 +281,46 @@ func getCmd(args []string) {
 	fmt.Printf("found=true\n")
 	fmt.Printf("value=%s\n", string(value))
 	fmt.Printf("seq=%d\n", result.Seq)
+}
+
+func rangeCmd(args []string) {
+	fs := flag.NewFlagSet("range", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	start := fs.String("start", "", "start key as UTF-8 text")
+	startBase64 := fs.String("start-base64", "", "start key as base64")
+	end := fs.String("end", "", "end key as UTF-8 text")
+	endBase64 := fs.String("end-base64", "", "end key as base64")
+	limit := fs.Int("limit", 100, "maximum entries to return")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	startBytes, err := parseOptionalBytesFlag("start", *start, *startBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	endBytes, err := parseOptionalBytesFlag("end", *end, *endBase64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err := readKVRange(*addr, *dataDir, startBytes, endBytes, *limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeKVRange(os.Stdout, result)
 }
 
 func putCmd(args []string) {
@@ -440,6 +496,62 @@ func readKV(addr, dataDir string, key []byte) (kvGetResult, error) {
 	}, nil
 }
 
+func readKVRange(addr, dataDir string, start []byte, end []byte, limit int) (kvRangeResult, error) {
+	if limit <= 0 {
+		return kvRangeResult{}, fmt.Errorf("limit must be positive")
+	}
+	if addr != "" {
+		query := url.Values{}
+		if start != nil {
+			query.Set("start_key_base64", base64.StdEncoding.EncodeToString(start))
+		}
+		if end != nil {
+			query.Set("end_key_base64", base64.StdEncoding.EncodeToString(end))
+		}
+		query.Set("limit", strconv.Itoa(limit))
+		var result kvRangeResult
+		err := getJSON(normalizeHTTPBaseURL(addr)+"/kv/range?"+query.Encode(), &result)
+		if err != nil {
+			return kvRangeResult{}, err
+		}
+		return result, nil
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return kvRangeResult{}, err
+	}
+	defer store.Close()
+	snap := store.Snapshot()
+	if snap == nil {
+		return kvRangeResult{}, fmt.Errorf("snapshot unavailable")
+	}
+	defer snap.Close()
+	iter := snap.Range(start, end)
+	entries := make([]kvRangeEntry, 0, limit)
+	truncated := false
+	for iter.Next() {
+		entry := iter.Entry()
+		if len(entries) >= limit {
+			truncated = true
+			break
+		}
+		entries = append(entries, kvRangeEntry{
+			KeyBase64:   base64.StdEncoding.EncodeToString(entry.Key),
+			ValueBase64: base64.StdEncoding.EncodeToString(entry.Value),
+			Tombstone:   entry.Tombstone,
+			Seq:         entry.Seq,
+		})
+	}
+	if err := iter.Err(); err != nil {
+		return kvRangeResult{}, err
+	}
+	return kvRangeResult{
+		Entries:   entries,
+		Limit:     limit,
+		Truncated: truncated,
+	}, nil
+}
+
 func writeKVPut(
 	addr string,
 	dataDir string,
@@ -570,6 +682,23 @@ func parseValueFlag(value string, valueBase64 string) ([]byte, error) {
 	return parseBytesFlag("value", value, valueBase64)
 }
 
+func parseOptionalBytesFlag(name string, text string, encoded string) ([]byte, error) {
+	if text != "" && encoded != "" {
+		return nil, fmt.Errorf("use --%s or --%s-base64, not both", name, name)
+	}
+	if encoded != "" {
+		out, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s-base64: %w", name, err)
+		}
+		return out, nil
+	}
+	if text == "" {
+		return nil, nil
+	}
+	return []byte(text), nil
+}
+
 func parseBytesFlag(name string, text string, encoded string) ([]byte, error) {
 	if text != "" && encoded != "" {
 		return nil, fmt.Errorf("use --%s or --%s-base64, not both", name, name)
@@ -611,6 +740,25 @@ func writeKVStatus(w io.Writer, status lsm.WriteRequestStatus, jsonOut bool) {
 	fmt.Fprintf(w, "consistency=%s\n", status.Consistency)
 	if status.Error != "" {
 		fmt.Fprintf(w, "error=%s\n", status.Error)
+	}
+}
+
+func writeKVRange(w io.Writer, result kvRangeResult) {
+	for _, entry := range result.Entries {
+		key, err := base64.StdEncoding.DecodeString(entry.KeyBase64)
+		if err != nil {
+			fmt.Fprintf(w, "key_base64=%s value_base64=%s seq=%d tombstone=%v\n", entry.KeyBase64, entry.ValueBase64, entry.Seq, entry.Tombstone)
+			continue
+		}
+		value, err := base64.StdEncoding.DecodeString(entry.ValueBase64)
+		if err != nil {
+			fmt.Fprintf(w, "key=%s value_base64=%s seq=%d tombstone=%v\n", string(key), entry.ValueBase64, entry.Seq, entry.Tombstone)
+			continue
+		}
+		fmt.Fprintf(w, "key=%s value=%s seq=%d tombstone=%v\n", string(key), string(value), entry.Seq, entry.Tombstone)
+	}
+	if result.Truncated {
+		fmt.Fprintf(w, "truncated=true limit=%d\n", result.Limit)
 	}
 }
 

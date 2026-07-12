@@ -64,6 +64,10 @@ get_output="$(lsmctl get --addr http://127.0.0.1:8081 --key compose)"
 require_contains "$get_output" "found=true"
 require_contains "$get_output" "value=ok"
 
+range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
+require_contains "$range_output" "key=compose"
+require_contains "$range_output" "value=ok"
+
 delete_output="$(lsmctl delete --addr http://127.0.0.1:8080 --key compose)"
 require_contains "$delete_output" "state=committed"
 
