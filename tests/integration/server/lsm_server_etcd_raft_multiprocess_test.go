@@ -63,6 +63,19 @@ func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
 			})
 		})
 	}
+
+	cliWriteNode := eventuallyRunLSMCTLWrite(t, bin, urls, peers, "put", "cli", "value", 10*time.Second)
+	t.Logf("committed lsmctl put through %s", cliWriteNode)
+	eventually(t, 5*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-b"], "--key", "cli")
+		return bytes.Contains(out, []byte("found=true")) && bytes.Contains(out, []byte("value=value"))
+	})
+	cliDeleteNode := eventuallyRunLSMCTLWrite(t, bin, urls, peers, "delete", "cli", "", 10*time.Second)
+	t.Logf("committed lsmctl delete through %s", cliDeleteNode)
+	eventually(t, 5*time.Second, func() bool {
+		out := runLSMCTL(t, bin, "get", "--addr", urls["node-c"], "--key", "cli")
+		return bytes.Contains(out, []byte("found=false"))
+	})
 }
 
 type startedLSMProcess struct {
@@ -183,6 +196,46 @@ func formatNodeAttempts(peers []string, attempts map[string]string) string {
 		parts = append(parts, nodeID+"="+msg)
 	}
 	return strings.Join(parts, "; ")
+}
+
+func eventuallyRunLSMCTLWrite(t *testing.T, bin string, urls map[string]string, peers []string, command string, key string, value string, timeout time.Duration) string {
+	t.Helper()
+	last := make(map[string]string, len(peers))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, nodeID := range peers {
+			args := []string{command, "--addr", urls[nodeID], "--key", key}
+			if command == "put" {
+				args = append(args, "--value", value)
+			}
+			out, err := runLSMCTLResult(t, bin, args...)
+			if err == nil {
+				return nodeID
+			}
+			last[nodeID] = fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out)))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no raft node accepted lsmctl %s within %s: %s", command, timeout, formatNodeAttempts(peers, last))
+	return ""
+}
+
+func runLSMCTL(t *testing.T, bin string, args ...string) []byte {
+	t.Helper()
+	out, err := runLSMCTLResult(t, bin, args...)
+	if err != nil {
+		t.Fatalf("lsmctl %v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
+func runLSMCTLResult(t *testing.T, bin string, args ...string) ([]byte, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	return out, err
 }
 
 func (p *startedLSMProcess) stop(t *testing.T) {
