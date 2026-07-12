@@ -397,6 +397,68 @@ func (c *controlPlane) triggerSplit(shardID string, splitKey []byte) error {
 	return c.triggerSplitWithOptions(shardID, splitKey, ControlWriteOptions{})
 }
 
+func (c *controlPlane) addReplica(shardID, target string) error {
+	return c.addReplicaWithOptions(shardID, target, ControlWriteOptions{})
+}
+
+func (c *controlPlane) addReplicaWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if c == nil {
+		return errs.ErrShardNotFound
+	}
+	shardID = strings.TrimSpace(shardID)
+	target = strings.TrimSpace(target)
+	if shardID == "" || target == "" {
+		return errs.ErrShardNotFound
+	}
+	fingerprint := addReplicaFingerprint(shardID, target)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:    "add-replica",
+			ShardID: shardID,
+			Target:  target,
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "add-replica" || mutation.ShardID != shardID || mutation.Target != target {
+				return fmt.Errorf("committed control mutation mismatch")
+			}
+			return c.applyAddReplicaMutationLocked(mutation)
+		},
+	)
+}
+
+func (c *controlPlane) removeReplica(shardID, target string) error {
+	return c.removeReplicaWithOptions(shardID, target, ControlWriteOptions{})
+}
+
+func (c *controlPlane) removeReplicaWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if c == nil {
+		return errs.ErrShardNotFound
+	}
+	shardID = strings.TrimSpace(shardID)
+	target = strings.TrimSpace(target)
+	if shardID == "" || target == "" {
+		return errs.ErrShardNotFound
+	}
+	fingerprint := removeReplicaFingerprint(shardID, target)
+	return c.applyControlMutation(
+		controlMutation{
+			Kind:    "remove-replica",
+			ShardID: shardID,
+			Target:  target,
+		},
+		opts,
+		fingerprint,
+		func(mutation controlMutation) error {
+			if mutation.Kind != "remove-replica" || mutation.ShardID != shardID || mutation.Target != target {
+				return fmt.Errorf("committed control mutation mismatch")
+			}
+			return c.applyRemoveReplicaMutationLocked(mutation)
+		},
+	)
+}
+
 func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, opts ControlWriteOptions) error {
 	if c == nil {
 		return errs.ErrShardNotFound
@@ -647,6 +709,10 @@ func (c *controlPlane) applyControlMutationPayloadLocked(mutation controlMutatio
 	switch mutation.Kind {
 	case "transfer-leader":
 		return c.applyTransferLeaderMutationLocked(mutation)
+	case "add-replica":
+		return c.applyAddReplicaMutationLocked(mutation)
+	case "remove-replica":
+		return c.applyRemoveReplicaMutationLocked(mutation)
 	case "split":
 		return c.applySplitMutationLocked(mutation)
 	case "prepare-drain":
@@ -681,6 +747,61 @@ func (c *controlPlane) applyTransferLeaderMutationLocked(mutation controlMutatio
 		}
 		shard.Replicas[i].Role = "follower"
 	}
+	c.shards[shardID] = shard
+	return nil
+}
+
+func (c *controlPlane) applyAddReplicaMutationLocked(mutation controlMutation) error {
+	shardID := strings.TrimSpace(mutation.ShardID)
+	target := strings.TrimSpace(mutation.Target)
+	if shardID == "" || target == "" {
+		return errs.ErrShardNotFound
+	}
+	shard, ok := c.shards[shardID]
+	if !ok {
+		return errs.ErrShardNotFound
+	}
+	if hasReplica(shard.Replicas, target) {
+		return nil
+	}
+	shard.Replicas = append(shard.Replicas, ReplicaStatus{
+		NodeID:  target,
+		Role:    "follower",
+		Healthy: true,
+	})
+	c.shards[shardID] = shard
+	return nil
+}
+
+func (c *controlPlane) applyRemoveReplicaMutationLocked(mutation controlMutation) error {
+	shardID := strings.TrimSpace(mutation.ShardID)
+	target := strings.TrimSpace(mutation.Target)
+	if shardID == "" || target == "" {
+		return errs.ErrShardNotFound
+	}
+	shard, ok := c.shards[shardID]
+	if !ok {
+		return errs.ErrShardNotFound
+	}
+	next := make([]ReplicaStatus, 0, len(shard.Replicas)-1)
+	removed := false
+	for _, replica := range shard.Replicas {
+		if replica.NodeID == target {
+			removed = true
+			continue
+		}
+		next = append(next, replica)
+	}
+	if !removed {
+		return nil
+	}
+	if shard.Leader == target {
+		return fmt.Errorf("cannot remove leader replica %q from shard %q", target, shardID)
+	}
+	if len(shard.Replicas) <= 1 {
+		return fmt.Errorf("cannot remove last replica from shard %q", shardID)
+	}
+	shard.Replicas = next
 	c.shards[shardID] = shard
 	return nil
 }
@@ -824,6 +945,14 @@ func (c *controlPlane) noteOperationAppliedLocked(opts ControlWriteOptions, fing
 
 func transferLeaderFingerprint(shardID, target string) string {
 	return fmt.Sprintf("transfer:%s:%s", shardID, target)
+}
+
+func addReplicaFingerprint(shardID, target string) string {
+	return fmt.Sprintf("add-replica:%s:%s", shardID, target)
+}
+
+func removeReplicaFingerprint(shardID, target string) string {
+	return fmt.Sprintf("remove-replica:%s:%s", shardID, target)
 }
 
 func splitFingerprint(shardID string, splitKey []byte) string {
@@ -1120,6 +1249,38 @@ func (l *LSM) TransferLeaderWithOptions(shardID, target string, opts ControlWrit
 		return errs.ErrShardNotFound
 	}
 	return l.control.transferLeaderWithOptions(shardID, target, opts)
+}
+
+// AddReplica adds a follower replica to a shard's control-plane membership.
+func (l *LSM) AddReplica(shardID, target string) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.addReplica(shardID, target)
+}
+
+// AddReplicaWithOptions adds a replica with optional concurrency controls.
+func (l *LSM) AddReplicaWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.addReplicaWithOptions(shardID, target, opts)
+}
+
+// RemoveReplica removes a non-leader replica from a shard's control-plane membership.
+func (l *LSM) RemoveReplica(shardID, target string) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.removeReplica(shardID, target)
+}
+
+// RemoveReplicaWithOptions removes a replica with optional concurrency controls.
+func (l *LSM) RemoveReplicaWithOptions(shardID, target string, opts ControlWriteOptions) error {
+	if l == nil || l.control == nil {
+		return errs.ErrShardNotFound
+	}
+	return l.control.removeReplicaWithOptions(shardID, target, opts)
 }
 
 // TriggerSplit splits a shard into two ranges at splitKey.
