@@ -19,10 +19,11 @@ shard membership commands plus a planned `replace-node` workflow, but automated
 replacement triggers, full LSM state-machine snapshot transfer orchestration,
 and service discovery remain future work.
 
-The server configs mount `peer-urls.yaml` as `raft.peer_url_file`. The
+The server configs mount `peer-urls.yaml` as `raft.peer_url_file`. The gateway
+service mounts the same file through `lsmctl gateway --endpoint-file`, while the
 operator smoke scripts generate a separate host-side endpoint file and pass it
-through `lsmctl --config`, so the same endpoint-file contract is exercised from
-server peer transport and CLI operator commands.
+through `lsmctl --config`. That keeps server peer transport, gateway routing,
+and CLI operator commands on the same endpoint-file contract.
 
 ## Run
 
@@ -51,7 +52,8 @@ This starts node-a/node-b/node-c, waits for cluster readiness, starts
 the Compose `gateway` service on `127.0.0.1:8090`, then verifies ordinary
 `lsmctl put/get/delete --addr http://127.0.0.1:8090` calls work through the
 single gateway endpoint. The gateway routes writes to the current raft write
-leader and uses best-effort endpoint fallback for reads.
+leader, loads node endpoints from the mounted `peer-urls.yaml`, and uses
+best-effort endpoint fallback for reads.
 
 ## Rolling restart smoke
 
