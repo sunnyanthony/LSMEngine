@@ -69,6 +69,14 @@ func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, mess
 	return c.inner.HandlePeerMessages(ctx, converted)
 }
 
+func (c *builtinCommitLogConsensus) ChangeMembership(ctx context.Context, change commitLogMembershipChange) error {
+	changer, ok := c.inner.(internalcommitlog.MembershipChanger)
+	if !ok {
+		return nil
+	}
+	return mapInternalCommitLogError(changer.ChangeMembership(ctx, toInternalMembershipChange(change)))
+}
+
 func mapInternalCommitLogError(err error) error {
 	switch {
 	case errors.Is(err, internalcommitlog.ErrNotLeader):
@@ -193,6 +201,21 @@ func (a raftPeerTransportAdapter) Send(ctx context.Context, messages []raftpb.Me
 		converted = append(converted, peerMessage)
 	}
 	return a.transport.Send(ctx, converted)
+}
+
+func toInternalMembershipChange(change commitLogMembershipChange) internalcommitlog.MembershipChange {
+	out := internalcommitlog.MembershipChange{
+		NodeID: change.NodeID,
+	}
+	switch change.Type {
+	case CommitLogMembershipChangeAddNode:
+		out.Type = internalcommitlog.MembershipChangeAddNode
+	case CommitLogMembershipChangeRemoveNode:
+		out.Type = internalcommitlog.MembershipChangeRemoveNode
+	default:
+		out.Type = internalcommitlog.MembershipChangeType(change.Type)
+	}
+	return out
 }
 
 func cloneRaftPeerMessages(messages []RaftPeerMessage) []RaftPeerMessage {

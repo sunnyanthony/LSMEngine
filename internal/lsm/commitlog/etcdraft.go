@@ -217,6 +217,62 @@ func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []r
 	return nil
 }
 
+func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change MembershipChange) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rawNode == nil || c.storage == nil {
+		err := fmt.Errorf("%w: etcd raft commit log is unavailable", ErrUnavailable)
+		c.recordRuntimeErrorLocked(err)
+		return err
+	}
+	target := strings.TrimSpace(change.NodeID)
+	if target == "" {
+		err := fmt.Errorf("raft membership node id is required")
+		c.recordRuntimeErrorLocked(err)
+		return err
+	}
+	cc := raftpb.ConfChange{NodeID: stableRaftNodeID(target)}
+	switch change.Type {
+	case MembershipChangeAddNode:
+		cc.Type = raftpb.ConfChangeAddNode
+	case MembershipChangeRemoveNode:
+		cc.Type = raftpb.ConfChangeRemoveNode
+	default:
+		err := fmt.Errorf("unknown raft membership change type %q", change.Type)
+		c.recordRuntimeErrorLocked(err)
+		return err
+	}
+	if c.membershipChangeAppliedLocked(cc) {
+		return nil
+	}
+
+	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
+	defer cancel()
+	if err := c.rawNode.ProposeConfChange(cc); err != nil {
+		err := fmt.Errorf("raft propose membership change: %w", err)
+		c.recordRuntimeErrorLocked(err)
+		return err
+	}
+	for step := 0; step < etcdRaftAdvanceMaxStep; step++ {
+		if err := runCtx.Err(); err != nil {
+			err := fmt.Errorf("%w: raft membership change timed out: %v", ErrUnavailable, err)
+			c.recordRuntimeErrorLocked(err)
+			return err
+		}
+		if err := c.advanceUntilStableLocked(runCtx); err != nil {
+			c.recordRuntimeErrorLocked(err)
+			return err
+		}
+		if c.membershipChangeAppliedLocked(cc) {
+			return nil
+		}
+		c.rawNode.Tick()
+	}
+	err := fmt.Errorf("%w: raft membership change did not apply", ErrUnavailable)
+	c.recordRuntimeErrorLocked(err)
+	return err
+}
+
 func (c *etcdRaftConsensus) Provider() Provider {
 	return ProviderEtcdRaft
 }
@@ -533,6 +589,7 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			return fmt.Errorf("unmarshal conf change: %w", err)
 		}
 		c.rawNode.ApplyConfChange(cc)
+		c.updateReplicaCountLocked()
 		return nil
 	case raftpb.EntryConfChangeV2:
 		var cc raftpb.ConfChangeV2
@@ -540,6 +597,7 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			return fmt.Errorf("unmarshal conf change v2: %w", err)
 		}
 		c.rawNode.ApplyConfChange(cc)
+		c.updateReplicaCountLocked()
 		return nil
 	default:
 		return nil
@@ -620,6 +678,30 @@ func (c *etcdRaftConsensus) raftConfStateLocked() raftpb.ConfState {
 		VotersOutgoing: sortedRaftIDs(status.Config.Voters[1]),
 		LearnersNext:   sortedRaftIDs(status.Config.LearnersNext),
 		AutoLeave:      status.Config.AutoLeave,
+	}
+}
+
+func (c *etcdRaftConsensus) membershipChangeAppliedLocked(cc raftpb.ConfChange) bool {
+	status := c.rawNode.Status()
+	_, voter := status.Config.Voters[0][cc.NodeID]
+	switch cc.Type {
+	case raftpb.ConfChangeAddNode:
+		return voter
+	case raftpb.ConfChangeRemoveNode:
+		return !voter
+	default:
+		return false
+	}
+}
+
+func (c *etcdRaftConsensus) updateReplicaCountLocked() {
+	status := c.rawNode.Status()
+	replicas := len(status.Config.Voters[0])
+	if replicas == 0 {
+		replicas = len(status.Config.Learners)
+	}
+	if replicas > 0 {
+		c.replicas = replicas
 	}
 }
 

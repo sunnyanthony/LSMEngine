@@ -49,6 +49,22 @@ type StateSnapshotterSetter interface {
 	SetStateSnapshotter(snapshotter StateSnapshotter) error
 }
 
+type MembershipChangeType string
+
+const (
+	MembershipChangeAddNode    MembershipChangeType = "add-node"
+	MembershipChangeRemoveNode MembershipChangeType = "remove-node"
+)
+
+type MembershipChange struct {
+	Type   MembershipChangeType
+	NodeID string
+}
+
+type MembershipChanger interface {
+	ChangeMembership(ctx context.Context, change MembershipChange) error
+}
+
 type ControlMutation struct {
 	Kind    string
 	ShardID string

@@ -99,6 +99,22 @@ type CommitLogDataCommittedEntry struct {
 	Seq      uint64
 }
 
+type CommitLogMembershipChangeType string
+
+const (
+	CommitLogMembershipChangeAddNode    CommitLogMembershipChangeType = "add-node"
+	CommitLogMembershipChangeRemoveNode CommitLogMembershipChangeType = "remove-node"
+)
+
+// CommitLogMembershipChange describes a provider-owned raft membership update.
+//
+// This is separate from shard replica metadata. A node can be a shard replica
+// only after the operator has also provided networking/bootstrap for that node.
+type CommitLogMembershipChange struct {
+	Type   CommitLogMembershipChangeType
+	NodeID string
+}
+
 // CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
 type CommitLogRuntimeStatus struct {
 	Mode           string     `json:"mode"`
@@ -138,8 +154,13 @@ type controlMutation = CommitLogControlMutation
 type dataMutation = CommitLogDataMutation
 type controlCommittedEntry = CommitLogControlCommittedEntry
 type dataCommittedEntry = CommitLogDataCommittedEntry
+type commitLogMembershipChange = CommitLogMembershipChange
 type commitLogConsensus = CommitLogConsensus
 
 type commitLogIndexObserver interface {
 	ObserveCommittedIndex(index uint64)
+}
+
+type commitLogMembershipChanger interface {
+	ChangeMembership(ctx context.Context, change commitLogMembershipChange) error
 }

@@ -56,6 +56,10 @@ func (c *localConsensus) HandlePeerMessages(_ context.Context, _ []raftpb.Messag
 	return nil
 }
 
+func (c *localConsensus) ChangeMembership(_ context.Context, _ MembershipChange) error {
+	return nil
+}
+
 func (c *localConsensus) Provider() Provider {
 	return ProviderLocal
 }
