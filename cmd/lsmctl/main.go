@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -249,6 +250,50 @@ type kvWriteRequest struct {
 	Consistency lsm.WriteConsistency `json:"consistency,omitempty"`
 }
 
+type targetRequest struct {
+	Target string `json:"target"`
+}
+
+type nodeEndpointFlags map[string]string
+
+func (f *nodeEndpointFlags) String() string {
+	if f == nil || len(*f) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(*f))
+	for key := range *f {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+(*f)[key])
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f *nodeEndpointFlags) Set(value string) error {
+	parts := strings.SplitN(value, "=", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("node endpoint must be node=url")
+	}
+	nodeID := strings.TrimSpace(parts[0])
+	endpoint := strings.TrimSpace(parts[1])
+	if nodeID == "" || endpoint == "" {
+		return fmt.Errorf("node endpoint must be node=url")
+	}
+	if *f == nil {
+		*f = make(map[string]string)
+	}
+	(*f)[nodeID] = normalizeHTTPBaseURL(endpoint)
+	return nil
+}
+
+type clusterWriteOptions struct {
+	Enabled       bool
+	NodeEndpoints map[string]string
+}
+
 func getCmd(args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	configPath := fs.String("config", "", "config file path")
@@ -337,6 +382,9 @@ func putCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "route remote write through the current cluster write leader")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	key := fs.String("key", "", "key as UTF-8 text")
 	keyBase64 := fs.String("key-base64", "", "key as base64")
 	value := fs.String("value", "", "value as UTF-8 text")
@@ -365,7 +413,11 @@ func putCmd(args []string) {
 	if err != nil {
 		log.Fatalf("invalid consistency: %v", err)
 	}
-	status, err := writeKVPut(*addr, *dataDir, keyBytes, valueBytes, mode)
+	clusterOpts, err := clusterWriteOptionsFromConfig(cfg, *addr, *clusterMode, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	status, err := writeKVPutWithCluster(*addr, *dataDir, keyBytes, valueBytes, mode, clusterOpts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -377,6 +429,9 @@ func deleteCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "route remote write through the current cluster write leader")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	key := fs.String("key", "", "key as UTF-8 text")
 	keyBase64 := fs.String("key-base64", "", "key as base64")
 	consistency := fs.String("consistency", string(lsm.WriteConsistencyLocalCommitted), "write consistency (accepted|local_committed)")
@@ -399,7 +454,11 @@ func deleteCmd(args []string) {
 	if err != nil {
 		log.Fatalf("invalid consistency: %v", err)
 	}
-	status, err := writeKVDelete(*addr, *dataDir, keyBytes, mode)
+	clusterOpts, err := clusterWriteOptionsFromConfig(cfg, *addr, *clusterMode, nodeEndpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+	status, err := writeKVDeleteWithCluster(*addr, *dataDir, keyBytes, mode, clusterOpts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -651,6 +710,20 @@ func writeKVPut(
 	return localWriteStatus("put", consistency), nil
 }
 
+func writeKVPutWithCluster(
+	addr string,
+	dataDir string,
+	key []byte,
+	value []byte,
+	consistency lsm.WriteConsistency,
+	clusterOpts clusterWriteOptions,
+) (lsm.WriteRequestStatus, error) {
+	if clusterOpts.Enabled {
+		return writeClusterKV("put", clusterOpts.NodeEndpoints, key, value, consistency)
+	}
+	return writeKVPut(addr, dataDir, key, value, consistency)
+}
+
 func writeKVDelete(
 	addr string,
 	dataDir string,
@@ -673,6 +746,143 @@ func writeKVDelete(
 		return lsm.WriteRequestStatus{}, err
 	}
 	return localWriteStatus("delete", consistency), nil
+}
+
+func writeKVDeleteWithCluster(
+	addr string,
+	dataDir string,
+	key []byte,
+	consistency lsm.WriteConsistency,
+	clusterOpts clusterWriteOptions,
+) (lsm.WriteRequestStatus, error) {
+	if clusterOpts.Enabled {
+		return writeClusterKV("delete", clusterOpts.NodeEndpoints, key, nil, consistency)
+	}
+	return writeKVDelete(addr, dataDir, key, consistency)
+}
+
+func writeClusterKV(
+	operation string,
+	endpoints map[string]string,
+	key []byte,
+	value []byte,
+	consistency lsm.WriteConsistency,
+) (lsm.WriteRequestStatus, error) {
+	if len(endpoints) == 0 {
+		return lsm.WriteRequestStatus{}, fmt.Errorf("cluster write requires node endpoints")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		nodeID, endpoint, err := currentClusterWriteLeader(endpoints)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if err := alignShardLeader(endpoint, key, nodeID); err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		var status lsm.WriteRequestStatus
+		switch operation {
+		case "put":
+			status, err = writeKVPut(endpoint, "", key, value, consistency)
+		case "delete":
+			status, err = writeKVDelete(endpoint, "", key, consistency)
+		default:
+			return lsm.WriteRequestStatus{}, fmt.Errorf("unsupported cluster write operation %q", operation)
+		}
+		if err == nil {
+			return status, nil
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return lsm.WriteRequestStatus{}, lastErr
+	}
+	return lsm.WriteRequestStatus{}, fmt.Errorf("cluster write timed out")
+}
+
+func currentClusterWriteLeader(endpoints map[string]string) (string, string, error) {
+	nodes := sortedEndpointNodes(endpoints)
+	var lastErr error
+	for _, nodeID := range nodes {
+		endpoint := endpoints[nodeID]
+		var status lsm.ClusterStatus
+		if err := getJSON(endpoint+"/cluster/status", &status); err != nil {
+			lastErr = err
+			continue
+		}
+		if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
+			if strings.TrimSpace(status.NodeID) != "" {
+				nodeID = status.NodeID
+			}
+			return nodeID, endpoint, nil
+		}
+	}
+	if lastErr != nil {
+		return "", "", lastErr
+	}
+	return "", "", fmt.Errorf("cluster write leader not available")
+}
+
+func alignShardLeader(endpoint string, key []byte, target string) error {
+	shard, ok, err := shardForKey(endpoint, key)
+	if err != nil || !ok {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("route not found for key")
+	}
+	if shard.Leader == target {
+		return nil
+	}
+	return postControlAction(endpoint+"/cluster/shards/"+url.PathEscape(shard.ID)+"/transfer-leader", targetRequest{
+		Target: target,
+	})
+}
+
+func shardForKey(endpoint string, key []byte) (lsm.ShardStatus, bool, error) {
+	var shards []lsm.ShardStatus
+	if err := getJSON(endpoint+"/cluster/shards", &shards); err != nil {
+		return lsm.ShardStatus{}, false, err
+	}
+	for _, shard := range shards {
+		if len(shard.StartKey) > 0 && bytes.Compare(key, shard.StartKey) < 0 {
+			continue
+		}
+		if len(shard.EndKey) > 0 && bytes.Compare(key, shard.EndKey) >= 0 {
+			continue
+		}
+		return shard, true, nil
+	}
+	return lsm.ShardStatus{}, false, nil
+}
+
+func postControlAction(rawURL string, payload any) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		return err
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(normalizeHTTPBaseURL(rawURL), "application/json", &buf)
+	if err != nil {
+		return err
+	}
+	var out map[string]any
+	return decodeHTTPJSON(resp, &out)
+}
+
+func sortedEndpointNodes(endpoints map[string]string) []string {
+	nodes := make([]string, 0, len(endpoints))
+	for nodeID := range endpoints {
+		nodes = append(nodes, nodeID)
+	}
+	sort.Strings(nodes)
+	return nodes
 }
 
 func readWriteStatus(addr string, requestID string) (lsm.WriteRequestStatus, error) {
@@ -862,6 +1072,42 @@ func loadConfigOrExit(path string) serverconfig.Config {
 		log.Fatalf("invalid config: %v", err)
 	}
 	return cfg
+}
+
+func clusterWriteOptionsFromConfig(
+	cfg serverconfig.Config,
+	addr string,
+	clusterMode bool,
+	overrides nodeEndpointFlags,
+) (clusterWriteOptions, error) {
+	enabled := clusterMode || len(overrides) > 0
+	if !enabled {
+		return clusterWriteOptions{}, nil
+	}
+	endpoints := make(map[string]string)
+	for nodeID, endpoint := range cfg.Raft.PeerURLs {
+		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
+			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+		}
+	}
+	for nodeID, endpoint := range cfg.Raft.JoinPeerURLs {
+		if strings.TrimSpace(nodeID) != "" && strings.TrimSpace(endpoint) != "" {
+			endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+		}
+	}
+	if strings.TrimSpace(cfg.NodeID) != "" && strings.TrimSpace(addr) != "" {
+		endpoints[strings.TrimSpace(cfg.NodeID)] = normalizeHTTPBaseURL(addr)
+	}
+	for nodeID, endpoint := range overrides {
+		endpoints[strings.TrimSpace(nodeID)] = normalizeHTTPBaseURL(endpoint)
+	}
+	if len(endpoints) == 0 {
+		return clusterWriteOptions{}, fmt.Errorf("--cluster requires raft.peer_urls in config or --node-endpoint")
+	}
+	return clusterWriteOptions{
+		Enabled:       true,
+		NodeEndpoints: endpoints,
+	}, nil
 }
 
 func toRaftOptions(cfg serverconfig.RaftConfig) *lsm.RaftOptions {

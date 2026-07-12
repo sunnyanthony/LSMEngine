@@ -38,9 +38,10 @@ examples/docker-compose-cluster/rolling-restart.sh
 ```
 
 This starts the same static three-node cluster, stops one node at a time,
-commits a write through the remaining quorum, restarts the stopped node with
-its existing volume, and verifies all three nodes can read the write before the
-next node is restarted.
+uses `lsmctl put --cluster` to find the current write leader and commit a write
+through the remaining quorum, restarts the stopped node with its existing
+volume, and verifies all three nodes can read the write before the next node is
+restarted.
 
 ## Manual commands
 

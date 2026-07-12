@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -61,6 +62,136 @@ func TestParseWriteConsistencyDefault(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestNodeEndpointFlagsSet(t *testing.T) {
+	var endpoints nodeEndpointFlags
+	if err := endpoints.Set("node-a=127.0.0.1:8080"); err != nil {
+		t.Fatalf("set endpoint: %v", err)
+	}
+	if got := endpoints["node-a"]; got != "http://127.0.0.1:8080" {
+		t.Fatalf("unexpected endpoint %q", got)
+	}
+	if err := endpoints.Set("missing-separator"); err == nil {
+		t.Fatalf("expected invalid endpoint error")
+	}
+}
+
+func TestClusterWriteOptionsFromConfigMergesPeerURLsAndOverrides(t *testing.T) {
+	opts, err := clusterWriteOptionsFromConfig(serverconfig.Config{
+		NodeID: "node-a",
+		Raft: serverconfig.RaftConfig{
+			PeerURLs: map[string]string{
+				"node-a": "http://internal-a:8080",
+				"node-b": "http://internal-b:8080",
+			},
+		},
+	}, "http://127.0.0.1:8080", true, nodeEndpointFlags{
+		"node-b": "http://127.0.0.1:8081",
+	})
+	if err != nil {
+		t.Fatalf("cluster options: %v", err)
+	}
+	if !opts.Enabled {
+		t.Fatalf("expected cluster writes enabled")
+	}
+	if got := opts.NodeEndpoints["node-a"]; got != "http://127.0.0.1:8080" {
+		t.Fatalf("expected bootstrap addr to override node-a, got %q", got)
+	}
+	if got := opts.NodeEndpoints["node-b"]; got != "http://127.0.0.1:8081" {
+		t.Fatalf("expected explicit override for node-b, got %q", got)
+	}
+}
+
+func TestWriteKVPutClusterTransfersShardToCurrentWriteLeader(t *testing.T) {
+	var transferCalls atomic.Int32
+	var putCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         false,
+					WriteAvailable: false,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeA.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+				},
+			})
+		case "/cluster/shards":
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{
+				{
+					ID:       "users",
+					StartKey: []byte("a"),
+					EndKey:   []byte("z"),
+					Leader:   "node-a",
+				},
+			})
+		case "/cluster/shards/users/transfer-leader":
+			transferCalls.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode transfer: %v", err)
+			}
+			if req.Target != "node-b" {
+				t.Fatalf("expected transfer target node-b, got %q", req.Target)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/kv/put":
+			putCalls.Add(1)
+			var req kvWriteRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode put: %v", err)
+			}
+			if req.KeyBase64 != base64.StdEncoding.EncodeToString([]byte("k")) {
+				t.Fatalf("unexpected key %q", req.KeyBase64)
+			}
+			_ = json.NewEncoder(w).Encode(lsm.WriteRequestStatus{
+				RequestID:   "routed-put",
+				Operation:   "put",
+				Consistency: req.Consistency,
+				State:       lsm.WriteRequestCommitted,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	status, err := writeKVPutWithCluster("", "", []byte("k"), []byte("v"), lsm.WriteConsistencyLocalCommitted, clusterWriteOptions{
+		Enabled: true,
+		NodeEndpoints: map[string]string{
+			"node-a": nodeA.URL,
+			"node-b": nodeB.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("cluster put: %v", err)
+	}
+	if status.RequestID != "routed-put" || status.State != lsm.WriteRequestCommitted {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+	if transferCalls.Load() != 1 {
+		t.Fatalf("expected one transfer call, got %d", transferCalls.Load())
+	}
+	if putCalls.Load() != 1 {
+		t.Fatalf("expected one routed put, got %d", putCalls.Load())
 	}
 }
 
