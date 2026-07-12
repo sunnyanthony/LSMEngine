@@ -141,6 +141,7 @@ func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (com
 	}
 	if opts.Raft != nil {
 		cfg.Peers = append([]string(nil), opts.Raft.Peers...)
+		cfg.Join = opts.Raft.Join
 	}
 	if opts.CommitLog != nil {
 		cfg.SnapshotPolicy = internalcommitlog.SnapshotPolicy{

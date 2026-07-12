@@ -45,6 +45,7 @@ func TestParseWriteConsistencyDefault(t *testing.T) {
 
 func TestToRaftOptionsIncludesPeers(t *testing.T) {
 	got := toRaftOptions(serverconfig.RaftConfig{
+		Join:  true,
 		Peers: []string{"node-a", "node-b", "node-c"},
 	})
 	if got == nil {
@@ -55,6 +56,9 @@ func TestToRaftOptionsIncludesPeers(t *testing.T) {
 	}
 	if got.Peers[2] != "node-c" {
 		t.Fatalf("expected node-c peer, got %q", got.Peers[2])
+	}
+	if !got.Join {
+		t.Fatalf("expected join mode")
 	}
 }
 

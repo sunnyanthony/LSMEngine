@@ -102,7 +102,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new etcd raft node: %w", err)
 	}
-	if !loadedLog {
+	if !loadedLog && !cfg.Join {
 		bootstrapPeers := make([]raft.Peer, 0, len(peerIDs))
 		for _, id := range peerIDs {
 			bootstrapPeers = append(bootstrapPeers, raft.Peer{ID: id})

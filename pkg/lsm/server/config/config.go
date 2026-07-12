@@ -50,6 +50,7 @@ type RaftConfig struct {
 	HeartbeatInterval time.Duration     `yaml:"heartbeat_interval"`
 	Peers             []string          `yaml:"peers"`
 	PeerURLs          map[string]string `yaml:"peer_urls"`
+	Join              bool              `yaml:"join"`
 }
 
 // ShardConfig describes a fixed shard range in server YAML.

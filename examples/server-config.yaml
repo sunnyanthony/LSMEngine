@@ -15,6 +15,9 @@ raft:
   election_timeout: "2s"
   heartbeat_interval: "500ms"
   peers: ["node-a", "node-b", "node-c"]
+  # Set join: true only for a fresh node being added to an existing raft
+  # cluster; it skips local bootstrap and waits for raft-add/ConfChange.
+  # join: true
   # peer_urls is only required when commitlog.provider is "etcd-raft"
   # and raft.peers contains more than one node.
   # peer_urls:
