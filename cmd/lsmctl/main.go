@@ -853,6 +853,9 @@ func loadConfigOrExit(path string) serverconfig.Config {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if err := serverconfig.Validate(cfg); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
 	return cfg
 }
 

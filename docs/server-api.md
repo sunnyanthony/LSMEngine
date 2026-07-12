@@ -104,6 +104,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `control_state_path` (optional, defaults to `<data_dir>/control_state.json`).
   - `raft.peers` (optional): static peer list used to bootstrap etcd-raft node IDs.
   - `raft.peer_urls` (optional): node-name to server URL map used by `lsmctl serve` to build the HTTP raft peer transport when `commitlog.provider=etcd-raft` and `raft.peers` has more than one node.
+    - Multi-peer etcd-raft configs are validated before server startup: `raft.peers` must include the local `node_id`, must not contain empty/duplicate names, and `raft.peer_urls` must contain an absolute URL for every configured peer with no unknown peer names.
   - `commitlog.snapshot_policy.applied_entries` (optional): when greater than zero, enables builtin etcd-raft provider-owned raft log snapshots after this many newly applied entries.
   - `commitlog.snapshot_policy.retain_entries` (optional): number of recent raft log entries to keep after provider-owned snapshot compaction.
   - `shards` must be declared in route order with non-overlapping ranges; open-ended range is only allowed on the last shard.

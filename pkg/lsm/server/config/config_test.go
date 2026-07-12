@@ -116,6 +116,82 @@ io_async_max_in_flight: 8
 	if cfg.IOAsyncMaxInFlight != 8 {
 		t.Fatalf("expected io async max in flight, got %d", cfg.IOAsyncMaxInFlight)
 	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestValidateEtcdRaftRequiresLocalPeer(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-b", "node-c"},
+			PeerURLs: map[string]string{
+				"node-b": "http://127.0.0.1:8081",
+				"node-c": "http://127.0.0.1:8082",
+			},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected local peer validation error")
+	}
+}
+
+func TestValidateEtcdRaftRequiresPeerURLs(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-a", "node-b", "node-c"},
+			PeerURLs: map[string]string{
+				"node-a": "http://127.0.0.1:8080",
+				"node-b": "http://127.0.0.1:8081",
+			},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected missing peer url validation error")
+	}
+}
+
+func TestValidateEtcdRaftRejectsUnknownPeerURL(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-a", "node-b"},
+			PeerURLs: map[string]string{
+				"node-a": "http://127.0.0.1:8080",
+				"node-b": "http://127.0.0.1:8081",
+				"node-c": "http://127.0.0.1:8082",
+			},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected unknown peer url validation error")
+	}
+}
+
+func TestValidateEtcdRaftRejectsDuplicatePeer(t *testing.T) {
+	cfg := Config{
+		NodeID: "node-a",
+		CommitLog: CommitLogConfig{
+			Provider: "etcd-raft",
+		},
+		Raft: RaftConfig{
+			Peers: []string{"node-a", "node-a"},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatalf("expected duplicate peer validation error")
+	}
 }
 
 func writeConfig(t *testing.T, contents string) string {

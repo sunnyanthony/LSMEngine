@@ -4,7 +4,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -73,4 +75,61 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Validate checks cross-field server config invariants that YAML decoding cannot
+// express.
+func Validate(cfg Config) error {
+	provider := strings.TrimSpace(cfg.CommitLog.Provider)
+	if provider != "etcd-raft" {
+		return nil
+	}
+	peers, err := normalizedPeers(cfg.Raft.Peers)
+	if err != nil {
+		return err
+	}
+	if len(peers) <= 1 {
+		return nil
+	}
+	nodeID := strings.TrimSpace(cfg.NodeID)
+	if nodeID == "" {
+		nodeID = "node-0"
+	}
+	if _, ok := peers[nodeID]; !ok {
+		return fmt.Errorf("raft peers must include local node %q", nodeID)
+	}
+	for peer := range peers {
+		rawURL := strings.TrimSpace(cfg.Raft.PeerURLs[peer])
+		if rawURL == "" {
+			return fmt.Errorf("raft peer_urls missing peer %q", peer)
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("raft peer_urls[%q] must be an absolute URL", peer)
+		}
+	}
+	for peer := range cfg.Raft.PeerURLs {
+		if strings.TrimSpace(peer) == "" {
+			return fmt.Errorf("raft peer_urls contains empty peer name")
+		}
+		if _, ok := peers[peer]; !ok {
+			return fmt.Errorf("raft peer_urls contains unknown peer %q", peer)
+		}
+	}
+	return nil
+}
+
+func normalizedPeers(in []string) (map[string]struct{}, error) {
+	peers := make(map[string]struct{}, len(in))
+	for _, raw := range in {
+		peer := strings.TrimSpace(raw)
+		if peer == "" {
+			return nil, fmt.Errorf("raft peers contains empty peer")
+		}
+		if _, exists := peers[peer]; exists {
+			return nil, fmt.Errorf("raft peers contains duplicate peer %q", peer)
+		}
+		peers[peer] = struct{}{}
+	}
+	return peers, nil
 }
