@@ -87,9 +87,10 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl get --addr <url> --key <key>` reads from a remote server; `--key-base64` supports binary keys.
 - `lsmctl put --addr <url> --key <key> --value <value>` writes to a remote server; `--key-base64` / `--value-base64` support binary payloads.
 - `lsmctl delete --addr <url> --key <key>` deletes from a remote server.
+- `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
-- Deferred CLI commands: `range`, `async-put`, and explicit `status <request_id>`.
+- Deferred CLI commands: `range` and `async-put`.
 
 ## Config and deployment
 - Provide a minimal YAML config for server mode (addr, data dir, timeouts, auth hooks).

@@ -237,6 +237,35 @@ func TestWriteKVDeleteRemote(t *testing.T) {
 	}
 }
 
+func TestReadWriteStatusRemote(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/write-status/req-3" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.WriteRequestStatus{
+			RequestID:   "req-3",
+			Operation:   "put",
+			Consistency: lsm.WriteConsistencyAccepted,
+			State:       lsm.WriteRequestCommitted,
+		})
+	}))
+	defer server.Close()
+
+	got, err := readWriteStatus(server.URL, "req-3")
+	if err != nil {
+		t.Fatalf("read write status: %v", err)
+	}
+	if got.RequestID != "req-3" || got.State != lsm.WriteRequestCommitted {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+}
+
+func TestReadWriteStatusRequiresAddr(t *testing.T) {
+	if _, err := readWriteStatus("", "req-3"); err == nil {
+		t.Fatalf("expected addr error")
+	}
+}
+
 func TestNormalizeHTTPBaseURL(t *testing.T) {
 	if got := normalizeHTTPBaseURL("127.0.0.1:8080/"); got != "http://127.0.0.1:8080" {
 		t.Fatalf("unexpected normalized url %q", got)

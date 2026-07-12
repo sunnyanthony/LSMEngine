@@ -39,6 +39,8 @@ func main() {
 		putCmd(os.Args[2:])
 	case "delete":
 		deleteCmd(os.Args[2:])
+	case "write-status":
+		writeStatusCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -50,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|put|delete|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|get|put|delete|write-status|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -339,6 +341,32 @@ func deleteCmd(args []string) {
 	writeKVStatus(os.Stdout, status, *jsonOut)
 }
 
+func writeStatusCmd(args []string) {
+	fs := flag.NewFlagSet("write-status", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "http address for server mode")
+	requestID := fs.String("request-id", "", "write request id")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *requestID == "" && fs.NArg() > 0 {
+		*requestID = fs.Arg(0)
+	}
+	if *requestID == "" {
+		log.Fatal("--request-id required")
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	status, err := readWriteStatus(*addr, *requestID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
 func readStats(addr, dataDir string) (lsm.Stats, error) {
 	if addr != "" {
 		var stats lsm.Stats
@@ -460,6 +488,24 @@ func writeKVDelete(
 		return lsm.WriteRequestStatus{}, err
 	}
 	return localWriteStatus("delete", consistency), nil
+}
+
+func readWriteStatus(addr string, requestID string) (lsm.WriteRequestStatus, error) {
+	if addr == "" {
+		return lsm.WriteRequestStatus{}, fmt.Errorf("write-status requires --addr or config addr")
+	}
+	if requestID == "" {
+		return lsm.WriteRequestStatus{}, fmt.Errorf("request id required")
+	}
+	var status lsm.WriteRequestStatus
+	err := getJSON(
+		normalizeHTTPBaseURL(addr)+"/kv/write-status/"+url.PathEscape(requestID),
+		&status,
+	)
+	if err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
+	return status, nil
 }
 
 func openLocal(dataDir string) (*lsm.LSM, error) {
