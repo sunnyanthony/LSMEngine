@@ -121,6 +121,10 @@ echo "committed put through $write_url"
 
 eventually_lsmctl_get_contains "http://127.0.0.1:8081" compose "found=true" "value=ok"
 
+range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
+require_contains "$range_output" "key=compose"
+require_contains "$range_output" "value=ok"
+
 delete_url="$(eventually_lsmctl_write delete compose)"
 echo "committed delete through $delete_url"
 

@@ -974,6 +974,61 @@ func TestHandlerGetInvalidKey(t *testing.T) {
 	}
 }
 
+func TestHandlerRangeReturnsBoundedEntries(t *testing.T) {
+	store, err := lsm.New(lsm.Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer store.Close()
+	for _, kv := range [][2]string{{"a", "1"}, {"b", "2"}, {"c", "3"}} {
+		if err := store.Put([]byte(kv[0]), []byte(kv[1])); err != nil {
+			t.Fatalf("put %s: %v", kv[0], err)
+		}
+	}
+	handler := NewHandler(store)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/kv/range?start_key_base64="+base64.StdEncoding.EncodeToString([]byte("b"))+"&limit=1",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var out rangeResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Entries) != 1 || !out.Truncated {
+		t.Fatalf("unexpected range response: %+v", out)
+	}
+	key, err := base64.StdEncoding.DecodeString(out.Entries[0].KeyBase64)
+	if err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	if string(key) != "b" {
+		t.Fatalf("expected first key b, got %q", key)
+	}
+}
+
+func TestHandlerRangeRejectsInvalidLimit(t *testing.T) {
+	store, err := lsm.New(lsm.Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new lsm: %v", err)
+	}
+	defer store.Close()
+	handler := NewHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/kv/range?limit=0", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
 func TestHandlerPutAcceptedStatusLifecycle(t *testing.T) {
 	p := newWriteStubProvider()
 	p.putGate = make(chan struct{})
