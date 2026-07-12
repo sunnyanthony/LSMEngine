@@ -110,6 +110,24 @@ eventually_lsmctl_get_contains() {
   return 1
 }
 
+wait_for_cluster_missing() {
+  local key="$1"
+  local deadline=$((SECONDS + 60))
+  local output
+  while (( SECONDS < deadline )); do
+    if output="$(lsmctl get --cluster $(node_endpoint_args) --key "$key" 2>&1)" &&
+      [[ "$output" == *"found=false"* ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for $key to be absent from cluster" >&2
+  compose ps >&2 || true
+  compose logs --tail=80 >&2 || true
+  return 1
+}
+
 node_endpoint_args() {
   printf '%s\n' \
     --node-endpoint "node-a=http://127.0.0.1:8080" \
@@ -123,8 +141,12 @@ for url in "${NODE_URLS[@]}"; do
   wait_for_health "$url"
 done
 
-write_url="$(eventually_lsmctl_write put compose ok)"
-echo "committed put through $write_url"
+wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s)"
+require_contains "$wait_output" "ready=true"
+require_contains "$wait_output" "ready_nodes=3"
+
+put_output="$(lsmctl put --cluster $(node_endpoint_args) --key compose --value ok)"
+require_contains "$put_output" "state=committed"
 
 eventually_lsmctl_get_contains "http://127.0.0.1:8081" compose "found=true" "value=ok"
 
@@ -140,8 +162,11 @@ cluster_range_output="$(lsmctl range --cluster $(node_endpoint_args) --start com
 require_contains "$cluster_range_output" "key=compose"
 require_contains "$cluster_range_output" "value=ok"
 
-delete_url="$(eventually_lsmctl_write delete compose)"
-echo "committed delete through $delete_url"
+delete_output="$(lsmctl delete --cluster $(node_endpoint_args) --key compose)"
+require_contains "$delete_output" "state=committed"
+
+missing_output="$(wait_for_cluster_missing compose)"
+require_contains "$missing_output" "found=false"
 
 eventually_lsmctl_get_contains "http://127.0.0.1:8082" compose "found=false"
 
