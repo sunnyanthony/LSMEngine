@@ -152,8 +152,10 @@ Clients can then use normal non-cluster commands against the gateway:
 ```bash
 go run ./cmd/lsmctl put --addr http://127.0.0.1:8090 --key user:1 --value alice
 go run ./cmd/lsmctl get --addr http://127.0.0.1:8090 --key user:1
+go run ./cmd/lsmctl range --addr http://127.0.0.1:8090 --start user: --end user~ --limit 10
 go run ./cmd/lsmctl async-put --addr http://127.0.0.1:8090 --key user:2 --value bob
 go run ./cmd/lsmctl write-status --addr http://127.0.0.1:8090 --request-id <request_id>
+go run ./cmd/lsmctl async-delete --addr http://127.0.0.1:8090 --key user:2
 go run ./cmd/lsmctl gateway-status --addr http://127.0.0.1:8090
 ```
 
@@ -180,7 +182,9 @@ Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
 covers the file-backed node endpoint resolver used by long-running gateways. It
 also verifies `/readyz` reports backend write readiness and `/gateway/status`
-sees all three backend nodes plus a write leader.
+sees all three backend nodes plus a write leader. The smoke covers point reads,
+range scans, committed writes/deletes, accepted writes/deletes, and accepted
+write-status lookup through the single gateway endpoint.
 
 ## Rolling Restart Check
 
