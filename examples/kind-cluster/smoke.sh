@@ -6,11 +6,7 @@ CLUSTER_NAME="${LSM_KIND_CLUSTER:-lsm-cluster}"
 NAMESPACE="lsm-cluster"
 IMAGE="${LSM_KIND_IMAGE:-lsmengine-server:kind}"
 KEEP="${LSM_KIND_KEEP:-0}"
-NODE_URLS=(
-  "http://lsm-cluster-0.lsm-cluster:8080"
-  "http://lsm-cluster-1.lsm-cluster:8080"
-  "http://lsm-cluster-2.lsm-cluster:8080"
-)
+GATEWAY_URL="http://lsm-gateway:8090"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null; then
@@ -27,6 +23,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+dump_diagnostics() {
+  kubectl -n "$NAMESPACE" get pods -o wide >&2 || true
+  kubectl -n "$NAMESPACE" get svc >&2 || true
+  kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=100 >&2 || true
+  kubectl -n "$NAMESPACE" logs deployment/lsm-gateway --tail=100 >&2 || true
+}
+
 kubectl_lsm() {
   kubectl -n "$NAMESPACE" exec pod/lsm-cluster-0 -- /usr/local/bin/lsmctl "$@"
 }
@@ -40,8 +43,27 @@ retry_kubectl_lsm_contains() {
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for lsmctl output to contain: $needle" >&2
       echo "$output" >&2
-      kubectl -n "$NAMESPACE" get pods -o wide >&2 || true
-      kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=120 >&2 || true
+      dump_diagnostics
+      return 1
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$output"
+}
+
+wait_for_gateway_status() {
+  local deadline=$((SECONDS + 90))
+  local output=""
+  until output="$(kubectl_lsm gateway-status --addr "$GATEWAY_URL")" \
+    && [[ "$output" == *"ready=true"* ]] \
+    && [[ "$output" == *"reachable_nodes=3"* ]] \
+    && [[ "$output" == *"write_leader=lsm-cluster-"* ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
+      if [[ -n "$output" ]]; then
+        echo "$output" >&2
+      fi
+      dump_diagnostics
       return 1
     fi
     sleep 1
@@ -59,60 +81,6 @@ require_contains() {
   fi
 }
 
-eventually_lsmctl_write() {
-  local command="$1"
-  local key="$2"
-  local value="${3:-}"
-  local deadline=$((SECONDS + 60))
-  local output=""
-  while (( SECONDS < deadline )); do
-    for url in "${NODE_URLS[@]}"; do
-      if [[ "$command" == "put" ]]; then
-        if output="$(kubectl_lsm put --addr "$url" --key "$key" --value "$value" 2>&1)" && [[ "$output" == *"state=committed"* ]]; then
-          echo "$url"
-          return
-        fi
-      elif [[ "$command" == "delete" ]]; then
-        if output="$(kubectl_lsm delete --addr "$url" --key "$key" 2>&1)" && [[ "$output" == *"state=committed"* ]]; then
-          echo "$url"
-          return
-        fi
-      else
-        echo "unsupported write command: $command" >&2
-        return 1
-      fi
-    done
-    sleep 1
-  done
-  echo "timed out waiting for lsmctl $command $key to commit" >&2
-  echo "$output" >&2
-  kubectl -n "$NAMESPACE" get pods >&2 || true
-  kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=80 >&2 || true
-  return 1
-}
-
-eventually_lsmctl_get_contains() {
-  local url="$1"
-  local key="$2"
-  local first="$3"
-  local second="${4:-}"
-  local deadline=$((SECONDS + 60))
-  local output=""
-  while (( SECONDS < deadline )); do
-    if output="$(kubectl_lsm get --addr "$url" --key "$key" 2>&1)"; then
-      if [[ "$output" == *"$first"* && ( -z "$second" || "$output" == *"$second"* ) ]]; then
-        return
-      fi
-    fi
-    sleep 1
-  done
-  echo "timed out waiting for lsmctl get $key from $url to contain: $first $second" >&2
-  echo "$output" >&2
-  kubectl -n "$NAMESPACE" get pods >&2 || true
-  kubectl -n "$NAMESPACE" logs statefulset/lsm-cluster --tail=80 >&2 || true
-  return 1
-}
-
 require_cmd docker
 require_cmd kind
 require_cmd kubectl
@@ -126,20 +94,33 @@ kind load docker-image "$IMAGE" --name "$CLUSTER_NAME"
 
 kubectl apply -k "$ROOT_DIR/examples/kind-cluster"
 kubectl -n "$NAMESPACE" set image statefulset/lsm-cluster lsm="$IMAGE"
+kubectl -n "$NAMESPACE" set image deployment/lsm-gateway gateway="$IMAGE"
 kubectl -n "$NAMESPACE" rollout status statefulset/lsm-cluster --timeout=180s
+kubectl -n "$NAMESPACE" rollout status deployment/lsm-gateway --timeout=180s
+wait_for_gateway_status
 
-write_url="$(eventually_lsmctl_write put kind ok)"
-echo "committed put through $write_url"
+put_output="$(retry_kubectl_lsm_contains "state=committed" put --addr "$GATEWAY_URL" --key kind --value ok)"
+require_contains "$put_output" "state=committed"
 
-eventually_lsmctl_get_contains "http://lsm-cluster-1.lsm-cluster:8080" kind "found=true" "value=ok"
+get_output="$(retry_kubectl_lsm_contains "found=true" get --addr "$GATEWAY_URL" --key kind)"
+require_contains "$get_output" "found=true"
+require_contains "$get_output" "value=ok"
 
-range_output="$(retry_kubectl_lsm_contains "key=kind" range --addr http://lsm-cluster-1.lsm-cluster:8080 --start kind --end kine --limit 1)"
+follower_output="$(retry_kubectl_lsm_contains "found=true" get --addr http://lsm-cluster-1.lsm-cluster.lsm-cluster.svc.cluster.local:8080 --key kind)"
+require_contains "$follower_output" "found=true"
+require_contains "$follower_output" "value=ok"
+
+range_output="$(retry_kubectl_lsm_contains "key=kind" range --addr "$GATEWAY_URL" --start kind --end kine --limit 1)"
 require_contains "$range_output" "key=kind"
 require_contains "$range_output" "value=ok"
 
-delete_url="$(eventually_lsmctl_write delete kind)"
-echo "committed delete through $delete_url"
+delete_output="$(retry_kubectl_lsm_contains "state=committed" delete --addr "$GATEWAY_URL" --key kind)"
+require_contains "$delete_output" "state=committed"
 
-eventually_lsmctl_get_contains "http://lsm-cluster-2.lsm-cluster:8080" kind "found=false"
+missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr "$GATEWAY_URL" --key kind)"
+require_contains "$missing_output" "found=false"
 
-echo "kind cluster smoke passed"
+follower_missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr http://lsm-cluster-2.lsm-cluster.lsm-cluster.svc.cluster.local:8080 --key kind)"
+require_contains "$follower_missing_output" "found=false"
+
+echo "kind gateway cluster smoke passed"
