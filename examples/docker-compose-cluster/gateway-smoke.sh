@@ -93,6 +93,18 @@ require_contains() {
   fi
 }
 
+request_id_from_output() {
+  local output="$1"
+  local request_id
+  request_id="$(awk -F= '/^request_id=/{print $2; exit}' <<<"$output")"
+  if [[ -z "$request_id" ]]; then
+    echo "write did not return request_id" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$request_id"
+}
+
 compose --profile gateway up -d --build node-a node-b node-c
 wait_for_health "http://127.0.0.1:8080"
 wait_for_health "http://127.0.0.1:8081"
@@ -113,17 +125,26 @@ get_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$get_output" "found=true"
 require_contains "$get_output" "value=ok"
 
+range_output="$(lsmctl range --addr "$GATEWAY_URL" --start gateway --end gateway~ --limit 10)"
+require_contains "$range_output" "key=gateway-smoke"
+require_contains "$range_output" "value=ok"
+
 async_output="$(lsmctl async-put --addr "$GATEWAY_URL" --key gateway-async --value ok)"
 require_contains "$async_output" "state=pending"
-request_id="$(awk -F= '/^request_id=/{print $2; exit}' <<<"$async_output")"
-if [[ -z "$request_id" ]]; then
-  echo "async-put did not return request_id" >&2
-  echo "$async_output" >&2
-  exit 1
-fi
+request_id="$(request_id_from_output "$async_output")"
 
 status_output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$request_id")"
 require_contains "$status_output" "state=committed"
+
+async_delete_output="$(lsmctl async-delete --addr "$GATEWAY_URL" --key gateway-async)"
+require_contains "$async_delete_output" "state=pending"
+delete_request_id="$(request_id_from_output "$async_delete_output")"
+
+delete_status_output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$delete_request_id")"
+require_contains "$delete_status_output" "state=committed"
+
+async_missing_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-async)"
+require_contains "$async_missing_output" "found=false"
 
 delete_output="$(lsmctl delete --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$delete_output" "state=committed"
