@@ -2,7 +2,9 @@
 
 This example runs a static three-node LSMEngine cluster in kind. It mirrors the
 Docker Compose smoke but exercises Kubernetes pod DNS, StatefulSet identity, and
-headless-service peer routing.
+headless-service peer routing. It also deploys an `lsm-gateway` Service and
+Deployment so clients can use one in-cluster endpoint while raft peer traffic
+stays behind the headless server Service.
 
 It is still a static raft foundation:
 
@@ -23,8 +25,13 @@ examples/kind-cluster/smoke.sh
 ```
 
 The script creates or reuses a kind cluster, builds and loads the server image,
-waits for the StatefulSet, and verifies writes/read/range/delete through
-`kubectl exec` using the `lsmctl` binary inside the image.
+waits for the StatefulSet and gateway Deployment, then verifies
+writes/read/range/delete through the `lsm-gateway` Service using the `lsmctl`
+binary inside the image. The gateway mounts `peer-urls.yaml` from a ConfigMap
+and passes it to `lsmctl gateway --endpoint-file`, matching the endpoint-file
+contract used by Compose gateways and operator commands. The smoke also reads
+from follower pods directly to verify the gateway write reached the replicated
+cluster state.
 
 ## Persistent restart smoke
 

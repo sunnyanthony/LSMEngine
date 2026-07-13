@@ -129,7 +129,8 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Keep the app server thin; let the proxy handle most ingress concerns.
 - End-to-end example (Envoy + kind): `examples/k8s-envoy/`.
 - Static three-node local smoke (Docker Compose): `examples/docker-compose-cluster/`.
-- Static three-node Kubernetes smoke (kind): `examples/kind-cluster/`.
+- Static three-node Kubernetes smoke (kind) with an in-cluster gateway Service:
+  `examples/kind-cluster/`.
 - Operator workflow for the current static distributed KV foundation: `docs/distributed-kv-runbook.md`.
 
 ## Zero-copy and latency goals
