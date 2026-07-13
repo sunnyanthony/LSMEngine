@@ -182,8 +182,10 @@ Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
 covers the file-backed node endpoint resolver used by long-running gateways. It
 also verifies `/readyz` reports backend write readiness and `/gateway/status`
-sees all three backend nodes plus a write leader. The smoke covers point reads,
-range scans, committed writes/deletes, accepted writes/deletes, and accepted
+sees all three backend nodes plus a write leader. The Compose gateway service
+healthcheck uses `lsmctl health --ready` so container health follows backend
+write readiness, not just process liveness. The smoke covers point reads, range
+scans, committed writes/deletes, accepted writes/deletes, and accepted
 write-status lookup through the single gateway endpoint.
 
 ## Rolling Restart Check
