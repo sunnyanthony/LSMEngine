@@ -2,5 +2,6 @@ namespace: lsm-cluster
 
 resources:
   - namespace.yaml
+  - gateway.yaml
   - service.yaml
   - statefulset.yaml

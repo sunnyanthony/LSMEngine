@@ -244,7 +244,8 @@ one node at a time and verify quorum health between steps.
 ## Kubernetes Path
 
 Use kind to verify the same static cluster through Kubernetes DNS and
-StatefulSet identity:
+StatefulSet identity, with a single in-cluster gateway Service for client
+traffic:
 
 ```bash
 examples/kind-cluster/smoke.sh
@@ -256,10 +257,14 @@ The pod names are the raft node ids:
 - `lsm-cluster-1`;
 - `lsm-cluster-2`.
 
-The smoke runs `lsmctl` inside the first pod and verifies committed writes from
-the other pods. The StatefulSet mounts a per-pod `ReadWriteOnce` PVC at `/data`,
-so committed raft state, WAL, SSTables, and control state survive pod
-replacement.
+The smoke runs `lsmctl` inside the first server pod, sends client writes and
+reads through `http://lsm-gateway:8090`, verifies `lsmctl gateway-status` can see
+all three backend nodes plus a write leader, and reads from follower pods
+directly to prove the gateway write reached replicated cluster state. The
+gateway mounts its node endpoints from a ConfigMap-backed `peer-urls.yaml`, so
+Kubernetes exercises the same LSM-owned endpoint-file resolver contract as
+Compose. The StatefulSet mounts a per-pod `ReadWriteOnce` PVC at `/data`, so
+committed raft state, WAL, SSTables, and control state survive pod replacement.
 
 Use the persistent restart smoke to verify pod replacement:
 

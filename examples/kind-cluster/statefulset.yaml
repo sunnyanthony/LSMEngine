@@ -46,9 +46,9 @@ spec:
               raft:
                 peers: ["lsm-cluster-0", "lsm-cluster-1", "lsm-cluster-2"]
                 peer_urls:
-                  lsm-cluster-0: "http://lsm-cluster-0.lsm-cluster:8080"
-                  lsm-cluster-1: "http://lsm-cluster-1.lsm-cluster:8080"
-                  lsm-cluster-2: "http://lsm-cluster-2.lsm-cluster:8080"
+                  lsm-cluster-0: "http://lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local:8080"
+                  lsm-cluster-1: "http://lsm-cluster-1.lsm-cluster.lsm-cluster.svc.cluster.local:8080"
+                  lsm-cluster-2: "http://lsm-cluster-2.lsm-cluster.lsm-cluster.svc.cluster.local:8080"
               shards:
                 - id: "users"
                   start_key: "a"
