@@ -38,6 +38,42 @@ func containsSignal(signals []os.Signal, want os.Signal) bool {
 	return false
 }
 
+func TestReadHealthRemoteUsesLivenessEndpointByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.Health{Ready: true})
+	}))
+	defer srv.Close()
+
+	got, err := readHealth(srv.URL, "", false)
+	if err != nil {
+		t.Fatalf("read health: %v", err)
+	}
+	if !got.Ready {
+		t.Fatalf("expected ready health")
+	}
+}
+
+func TestReadHealthRemoteCanUseReadinessEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/readyz" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.Health{Ready: true})
+	}))
+	defer srv.Close()
+
+	got, err := readHealth(srv.URL, "", true)
+	if err != nil {
+		t.Fatalf("read ready health: %v", err)
+	}
+	if !got.Ready {
+		t.Fatalf("expected ready health")
+	}
+}
+
 func TestParseWriteConsistencyDefault(t *testing.T) {
 	tests := []struct {
 		name    string

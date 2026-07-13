@@ -63,6 +63,24 @@ wait_for_ready() {
   done
 }
 
+wait_for_gateway_container_health() {
+  local deadline=$((SECONDS + 60))
+  local container=""
+  local status=""
+  until container="$(compose --profile gateway ps -q gateway)" \
+    && [[ -n "$container" ]] \
+    && status="$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null)" \
+    && [[ "$status" == "healthy" ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for gateway container health; last status=${status:-unknown}" >&2
+      compose --profile gateway ps >&2 || true
+      compose --profile gateway logs --tail=100 >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 wait_for_gateway_status() {
   local deadline=$((SECONDS + 60))
   local output=""
@@ -116,6 +134,7 @@ require_contains "$wait_output" "ready=true"
 compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
 wait_for_ready "$GATEWAY_URL"
+wait_for_gateway_container_health
 wait_for_gateway_status
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"

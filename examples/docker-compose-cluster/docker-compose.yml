@@ -67,6 +67,17 @@ services:
       - "8090:8090"
     volumes:
       - ./peer-urls.yaml:/etc/lsm/peer-urls.yaml:ro
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/lsmctl
+        - health
+        - --addr
+        - http://127.0.0.1:8090
+        - --ready
+      interval: 2s
+      timeout: 2s
+      retries: 30
     depends_on:
       - node-a
       - node-b

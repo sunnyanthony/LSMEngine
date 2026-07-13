@@ -105,7 +105,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl replace-node --old-node node-a --new-node node-c ...` composes the manual replacement sequence for static clusters: preflight the endpoints, raft-add the replacement, add it to shards that contain the old node, drain the old node, remove the old shard replicas, and raft-remove the old node. Use `--dry-run` to print the preflighted plan without submitting membership mutations. `--allow-unavailable-old-node` lets replacement complete drain after shard leadership has moved when the old node endpoint remains unreachable. The replacement node must already be running and reachable; `examples/docker-compose-cluster/replace-node-smoke.sh` exercises this with join-mode node-d.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode or gateway mode; the request id can also be passed as a positional argument.
-- `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`.
+- `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`; `lsmctl health --ready --addr <url>` checks `/readyz` instead of `/healthz` for gateway/load-balancer readiness.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 

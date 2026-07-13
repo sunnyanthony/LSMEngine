@@ -316,6 +316,7 @@ func healthCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	ready := fs.Bool("ready", false, "check readiness endpoint instead of liveness when using --addr")
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -328,7 +329,7 @@ func healthCmd(args []string) {
 	if *dataDir == "" {
 		*dataDir = cfg.DataDir
 	}
-	health, err := readHealth(*addr, *dataDir)
+	health, err := readHealth(*addr, *dataDir, *ready)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1266,10 +1267,14 @@ func readStats(addr, dataDir string) (lsm.Stats, error) {
 	return store.Stats(), nil
 }
 
-func readHealth(addr, dataDir string) (lsm.Health, error) {
+func readHealth(addr, dataDir string, ready bool) (lsm.Health, error) {
 	if addr != "" {
 		var health lsm.Health
-		if err := getJSON(addr+"/healthz", &health); err != nil {
+		path := "/healthz"
+		if ready {
+			path = "/readyz"
+		}
+		if err := getJSON(addr+path, &health); err != nil {
 			return lsm.Health{}, err
 		}
 		return health, nil
