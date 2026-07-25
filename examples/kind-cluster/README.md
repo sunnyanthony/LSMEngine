@@ -29,9 +29,12 @@ waits for the StatefulSet and gateway Deployment, then verifies
 writes/read/range/delete through the `lsm-gateway` Service using the `lsmctl`
 binary inside the image. The gateway discovers backend nodes from Kubernetes DNS
 SRV records through `lsmctl gateway --endpoint-dns-name`, keeping service
-discovery behind the LSM-owned node endpoint resolver contract. The smoke also
-reads from follower pods directly to verify the gateway write reached the
-replicated cluster state.
+discovery behind the LSM-owned node endpoint resolver contract. It uses the
+default gateway `read_mode=any`; switch the gateway args to `--read-mode leader`
+when `/kv/get` and `/kv/range` should only proxy to the current commit-log write
+leader. Leader read mode is a routing policy, not a raft ReadIndex or lease-read
+implementation. The smoke also reads from follower pods directly to verify the
+gateway write reached the replicated cluster state.
 
 ## Persistent restart smoke
 

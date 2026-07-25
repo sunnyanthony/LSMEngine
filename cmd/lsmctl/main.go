@@ -200,6 +200,7 @@ func gatewayCmd(args []string) {
 	endpointDNSProto := fs.String("endpoint-dns-proto", "tcp", "DNS SRV protocol for node endpoint discovery")
 	endpointDNSScheme := fs.String("endpoint-dns-scheme", "http", "URL scheme for DNS-discovered node endpoints")
 	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
+	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
 	var nodeEndpoints nodeEndpointFlags
@@ -219,6 +220,10 @@ func gatewayCmd(args []string) {
 	if consistencyDefault == "" {
 		consistencyDefault = cfg.WriteConsistencyDefault
 	}
+	gatewayReadMode := *readMode
+	if gatewayReadMode == "" {
+		gatewayReadMode = cfg.GatewayReadMode
+	}
 	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscoveryOptions{
 		EndpointFile:  *endpointFile,
 		DNSSRVName:    *endpointDNSName,
@@ -232,6 +237,7 @@ func gatewayCmd(args []string) {
 	gateway, err := server.NewGateway(server.GatewayOptions{
 		BootstrapURL:         normalizeHTTPBaseURL(*bootstrapURL),
 		NodeEndpointResolver: resolver,
+		ReadMode:             server.GatewayReadMode(gatewayReadMode),
 		MaxWriteAttempts:     *maxWriteAttempts,
 		WriteRetryBackoff:    *writeRetryBackoff,
 		AlignWriteLeader:     true,
@@ -1787,10 +1793,11 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 	fmt.Fprintf(
 		w,
-		"ready=%v node_count=%d reachable_nodes=%d write_leader=%s write_leader_endpoint=%s reason=%s\n",
+		"ready=%v node_count=%d reachable_nodes=%d read_mode=%s write_leader=%s write_leader_endpoint=%s reason=%s\n",
 		status.Ready,
 		status.NodeCount,
 		status.ReachableNodes,
+		status.ReadMode,
 		status.WriteLeader,
 		status.WriteLeaderEndpoint,
 		status.Reason,

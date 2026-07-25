@@ -16,12 +16,21 @@ import (
 	"lsmengine/pkg/lsm"
 )
 
+// GatewayReadMode controls how the gateway selects read backends.
+type GatewayReadMode string
+
+const (
+	GatewayReadModeAny    GatewayReadMode = "any"
+	GatewayReadModeLeader GatewayReadMode = "leader"
+)
+
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
 	BootstrapURL            string
 	NodeEndpoints           map[string]string
 	NodeEndpointResolver    NodeEndpointResolver
 	HTTPClient              *http.Client
+	ReadMode                GatewayReadMode
 	MaxWriteAttempts        int
 	WriteRetryBackoff       time.Duration
 	AlignWriteLeader        bool
@@ -33,6 +42,7 @@ type Gateway struct {
 	bootstrapURL            string
 	endpointResolver        NodeEndpointResolver
 	client                  *http.Client
+	readMode                GatewayReadMode
 	maxAttempts             int
 	retryBackoff            time.Duration
 	alignWriteLeader        bool
@@ -49,6 +59,7 @@ type GatewayClusterStatus struct {
 	Reason              string                     `json:"reason,omitempty"`
 	NodeCount           int                        `json:"node_count"`
 	ReachableNodes      int                        `json:"reachable_nodes"`
+	ReadMode            string                     `json:"read_mode"`
 	WriteLeader         string                     `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string                     `json:"write_leader_endpoint,omitempty"`
 	Nodes               []GatewayClusterNodeStatus `json:"nodes"`
@@ -127,6 +138,15 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	if maxAttempts == 0 {
 		maxAttempts = 2
 	}
+	readMode := opts.ReadMode
+	if readMode == "" {
+		readMode = GatewayReadModeAny
+	}
+	switch readMode {
+	case GatewayReadModeAny, GatewayReadModeLeader:
+	default:
+		return nil, fmt.Errorf("invalid gateway read mode %q", readMode)
+	}
 	endpointFailureCooldown := opts.EndpointFailureCooldown
 	if endpointFailureCooldown < 0 {
 		return nil, fmt.Errorf("endpoint failure cooldown must be non-negative")
@@ -138,6 +158,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		bootstrapURL:            bootstrapURL,
 		endpointResolver:        resolver,
 		client:                  client,
+		readMode:                readMode,
 		maxAttempts:             maxAttempts,
 		retryBackoff:            opts.WriteRetryBackoff,
 		alignWriteLeader:        opts.AlignWriteLeader,
@@ -183,6 +204,7 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 	nodeIDs := sortedUniqueNodeEndpointIDs(endpoints)
 	result := GatewayClusterStatus{
 		NodeCount: len(nodeIDs),
+		ReadMode:  string(g.readMode),
 		Nodes:     make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
 	}
 	var lastErr error
@@ -443,6 +465,34 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 
 func (g *Gateway) readNodeEndpointIDs(endpoints map[string]string) []string {
 	return g.nodeEndpointIDs(endpoints, true)
+}
+
+type gatewayReadTarget struct {
+	nodeID   string
+	endpoint string
+}
+
+func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, leaderOnly bool) ([]gatewayReadTarget, error) {
+	if g == nil {
+		return nil, fmt.Errorf("gateway unavailable")
+	}
+	if leaderOnly && g.readMode == GatewayReadModeLeader {
+		nodeID, endpoint, err := g.currentWriteLeader(ctx, endpoints)
+		if err != nil {
+			return nil, err
+		}
+		return []gatewayReadTarget{{nodeID: nodeID, endpoint: endpoint}}, nil
+	}
+	nodeIDs := g.readNodeEndpointIDs(endpoints)
+	out := make([]gatewayReadTarget, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		endpoint, ok := endpoints[nodeID]
+		if !ok {
+			continue
+		}
+		out = append(out, gatewayReadTarget{nodeID: nodeID, endpoint: endpoint})
+	}
+	return out, nil
 }
 
 func (g *Gateway) nodeEndpointIDs(endpoints map[string]string, rotateHealthy bool) []string {
