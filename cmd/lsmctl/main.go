@@ -190,6 +190,10 @@ func gatewayCmd(args []string) {
 	listen := fs.String("listen", ":8090", "gateway listen address")
 	bootstrapURL := fs.String("bootstrap-url", "", "server URL used to refresh cluster routes")
 	endpointFile := fs.String("endpoint-file", "", "absolute YAML/JSON node endpoint file")
+	endpointDNSName := fs.String("endpoint-dns-name", "", "DNS name for SRV node endpoint discovery")
+	endpointDNSService := fs.String("endpoint-dns-service", "http", "DNS SRV service for node endpoint discovery")
+	endpointDNSProto := fs.String("endpoint-dns-proto", "tcp", "DNS SRV protocol for node endpoint discovery")
+	endpointDNSScheme := fs.String("endpoint-dns-scheme", "http", "URL scheme for DNS-discovered node endpoints")
 	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
@@ -210,7 +214,13 @@ func gatewayCmd(args []string) {
 	if consistencyDefault == "" {
 		consistencyDefault = cfg.WriteConsistencyDefault
 	}
-	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, *endpointFile, nodeEndpoints)
+	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscoveryOptions{
+		EndpointFile:  *endpointFile,
+		DNSSRVName:    *endpointDNSName,
+		DNSSRVService: *endpointDNSService,
+		DNSSRVProto:   *endpointDNSProto,
+		DNSScheme:     *endpointDNSScheme,
+	}, nodeEndpoints)
 	if err != nil {
 		log.Fatalf("gateway endpoints: %v", err)
 	}
@@ -3012,14 +3022,26 @@ func clusterNodeEndpointsFromConfig(
 	return resolver.ResolveNodeEndpoints(context.Background())
 }
 
+type gatewayEndpointDiscoveryOptions struct {
+	EndpointFile  string
+	DNSSRVName    string
+	DNSSRVService string
+	DNSSRVProto   string
+	DNSScheme     string
+}
+
 func gatewayNodeEndpointResolverFromConfig(
 	cfg serverconfig.Config,
 	bootstrapURL string,
-	endpointFile string,
+	discovery gatewayEndpointDiscoveryOptions,
 	overrides nodeEndpointFlags,
 ) (server.NodeEndpointResolver, error) {
-	endpointFile = strings.TrimSpace(endpointFile)
-	if endpointFile == "" {
+	endpointFile := strings.TrimSpace(discovery.EndpointFile)
+	dnsName := strings.TrimSpace(discovery.DNSSRVName)
+	if endpointFile != "" && dnsName != "" {
+		return nil, fmt.Errorf("--endpoint-file and --endpoint-dns-name are mutually exclusive")
+	}
+	if endpointFile == "" && dnsName == "" {
 		endpointFile = strings.TrimSpace(cfg.Raft.PeerURLFile)
 	}
 	fallbackCfg := cfg
@@ -3031,6 +3053,15 @@ func gatewayNodeEndpointResolverFromConfig(
 	if endpointFile != "" {
 		return server.NewNodeEndpointFileResolver(server.NodeEndpointFileResolverOptions{
 			Path:                  endpointFile,
+			FallbackNodeEndpoints: fallback,
+		})
+	}
+	if dnsName != "" {
+		return server.NewNodeEndpointDNSResolver(server.NodeEndpointDNSResolverOptions{
+			Service:               discovery.DNSSRVService,
+			Proto:                 discovery.DNSSRVProto,
+			Name:                  dnsName,
+			Scheme:                discovery.DNSScheme,
 			FallbackNodeEndpoints: fallback,
 		})
 	}

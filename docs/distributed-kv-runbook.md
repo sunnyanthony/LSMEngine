@@ -131,9 +131,11 @@ values for one-off commands.
 Internally, `lsmctl` cluster commands and the route-aware `server.Gateway` use
 the LSM-owned `NodeEndpointResolver` contract. Static maps and a reloaded
 node-endpoint file resolver are available behind that layer for long-running
-gateways or supervisors. Future Kubernetes, DNS, or service-registry discovery
-should plug into the same resolver layer instead of adding provider-specific
-lookups directly to CLI commands or gateway routing.
+gateways or supervisors. Gateways can also use DNS SRV discovery through
+`--endpoint-dns-name`, `--endpoint-dns-service`, and `--endpoint-dns-proto`.
+The DNS SRV resolver keeps platform lookup behavior behind the same LSM-owned
+resolver layer instead of adding provider-specific lookups directly to gateway
+routing. Future service-registry discovery should plug into the same contract.
 
 For a single client-facing endpoint, run `lsmctl gateway`:
 
@@ -261,10 +263,10 @@ The smoke runs `lsmctl` inside the first server pod, sends client writes and
 reads through `http://lsm-gateway:8090`, verifies `lsmctl gateway-status` can see
 all three backend nodes plus a write leader, and reads from follower pods
 directly to prove the gateway write reached replicated cluster state. The
-gateway mounts its node endpoints from a ConfigMap-backed `peer-urls.yaml`, so
-Kubernetes exercises the same LSM-owned endpoint-file resolver contract as
-Compose. The StatefulSet mounts a per-pod `ReadWriteOnce` PVC at `/data`, so
-committed raft state, WAL, SSTables, and control state survive pod replacement.
+gateway discovers backend node endpoints from Kubernetes DNS SRV records through
+the LSM-owned DNS node endpoint resolver. The StatefulSet mounts a per-pod
+`ReadWriteOnce` PVC at `/data`, so committed raft state, WAL, SSTables, and
+control state survive pod replacement.
 
 Use the persistent restart smoke to verify pod replacement:
 

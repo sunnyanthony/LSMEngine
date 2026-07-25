@@ -56,6 +56,9 @@ func (r *NodeEndpointFileResolver) ResolveNodeEndpoints(ctx context.Context) (ma
 		return nil, fmt.Errorf("node endpoint resolver is unavailable")
 	}
 	endpoints, loadErr := r.load(ctx)
+	if endpoints == nil {
+		endpoints = make(map[string]string)
+	}
 	mergeNodeEndpoints(endpoints, r.fallback, true)
 	if len(endpoints) > 0 {
 		return endpoints, nil
