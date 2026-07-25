@@ -51,6 +51,26 @@ require_contains() {
   fi
 }
 
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ -z "$seq" ]]; then
+    echo "write did not return seq" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
+wait_cluster_applied() {
+  local seq="$1"
+  local output
+  output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --min-applied-index "$seq")"
+  require_contains "$output" "ready=true"
+  require_contains "$output" "ready_nodes=3"
+}
+
 node_endpoint_args() {
   printf '%s\n' \
     --node-endpoint "node-a=http://127.0.0.1:8080" \
@@ -70,6 +90,8 @@ require_contains "$wait_output" "ready_nodes=3"
 
 put_output="$(lsmctl put --cluster $(node_endpoint_args) --key compose --value ok)"
 require_contains "$put_output" "state=committed"
+put_seq="$(seq_from_output "$put_output")"
+wait_cluster_applied "$put_seq"
 
 get_output="$(lsmctl get --addr http://127.0.0.1:8081 --key compose)"
 require_contains "$get_output" "found=true"
@@ -89,6 +111,8 @@ require_contains "$cluster_range_output" "value=ok"
 
 delete_output="$(lsmctl delete --cluster $(node_endpoint_args) --key compose)"
 require_contains "$delete_output" "state=committed"
+delete_seq="$(seq_from_output "$delete_output")"
+wait_cluster_applied "$delete_seq"
 
 missing_output="$(lsmctl get --addr http://127.0.0.1:8082 --key compose)"
 require_contains "$missing_output" "found=false"

@@ -33,6 +33,7 @@ type WriteRequestStatus struct {
 	Operation   string            `json:"operation"`
 	Consistency WriteConsistency  `json:"consistency"`
 	State       WriteRequestState `json:"state"`
+	Seq         uint64            `json:"seq,omitempty"`
 	Error       string            `json:"error,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`

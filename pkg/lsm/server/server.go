@@ -32,6 +32,11 @@ type HandlerOptions struct {
 	MaxWriteRequests        int
 }
 
+type writeSeqProvider interface {
+	PutWithSeq(key []byte, value []byte) (uint64, error)
+	DeleteWithSeq(key []byte) (uint64, error)
+}
+
 // NewHandlerWithOptions returns an HTTP handler with explicit behavior options.
 func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http.Handler {
 	resolved := resolveHandlerOptions(opts)
@@ -648,8 +653,11 @@ func (h *handler) handlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.executeWrite(w, consistency, "put", key, func() error {
-		return h.writer.Put(key, value)
+	h.executeWrite(w, consistency, "put", key, func() (uint64, error) {
+		if writer, ok := h.writer.(writeSeqProvider); ok {
+			return writer.PutWithSeq(key, value)
+		}
+		return 0, h.writer.Put(key, value)
 	})
 }
 
@@ -676,8 +684,11 @@ func (h *handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.executeWrite(w, consistency, "delete", key, func() error {
-		return h.writer.Delete(key)
+	h.executeWrite(w, consistency, "delete", key, func() (uint64, error) {
+		if writer, ok := h.writer.(writeSeqProvider); ok {
+			return writer.DeleteWithSeq(key)
+		}
+		return 0, h.writer.Delete(key)
 	})
 }
 
@@ -728,7 +739,7 @@ func (h *handler) executeWrite(
 	consistency lsm.WriteConsistency,
 	operation string,
 	key []byte,
-	apply func() error,
+	apply func() (uint64, error),
 ) {
 	if h.requests == nil {
 		http.Error(w, "write tracker unavailable", http.StatusServiceUnavailable)
@@ -740,21 +751,23 @@ func (h *handler) executeWrite(
 		writeJSON(w, http.StatusAccepted, status)
 		return
 	}
-	if err := apply(); err != nil {
+	seq, err := apply()
+	if err != nil {
 		h.requests.Reject(status.RequestID, err)
 		h.writeWriteError(w, key, err)
 		return
 	}
-	final := h.requests.Commit(status.RequestID)
+	final := h.requests.Commit(status.RequestID, seq)
 	writeJSON(w, http.StatusOK, final)
 }
 
-func (h *handler) executeAccepted(requestID string, apply func() error) {
-	if err := apply(); err != nil {
+func (h *handler) executeAccepted(requestID string, apply func() (uint64, error)) {
+	seq, err := apply()
+	if err != nil {
 		h.requests.Reject(requestID, err)
 		return
 	}
-	h.requests.Commit(requestID)
+	h.requests.Commit(requestID, seq)
 }
 
 func (h *handler) transferLeader(shardID string, req targetRequest) error {
@@ -1058,11 +1071,12 @@ func (s *writeRequestStore) New(operation string, consistency lsm.WriteConsisten
 	return status
 }
 
-func (s *writeRequestStore) Commit(requestID string) lsm.WriteRequestStatus {
+func (s *writeRequestStore) Commit(requestID string, seq uint64) lsm.WriteRequestStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	status := s.statusMap[requestID]
 	status.State = lsm.WriteRequestCommitted
+	status.Seq = seq
 	status.Error = ""
 	status.UpdatedAt = time.Now().UTC()
 	s.statusMap[requestID] = status
