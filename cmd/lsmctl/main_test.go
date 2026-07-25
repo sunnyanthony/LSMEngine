@@ -326,6 +326,8 @@ func TestWriteClusterStatuses(t *testing.T) {
 						WriteAvailable: true,
 						Term:           2,
 						Index:          11,
+						AppliedIndex:   9,
+						ApplyLag:       2,
 					},
 				},
 			},
@@ -339,6 +341,8 @@ func TestWriteClusterStatuses(t *testing.T) {
 		"write_available=true",
 		"term=2",
 		"index=11",
+		"applied_index=9",
+		"apply_lag=2",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
@@ -441,6 +445,8 @@ func TestWriteGatewayStatus(t *testing.T) {
 						WriteAvailable: true,
 						Term:           2,
 						Index:          12,
+						AppliedIndex:   10,
+						ApplyLag:       2,
 					},
 				},
 			},
@@ -464,6 +470,8 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"node=node-a",
 		"ok=true",
 		"health=ready",
+		"applied_index=10",
+		"apply_lag=2",
 		"node=node-d",
 		"ok=false",
 		"degraded=true",

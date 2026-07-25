@@ -129,6 +129,8 @@ type CommitLogRuntimeStatus struct {
 	Index          uint64     `json:"index"`
 	Term           uint64     `json:"term"`
 	SnapshotIndex  uint64     `json:"snapshot_index,omitempty"`
+	AppliedIndex   uint64     `json:"applied_index"`
+	ApplyLag       uint64     `json:"apply_lag"`
 	Leader         bool       `json:"leader"`
 	Replicas       int        `json:"replicas"`
 	WriteAvailable bool       `json:"write_available"`

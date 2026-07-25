@@ -79,6 +79,12 @@ The useful fields are:
 
 - `commit_log_runtime.mode`: should be `raft_transport_foundation` for the
   current static multi-peer foundation;
+- `commit_log_runtime.index`: latest commit-log index observed by this node's
+  provider;
+- `commit_log_runtime.applied_index`: latest commit-log index materialized into
+  this node's LSM/control state;
+- `commit_log_runtime.apply_lag`: provider index minus local applied index; a
+  non-zero value means the node may still be catching up even if it is reachable;
 - `commit_log_runtime.replicas`: should be `3`;
 - `commit_log_runtime.leader`: true only on the current raft write leader;
 - `commit_log_runtime.write_available`: true only where local committed writes
