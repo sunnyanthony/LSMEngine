@@ -18,26 +18,29 @@ import (
 
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
-	BootstrapURL         string
-	NodeEndpoints        map[string]string
-	NodeEndpointResolver NodeEndpointResolver
-	HTTPClient           *http.Client
-	MaxWriteAttempts     int
-	WriteRetryBackoff    time.Duration
-	AlignWriteLeader     bool
+	BootstrapURL            string
+	NodeEndpoints           map[string]string
+	NodeEndpointResolver    NodeEndpointResolver
+	HTTPClient              *http.Client
+	MaxWriteAttempts        int
+	WriteRetryBackoff       time.Duration
+	AlignWriteLeader        bool
+	EndpointFailureCooldown time.Duration
 }
 
 // Gateway routes writes by shard metadata and performs bounded retries on retryable write errors.
 type Gateway struct {
-	bootstrapURL     string
-	endpointResolver NodeEndpointResolver
-	client           *http.Client
-	maxAttempts      int
-	retryBackoff     time.Duration
-	alignWriteLeader bool
+	bootstrapURL            string
+	endpointResolver        NodeEndpointResolver
+	client                  *http.Client
+	maxAttempts             int
+	retryBackoff            time.Duration
+	alignWriteLeader        bool
+	endpointFailureCooldown time.Duration
 
-	mu     sync.RWMutex
-	routes cachedRoutes
+	mu       sync.RWMutex
+	routes   cachedRoutes
+	endpoint endpointPolicy
 }
 
 // GatewayClusterStatus summarizes backend node status as seen through a gateway.
@@ -70,6 +73,12 @@ type cachedRouteShard struct {
 	start  []byte
 	end    []byte
 	leader string
+}
+
+type endpointPolicy struct {
+	mu            sync.Mutex
+	failedUntil   map[string]time.Time
+	nextReadStart int
 }
 
 // WriteRequestError describes a failed write response from a node endpoint.
@@ -116,13 +125,21 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	if maxAttempts == 0 {
 		maxAttempts = 2
 	}
+	endpointFailureCooldown := opts.EndpointFailureCooldown
+	if endpointFailureCooldown < 0 {
+		return nil, fmt.Errorf("endpoint failure cooldown must be non-negative")
+	}
+	if endpointFailureCooldown == 0 {
+		endpointFailureCooldown = 5 * time.Second
+	}
 	return &Gateway{
-		bootstrapURL:     bootstrapURL,
-		endpointResolver: resolver,
-		client:           client,
-		maxAttempts:      maxAttempts,
-		retryBackoff:     opts.WriteRetryBackoff,
-		alignWriteLeader: opts.AlignWriteLeader,
+		bootstrapURL:            bootstrapURL,
+		endpointResolver:        resolver,
+		client:                  client,
+		maxAttempts:             maxAttempts,
+		retryBackoff:            opts.WriteRetryBackoff,
+		alignWriteLeader:        opts.AlignWriteLeader,
+		endpointFailureCooldown: endpointFailureCooldown,
 	}, nil
 }
 
@@ -175,9 +192,11 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 		}
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			g.markEndpointFailure(endpoint)
 			node.Error = err.Error()
 			lastErr = err
 		} else {
+			g.markEndpointSuccess(endpoint)
 			node.OK = true
 			node.Status = &status
 			result.ReachableNodes++
@@ -363,15 +382,22 @@ func (g *Gateway) postWrite(
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		g.markEndpointFailure(endpoint)
 		return lsm.WriteRequestStatus{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
+		g.markEndpointSuccess(endpoint)
 		var out lsm.WriteRequestStatus
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			return lsm.WriteRequestStatus{}, err
 		}
 		return out, nil
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		g.markEndpointFailure(endpoint)
+	} else {
+		g.markEndpointSuccess(endpoint)
 	}
 	var writeErr writeErrorResponse
 	if err := json.NewDecoder(resp.Body).Decode(&writeErr); err != nil {
@@ -387,15 +413,17 @@ func (g *Gateway) postWrite(
 }
 
 func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]string) (string, string, error) {
-	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	nodeIDs := g.nodeEndpointIDs(endpoints, false)
 	var lastErr error
 	for _, nodeID := range nodeIDs {
 		endpoint := endpoints[nodeID]
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			g.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
 		}
+		g.markEndpointSuccess(endpoint)
 		if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
 			if strings.TrimSpace(status.NodeID) != "" {
 				nodeID = status.NodeID
@@ -407,6 +435,63 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 		return "", "", lastErr
 	}
 	return "", "", fmt.Errorf("cluster write leader not available")
+}
+
+func (g *Gateway) readNodeEndpointIDs(endpoints map[string]string) []string {
+	return g.nodeEndpointIDs(endpoints, true)
+}
+
+func (g *Gateway) nodeEndpointIDs(endpoints map[string]string, rotateHealthy bool) []string {
+	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	if g == nil || len(nodeIDs) <= 1 {
+		return nodeIDs
+	}
+	now := time.Now()
+	healthy := make([]string, 0, len(nodeIDs))
+	degraded := make([]string, 0, len(nodeIDs))
+	g.endpoint.mu.Lock()
+	for _, nodeID := range nodeIDs {
+		endpoint := NormalizeHTTPBaseURL(endpoints[nodeID])
+		until, failed := g.endpoint.failedUntil[endpoint]
+		if failed && now.Before(until) {
+			degraded = append(degraded, nodeID)
+			continue
+		}
+		if failed {
+			delete(g.endpoint.failedUntil, endpoint)
+		}
+		healthy = append(healthy, nodeID)
+	}
+	if rotateHealthy && len(healthy) > 1 {
+		start := g.endpoint.nextReadStart % len(healthy)
+		g.endpoint.nextReadStart++
+		healthy = append(append([]string(nil), healthy[start:]...), healthy[:start]...)
+	}
+	g.endpoint.mu.Unlock()
+	return append(healthy, degraded...)
+}
+
+func (g *Gateway) markEndpointFailure(endpoint string) {
+	if g == nil || g.endpointFailureCooldown <= 0 {
+		return
+	}
+	endpoint = NormalizeHTTPBaseURL(endpoint)
+	g.endpoint.mu.Lock()
+	if g.endpoint.failedUntil == nil {
+		g.endpoint.failedUntil = make(map[string]time.Time)
+	}
+	g.endpoint.failedUntil[endpoint] = time.Now().Add(g.endpointFailureCooldown)
+	g.endpoint.mu.Unlock()
+}
+
+func (g *Gateway) markEndpointSuccess(endpoint string) {
+	if g == nil {
+		return
+	}
+	endpoint = NormalizeHTTPBaseURL(endpoint)
+	g.endpoint.mu.Lock()
+	delete(g.endpoint.failedUntil, endpoint)
+	g.endpoint.mu.Unlock()
 }
 
 func (g *Gateway) alignShardLeader(ctx context.Context, endpoint string, key []byte, target string) error {

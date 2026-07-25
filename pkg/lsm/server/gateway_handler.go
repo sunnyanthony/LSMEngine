@@ -224,7 +224,7 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	nodeIDs := h.gateway.readNodeEndpointIDs(endpoints)
 	var lastErr error
 	for _, nodeID := range nodeIDs {
 		endpoint := endpoints[nodeID]
@@ -235,18 +235,22 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		}
 		resp, err := h.gateway.client.Do(req)
 		if err != nil {
+			h.gateway.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
 		}
 		if isWriteStatusRequest(r) && resp.StatusCode == http.StatusNotFound {
+			h.gateway.markEndpointSuccess(endpoint)
 			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 			_ = resp.Body.Close()
 			continue
 		}
 		if resp.StatusCode == http.StatusOK || resp.StatusCode < http.StatusInternalServerError {
+			h.gateway.markEndpointSuccess(endpoint)
 			copyResponse(w, resp)
 			return
 		}
+		h.gateway.markEndpointFailure(endpoint)
 		lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 		_ = resp.Body.Close()
 	}
