@@ -599,7 +599,14 @@ func TestHandlerStats(t *testing.T) {
 }
 
 func TestHandlerClusterStatus(t *testing.T) {
-	handler := NewHandler(newControlStubProvider())
+	p := newControlStubProvider()
+	p.state.status.CommitLogRuntime = lsm.CommitLogRuntimeStatus{
+		Health:       "ready",
+		Index:        7,
+		AppliedIndex: 6,
+		ApplyLag:     1,
+	}
+	handler := NewHandler(p)
 	req := httptest.NewRequest(http.MethodGet, "/cluster/status", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -612,6 +619,9 @@ func TestHandlerClusterStatus(t *testing.T) {
 	}
 	if status.NodeID != "node-a" {
 		t.Fatalf("unexpected status: %+v", status)
+	}
+	if status.CommitLogRuntime.AppliedIndex != 6 || status.CommitLogRuntime.ApplyLag != 1 {
+		t.Fatalf("unexpected commit-log runtime progress: %+v", status.CommitLogRuntime)
 	}
 }
 

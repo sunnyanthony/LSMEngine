@@ -1,6 +1,10 @@
 package engine
 
-import "lsmengine/pkg/lsm/errs"
+import (
+	"sync/atomic"
+
+	"lsmengine/pkg/lsm/errs"
+)
 
 type lsmCommittedEntryObserver struct {
 	l *LSM
@@ -118,6 +122,36 @@ func (l *LSM) markCommitLogAppliedLocked(index uint64) {
 	if index > l.commitLogAppliedIndex {
 		l.commitLogAppliedIndex = index
 	}
+}
+
+func (l *LSM) commitLogApplied() uint64 {
+	if l == nil {
+		return 0
+	}
+	l.commitApplyMu.Lock()
+	defer l.commitApplyMu.Unlock()
+	return l.commitLogAppliedIndex
+}
+
+func (l *LSM) applyCommitLogRuntimeProgress(status CommitLogRuntimeStatus) CommitLogRuntimeStatus {
+	applied := l.commitLogApplied()
+	if l != nil && l.commitLog != nil && l.commitLog.Provider() == CommitLogProviderLocal {
+		// Report recovered local state without changing the conservative replay floor.
+		if dataApplied := atomic.LoadUint64(&l.seq); dataApplied > applied {
+			applied = dataApplied
+		}
+		if l.control != nil {
+			if controlApplied := l.control.commitLogApplied(); controlApplied > applied {
+				applied = controlApplied
+			}
+		}
+	}
+	status.AppliedIndex = applied
+	status.ApplyLag = 0
+	if status.Index > applied {
+		status.ApplyLag = status.Index - applied
+	}
+	return status
 }
 
 func (l *LSM) observeCommitLogAppliedIndex(index uint64) {

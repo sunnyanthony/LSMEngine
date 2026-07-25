@@ -31,6 +31,75 @@ func TestApplyCommittedDataFromLogMaterializesLocalState(t *testing.T) {
 	if got := store.Stats().Seq; got != 5 {
 		t.Fatalf("expected seq 5, got %d", got)
 	}
+	status := store.ClusterStatus()
+	if status.CommitLogRuntime.AppliedIndex != 5 || status.CommitLogRuntime.ApplyLag != 0 {
+		t.Fatalf("unexpected commit-log runtime progress: %+v", status.CommitLogRuntime)
+	}
+}
+
+func TestLocalCommitLogProgressAfterDataOnlyRestart(t *testing.T) {
+	opts := Options{DataDir: t.TempDir()}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	status := reopened.ClusterStatus().CommitLogRuntime
+	if status.Index == 0 || status.AppliedIndex != status.Index || status.ApplyLag != 0 {
+		t.Fatalf("recovered local data reported as unapplied: %+v", status)
+	}
+}
+
+func TestCommitLogApplyLagSaturatesAtZero(t *testing.T) {
+	store := &LSM{commitLogAppliedIndex: 9}
+	status := store.applyCommitLogRuntimeProgress(CommitLogRuntimeStatus{Index: 8})
+	if status.AppliedIndex != 9 || status.ApplyLag != 0 {
+		t.Fatalf("non-atomic sampling underflowed: %+v", status)
+	}
+}
+
+func TestClusterStatusReportsCommitLogApplyLag(t *testing.T) {
+	store, err := New(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	store.commitApplyMu.Lock()
+	store.commitLogAppliedIndex = 3
+	store.commitApplyMu.Unlock()
+
+	consensus := &testCommitLogConsensus{
+		runtimeStatus: CommitLogRuntimeStatus{
+			Mode:     "custom",
+			Index:    8,
+			Term:     1,
+			Leader:   true,
+			Replicas: 1,
+		},
+	}
+	store.control.mu.Lock()
+	store.control.consensus = consensus
+	store.control.mu.Unlock()
+
+	status := store.ClusterStatus()
+	if status.CommitLogRuntime.AppliedIndex != 3 {
+		t.Fatalf("expected applied index 3, got %+v", status.CommitLogRuntime)
+	}
+	if status.CommitLogRuntime.ApplyLag != 5 {
+		t.Fatalf("expected apply lag 5, got %+v", status.CommitLogRuntime)
+	}
 }
 
 func TestApplyCommittedDataFromLogSkipsAlreadyAppliedIndex(t *testing.T) {

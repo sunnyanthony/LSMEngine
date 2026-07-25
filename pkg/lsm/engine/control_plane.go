@@ -1248,7 +1248,9 @@ func (l *LSM) ClusterStatus() ClusterStatus {
 	if l == nil || l.control == nil {
 		return ClusterStatus{}
 	}
-	return l.control.status()
+	status := l.control.status()
+	status.CommitLogRuntime = l.applyCommitLogRuntimeProgress(status.CommitLogRuntime)
+	return status
 }
 
 // Shards returns shard-level runtime metadata.
