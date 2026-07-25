@@ -36,6 +36,7 @@ type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
 type Stats = engine.Stats
 type SSTableLevelStats = engine.SSTableLevelStats
+type SSTableFlowStats = engine.SSTableFlowStats
 type Health = engine.Health
 
 const (

@@ -71,6 +71,13 @@ func TestServerStatsIncludesSSTablePressure(t *testing.T) {
 		stats = readJSON[lsm.Stats](t, handler, "/stats")
 		return stats.SSTableCount >= 1
 	})
+	if _, ok := store.Get([]byte("a")); !ok {
+		t.Fatalf("expected sstable hit")
+	}
+	if _, ok := store.Get([]byte("z")); ok {
+		t.Fatalf("expected miss")
+	}
+	stats = readJSON[lsm.Stats](t, handler, "/stats")
 	if stats.SSTableBytes == 0 {
 		t.Fatalf("expected sstable bytes > 0")
 	}
@@ -79,6 +86,9 @@ func TestServerStatsIncludesSSTablePressure(t *testing.T) {
 	}
 	if len(stats.SSTableLevels) == 0 || stats.SSTableLevels[0].Level != 0 {
 		t.Fatalf("expected l0 level stats, got %+v", stats.SSTableLevels)
+	}
+	if stats.PointReadSSTableHits != 1 || stats.PointReadMisses != 1 {
+		t.Fatalf("expected point read stats, got %+v", stats)
 	}
 }
 

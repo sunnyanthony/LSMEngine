@@ -117,6 +117,84 @@ func TestStatsIncludesFlushedSSTables(t *testing.T) {
 	}
 }
 
+func TestStatsPointReadMetrics(t *testing.T) {
+	store, err := New(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, ok := store.Get([]byte("a")); !ok {
+		t.Fatalf("expected memtable hit")
+	}
+	if _, ok := store.Get([]byte("missing")); ok {
+		t.Fatalf("expected miss")
+	}
+
+	stats := store.Stats()
+	if stats.PointReads != 2 {
+		t.Fatalf("expected 2 point reads, got %d", stats.PointReads)
+	}
+	if stats.PointReadMemtableHits != 1 {
+		t.Fatalf("expected 1 memtable hit, got %d", stats.PointReadMemtableHits)
+	}
+	if stats.PointReadMisses != 1 {
+		t.Fatalf("expected 1 miss, got %d", stats.PointReadMisses)
+	}
+	if stats.PointReadSSTableProbes != 0 || stats.PointReadMaxSSTableProbes != 0 {
+		t.Fatalf("expected no sstable probes, got probes=%d max=%d", stats.PointReadSSTableProbes, stats.PointReadMaxSSTableProbes)
+	}
+}
+
+func TestStatsSSTableReadAmplificationMetrics(t *testing.T) {
+	store, err := New(Options{
+		DataDir:       t.TempDir(),
+		MemtableLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	waitForStats(t, func() bool {
+		return store.Stats().SSTableCount >= 1
+	})
+	if _, ok := store.Get([]byte("a")); !ok {
+		t.Fatalf("expected sstable hit")
+	}
+	if _, ok := store.Get([]byte("z")); ok {
+		t.Fatalf("expected sstable miss")
+	}
+
+	stats := store.Stats()
+	if stats.PointReads != 2 {
+		t.Fatalf("expected 2 point reads, got %d", stats.PointReads)
+	}
+	if stats.PointReadSSTableHits != 1 || stats.PointReadMisses != 1 {
+		t.Fatalf("expected one sstable hit and one miss, got hits=%d misses=%d", stats.PointReadSSTableHits, stats.PointReadMisses)
+	}
+	if stats.PointReadSSTableProbes < 2 || stats.PointReadMaxSSTableProbes == 0 {
+		t.Fatalf("expected sstable probe metrics, got probes=%d max=%d", stats.PointReadSSTableProbes, stats.PointReadMaxSSTableProbes)
+	}
+	if stats.SSTableFlow.CacheHit+stats.SSTableFlow.CacheMiss+stats.SSTableFlow.FilterPass == 0 {
+		t.Fatalf("expected sstable flow metrics, got %+v", stats.SSTableFlow)
+	}
+}
+
 func TestHealthStates(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
 	if err != nil {
