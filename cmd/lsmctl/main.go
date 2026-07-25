@@ -314,8 +314,18 @@ func statsCmd(args []string) {
 	fmt.Printf("immutables=%d\n", stats.ImmutableCount)
 	fmt.Printf("immutable_bytes=%d\n", stats.ImmutableBytes)
 	fmt.Printf("flush_queue_depth=%d\n", stats.FlushQueueDepth)
+	fmt.Printf("flush_queue_capacity=%d\n", stats.FlushQueueCapacity)
 	fmt.Printf("pinned=%d\n", stats.PinnedCount)
 	fmt.Printf("tables=%d\n", stats.TableCount)
+	fmt.Printf("sstables=%d\n", stats.SSTableCount)
+	fmt.Printf("sstable_bytes=%d\n", stats.SSTableBytes)
+	fmt.Printf("l0_sstables=%d\n", stats.L0TableCount)
+	fmt.Printf("l0_bytes=%d\n", stats.L0SizeBytes)
+	fmt.Printf("compaction_l0_threshold=%d\n", stats.CompactionL0Threshold)
+	fmt.Printf("compaction_pending=%v\n", stats.CompactionPending)
+	for _, level := range stats.SSTableLevels {
+		fmt.Printf("level=%d sstables=%d bytes=%d\n", level.Level, level.TableCount, level.SizeBytes)
+	}
 	fmt.Printf("seq=%d\n", stats.Seq)
 	fmt.Printf("closing=%v closed=%v\n", stats.Closing, stats.Closed)
 	fmt.Printf("flush_blocked=%v compaction_enabled=%v\n", stats.FlushBlocked, stats.CompactionEnabled)

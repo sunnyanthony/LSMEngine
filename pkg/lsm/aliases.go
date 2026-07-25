@@ -37,6 +37,7 @@ type ControlWriteOptions = engine.ControlWriteOptions
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
 type Stats = engine.Stats
+type SSTableLevelStats = engine.SSTableLevelStats
 type Health = engine.Health
 
 const (

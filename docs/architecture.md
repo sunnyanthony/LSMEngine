@@ -219,6 +219,14 @@ opts := engine.Options{
 ```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
+- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler.
+
+## External library boundaries
+- Third-party libraries must sit behind an LSM-owned interface or adapter before they affect public APIs or cross-package contracts.
+- Public and internal subsystem contracts should use LSMEngine-owned types, with conversion at the boundary. This keeps future replacement possible when a library changes, is swapped out, or is reimplemented in-tree.
+- IO backends follow this pattern through `internal/lsm/iofs`: callers depend on the LSM-owned filesystem contract, while concrete backends can be local, async-wrapped, or Linux-specific.
+- The builtin etcd-raft commit-log path follows the same rule: `etcd.io/raft` and `raftpb` payloads remain implementation details behind the commit-log provider and `RaftPeerMessage` envelopes. Engine apply semantics are expressed as committed control/data entries, not raft callbacks or library-native messages.
+- New libraries should add the smallest adapter layer that preserves LSMEngine invariants, deterministic apply order, observability, and testability.
 
 ## Next steps (implementation order)
 1) Snapshot range iterator over SSTables (merge + tombstone filtering).
