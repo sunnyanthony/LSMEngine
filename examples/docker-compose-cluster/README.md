@@ -61,10 +61,11 @@ and is not a raft ReadIndex or lease-read implementation. The smoke also
 verifies gateway `/readyz` reports backend write readiness, the Compose
 healthcheck
 marks the gateway container healthy from that readiness check,
-`lsmctl gateway-status --addr http://127.0.0.1:8090` reports all three backend
-nodes and the current write leader, then checks accepted write-status lookup
-through the same gateway endpoint. It also exercises range scans and
-`async-delete` through gateway.
+`lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode leader`
+waits until `/gateway/status` reports all three backend nodes, leader read mode,
+and the current write leader, then checks accepted write-status lookup through
+the same gateway endpoint. It also exercises range scans and `async-delete`
+through gateway.
 
 ## Rolling restart smoke
 

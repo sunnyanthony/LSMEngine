@@ -419,6 +419,112 @@ func TestReadGatewayStatusRequiresAddr(t *testing.T) {
 	}
 }
 
+func TestWaitGatewayStatusReady(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(server.GatewayClusterStatus{
+			Ready:               true,
+			NodeCount:           3,
+			ReachableNodes:      3,
+			ReadMode:            "leader",
+			WriteLeader:         "node-b",
+			WriteLeaderEndpoint: "http://node-b:8080",
+		})
+	}))
+	defer srv.Close()
+
+	got, err := waitGatewayStatus(srv.URL, waitGatewayOptions{
+		RequiredReachableNodes: 3,
+		RequireWriteLeader:     true,
+		RequiredReadMode:       "leader",
+		Timeout:                time.Second,
+		Interval:               time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("wait gateway status: %v", err)
+	}
+	if !got.Ready || got.RequiredReachableNodes != 3 || got.WriteLeader != "node-b" || got.Status.ReadMode != "leader" {
+		t.Fatalf("unexpected wait result: %+v", got)
+	}
+}
+
+func TestWaitGatewayStatusPollsUntilReady(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		status := server.GatewayClusterStatus{
+			Ready:          false,
+			NodeCount:      3,
+			ReachableNodes: 2,
+			ReadMode:       "leader",
+		}
+		if call >= 2 {
+			status.Ready = true
+			status.ReachableNodes = 3
+			status.WriteLeader = "node-a"
+			status.WriteLeaderEndpoint = "http://node-a:8080"
+		}
+		_ = json.NewEncoder(w).Encode(status)
+	}))
+	defer srv.Close()
+
+	got, err := waitGatewayStatus(srv.URL, waitGatewayOptions{
+		RequiredReachableNodes: 3,
+		RequireWriteLeader:     true,
+		RequiredReadMode:       "leader",
+		Timeout:                time.Second,
+		Interval:               time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("wait gateway status: %v", err)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("expected polling, got %d call(s)", calls.Load())
+	}
+	if !got.Ready || got.ReachableNodes != 3 || got.WriteLeader != "node-a" {
+		t.Fatalf("unexpected wait result: %+v", got)
+	}
+}
+
+func TestWaitGatewayStatusRejectsInvalidMinReachable(t *testing.T) {
+	if _, err := waitGatewayStatus("http://127.0.0.1:8090", waitGatewayOptions{
+		RequiredReachableNodes: -1,
+	}); err == nil {
+		t.Fatalf("expected invalid min-reachable error")
+	}
+}
+
+func TestWaitGatewayStatusRejectsInvalidReadMode(t *testing.T) {
+	if _, err := waitGatewayStatus("http://127.0.0.1:8090", waitGatewayOptions{
+		RequiredReadMode: "linearizable",
+	}); err == nil {
+		t.Fatalf("expected invalid read-mode error")
+	}
+}
+
+func TestEvaluateGatewayWaitRejectsReadModeMismatch(t *testing.T) {
+	got := evaluateGatewayWait(server.GatewayClusterStatus{
+		Ready:               true,
+		NodeCount:           3,
+		ReachableNodes:      3,
+		ReadMode:            string(server.GatewayReadModeAny),
+		WriteLeader:         "node-a",
+		WriteLeaderEndpoint: "http://node-a:8080",
+	}, waitGatewayOptions{
+		RequiredReachableNodes: 3,
+		RequireWriteLeader:     true,
+		RequiredReadMode:       string(server.GatewayReadModeLeader),
+	})
+	if got.Ready {
+		t.Fatalf("expected read mode mismatch to keep wait result not ready: %+v", got)
+	}
+	if got.ReachableNodes != 3 || got.WriteLeader != "node-a" {
+		t.Fatalf("unexpected wait result: %+v", got)
+	}
+}
+
 func TestWriteGatewayStatus(t *testing.T) {
 	var buf bytes.Buffer
 	writeGatewayStatus(&buf, server.GatewayClusterStatus{
@@ -476,6 +582,60 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"ok=false",
 		"degraded=true",
 		"degraded_until=2026-07-25T12:00:00Z",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+}
+
+func TestWriteGatewayWait(t *testing.T) {
+	var buf bytes.Buffer
+	writeGatewayWait(&buf, gatewayWaitResult{
+		Ready:                  true,
+		ReachableNodes:         3,
+		RequiredReachableNodes: 3,
+		RequireWriteLeader:     true,
+		RequiredReadMode:       "leader",
+		WriteLeader:            "node-a",
+		WriteLeaderEndpoint:    "http://127.0.0.1:8080",
+		Status: server.GatewayClusterStatus{
+			ReadMode: "leader",
+			Nodes: []server.GatewayClusterNodeStatus{
+				{
+					Node:     "node-a",
+					Endpoint: "http://127.0.0.1:8080",
+					OK:       true,
+					Status: &lsm.ClusterStatus{
+						NodeID:     "node-a",
+						Revision:   7,
+						ShardCount: 1,
+						CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+							Health:         "ready",
+							Leader:         true,
+							LeaderKnown:    true,
+							WriteAvailable: true,
+							Term:           3,
+							Index:          13,
+							AppliedIndex:   13,
+						},
+					},
+				},
+			},
+		},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"ready=true",
+		"reachable_nodes=3",
+		"required_reachable_nodes=3",
+		"require_write_leader=true",
+		"read_mode=leader",
+		"required_read_mode=leader",
+		"write_leader=node-a",
+		"node=node-a",
+		"ok=true",
+		"applied_index=13",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
