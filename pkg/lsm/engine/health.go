@@ -17,28 +17,45 @@ type SSTableLevelStats struct {
 	SizeBytes  uint64
 }
 
+// SSTableFlowStats describes lower-level SSTable read-pipeline counters.
+type SSTableFlowStats struct {
+	CacheHit   uint64
+	CacheMiss  uint64
+	FilterPass uint64
+	FilterSkip uint64
+	Errors     uint64
+}
+
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
-	MemtableBytes         int
-	MemtableEntries       int
-	ImmutableCount        int
-	ImmutableBytes        int
-	FlushQueueDepth       int
-	FlushQueueCapacity    int
-	PinnedCount           int
-	TableCount            int
-	SSTableCount          int
-	SSTableBytes          uint64
-	SSTableLevels         []SSTableLevelStats
-	L0TableCount          int
-	L0SizeBytes           uint64
-	CompactionL0Threshold int
-	CompactionPending     bool
-	Seq                   uint64
-	Closing               bool
-	Closed                bool
-	FlushBlocked          bool
-	CompactionEnabled     bool
+	MemtableBytes             int
+	MemtableEntries           int
+	ImmutableCount            int
+	ImmutableBytes            int
+	FlushQueueDepth           int
+	FlushQueueCapacity        int
+	PinnedCount               int
+	TableCount                int
+	SSTableCount              int
+	SSTableBytes              uint64
+	SSTableLevels             []SSTableLevelStats
+	L0TableCount              int
+	L0SizeBytes               uint64
+	CompactionL0Threshold     int
+	CompactionPending         bool
+	PointReads                uint64
+	PointReadMemtableHits     uint64
+	PointReadImmutableHits    uint64
+	PointReadSSTableHits      uint64
+	PointReadMisses           uint64
+	PointReadSSTableProbes    uint64
+	PointReadMaxSSTableProbes uint64
+	SSTableFlow               SSTableFlowStats
+	Seq                       uint64
+	Closing                   bool
+	Closed                    bool
+	FlushBlocked              bool
+	CompactionEnabled         bool
 }
 
 // Health summarizes whether the engine is ready to serve traffic.
@@ -84,6 +101,7 @@ func (l *LSM) Stats() Stats {
 	out.CompactionPending = out.CompactionEnabled &&
 		out.CompactionL0Threshold > 0 &&
 		out.L0TableCount >= out.CompactionL0Threshold
+	out.applyReadStats(l)
 	return out
 }
 
@@ -147,5 +165,27 @@ func (s *Stats) applySSTableStats(metas []metadata.TableMeta) {
 	s.SSTableLevels = make([]SSTableLevelStats, 0, len(levels))
 	for _, level := range levels {
 		s.SSTableLevels = append(s.SSTableLevels, *byLevel[level])
+	}
+}
+
+func (s *Stats) applyReadStats(l *LSM) {
+	if s == nil || l == nil {
+		return
+	}
+	reads := l.pointReads.snapshot()
+	s.PointReads = reads.count
+	s.PointReadMemtableHits = reads.memtableHits
+	s.PointReadImmutableHits = reads.immutableHits
+	s.PointReadSSTableHits = reads.sstableHits
+	s.PointReadMisses = reads.misses
+	s.PointReadSSTableProbes = reads.sstableProbes
+	s.PointReadMaxSSTableProbes = reads.maxSSTableProbes
+	flow := l.FlowMetrics()
+	s.SSTableFlow = SSTableFlowStats{
+		CacheHit:   flow.CacheHit,
+		CacheMiss:  flow.CacheMiss,
+		FilterPass: flow.FilterPass,
+		FilterSkip: flow.FilterSkip,
+		Errors:     flow.Errors,
 	}
 }

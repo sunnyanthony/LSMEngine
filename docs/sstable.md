@@ -42,6 +42,7 @@ Read (Get):
 ## Control vs Data
 - Reader/Writer act as controllers: they assemble index -> (filter) -> data -> decode; policy (prefetch/corruption/cache) is supplied via PolicySnapshot/Options.
 - FlowObserver receives node events; MetricsObserver aggregates cache/filter hits and errors by default.
+- Engine `Stats()` exposes the aggregated FlowObserver counters plus LSM-level point-read probe counters. The SSTable package stays focused on block/index/filter behavior; logical read amplification is measured in the engine read service.
 - Cache stores on-disk data/index/filter blocks only; memtable is not cached here.
 - Prefetch is driven by a single budget (bytes or blocks); async/queue/worker settings flow through PolicySnapshot.
 

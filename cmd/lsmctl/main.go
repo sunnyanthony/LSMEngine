@@ -326,6 +326,18 @@ func statsCmd(args []string) {
 	for _, level := range stats.SSTableLevels {
 		fmt.Printf("level=%d sstables=%d bytes=%d\n", level.Level, level.TableCount, level.SizeBytes)
 	}
+	fmt.Printf("point_reads=%d\n", stats.PointReads)
+	fmt.Printf("point_read_memtable_hits=%d\n", stats.PointReadMemtableHits)
+	fmt.Printf("point_read_immutable_hits=%d\n", stats.PointReadImmutableHits)
+	fmt.Printf("point_read_sstable_hits=%d\n", stats.PointReadSSTableHits)
+	fmt.Printf("point_read_misses=%d\n", stats.PointReadMisses)
+	fmt.Printf("point_read_sstable_probes=%d\n", stats.PointReadSSTableProbes)
+	fmt.Printf("point_read_max_sstable_probes=%d\n", stats.PointReadMaxSSTableProbes)
+	fmt.Printf("sstable_flow_cache_hit=%d\n", stats.SSTableFlow.CacheHit)
+	fmt.Printf("sstable_flow_cache_miss=%d\n", stats.SSTableFlow.CacheMiss)
+	fmt.Printf("sstable_flow_filter_pass=%d\n", stats.SSTableFlow.FilterPass)
+	fmt.Printf("sstable_flow_filter_skip=%d\n", stats.SSTableFlow.FilterSkip)
+	fmt.Printf("sstable_flow_errors=%d\n", stats.SSTableFlow.Errors)
 	fmt.Printf("seq=%d\n", stats.Seq)
 	fmt.Printf("closing=%v closed=%v\n", stats.Closing, stats.Closed)
 	fmt.Printf("flush_blocked=%v compaction_enabled=%v\n", stats.FlushBlocked, stats.CompactionEnabled)

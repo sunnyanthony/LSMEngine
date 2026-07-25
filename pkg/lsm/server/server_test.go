@@ -31,6 +31,11 @@ func (stubProvider) Stats() lsm.Stats {
 			{Level: 0, TableCount: 2, SizeBytes: 40},
 			{Level: 1, TableCount: 1, SizeBytes: 24},
 		},
+		PointReads:                5,
+		PointReadSSTableHits:      2,
+		PointReadSSTableProbes:    7,
+		PointReadMaxSSTableProbes: 4,
+		SSTableFlow:               lsm.SSTableFlowStats{CacheHit: 3, CacheMiss: 4},
 	}
 }
 
@@ -576,6 +581,12 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if len(stats.SSTableLevels) != 2 || stats.SSTableLevels[0].Level != 0 {
 		t.Fatalf("unexpected level stats: %+v", stats.SSTableLevels)
+	}
+	if stats.PointReads != 5 || stats.PointReadSSTableProbes != 7 {
+		t.Fatalf("unexpected point read stats: %+v", stats)
+	}
+	if stats.SSTableFlow.CacheHit != 3 || stats.SSTableFlow.CacheMiss != 4 {
+		t.Fatalf("unexpected sstable flow stats: %+v", stats.SSTableFlow)
 	}
 }
 
