@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 )
@@ -202,6 +203,100 @@ func TestGatewayHandlerGetSkipsNotFoundEndpoint(t *testing.T) {
 	}
 	if !out.Found || out.Seq != 8 {
 		t.Fatalf("unexpected get response: %+v", out)
+	}
+}
+
+func TestGatewayHandlerGetRotatesHealthyEndpoints(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeAReads.Add(1)
+		writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 1})
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeBReads.Add(1)
+		writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 2})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	handler := NewGatewayHandler(gateway, HandlerOptions{})
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d expected 200, got %d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if nodeAReads.Load() != 1 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected reads to rotate across healthy endpoints, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
+func TestGatewayHandlerGetDefersRecentlyFailedEndpoint(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeAReads.Add(1)
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeBReads.Add(1)
+		writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 7})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+		EndpointFailureCooldown: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	handler := NewGatewayHandler(gateway, HandlerOptions{})
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d expected 200, got %d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if nodeAReads.Load() != 1 {
+		t.Fatalf("expected recently failed node-a to be deferred on second read, got %d reads", nodeAReads.Load())
+	}
+	if nodeBReads.Load() != 2 {
+		t.Fatalf("expected node-b to serve both reads after fallback, got %d reads", nodeBReads.Load())
 	}
 }
 

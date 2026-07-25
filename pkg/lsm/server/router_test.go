@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 )
@@ -497,6 +498,71 @@ func TestGatewayAlignsShardLeaderToCommitLogWriteLeader(t *testing.T) {
 	}
 	if writes.Load() != 1 {
 		t.Fatalf("expected one write, got %d", writes.Load())
+	}
+}
+
+func TestGatewayCurrentWriteLeaderDefersRecentlyFailedEndpoint(t *testing.T) {
+	var nodeAStatusReads atomic.Int32
+	var nodeBStatusReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeAStatusReads.Add(1)
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Leader:         true,
+				WriteAvailable: true,
+				Health:         "ready",
+			},
+		})
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeBStatusReads.Add(1)
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-b",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Leader:         true,
+				WriteAvailable: true,
+				Health:         "ready",
+			},
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+		EndpointFailureCooldown: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	gateway.markEndpointFailure("http://node-a")
+
+	nodeID, endpoint, err := gateway.currentWriteLeader(context.Background(), map[string]string{
+		"node-a": "http://node-a",
+		"node-b": "http://node-b",
+	})
+	if err != nil {
+		t.Fatalf("current write leader: %v", err)
+	}
+	if nodeID != "node-b" || endpoint != "http://node-b" {
+		t.Fatalf("expected node-b write leader first, got node=%q endpoint=%q", nodeID, endpoint)
+	}
+	if nodeAStatusReads.Load() != 0 || nodeBStatusReads.Load() != 1 {
+		t.Fatalf("expected unhealthy node-a to be deferred, node-a=%d node-b=%d", nodeAStatusReads.Load(), nodeBStatusReads.Load())
 	}
 }
 

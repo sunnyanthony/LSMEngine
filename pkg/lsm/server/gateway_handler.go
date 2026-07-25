@@ -231,7 +231,7 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		writeGatewayUnavailable(w, err.Error())
 		return
 	}
-	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	nodeIDs := h.gateway.readNodeEndpointIDs(endpoints)
 	if r.URL.Path == "/kv/get" {
 		h.proxyClusterGet(w, r, endpoints, nodeIDs)
 		return
@@ -249,6 +249,7 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		}
 		resp, err := h.gateway.client.Do(req)
 		if err != nil {
+			h.gateway.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
 		}
@@ -257,14 +258,17 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 				firstNotFoundHeader = resp.Header.Clone()
 				firstNotFoundBody, _ = io.ReadAll(resp.Body)
 			}
+			h.gateway.markEndpointSuccess(endpoint)
 			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 			_ = resp.Body.Close()
 			continue
 		}
 		if resp.StatusCode == http.StatusOK || resp.StatusCode < http.StatusInternalServerError {
+			h.gateway.markEndpointSuccess(endpoint)
 			copyResponse(w, resp)
 			return
 		}
+		h.gateway.markEndpointFailure(endpoint)
 		lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 		_ = resp.Body.Close()
 	}
@@ -290,11 +294,13 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 		}
 		resp, err := h.gateway.client.Do(req)
 		if err != nil {
+			h.gateway.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
 		}
 		switch {
 		case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound:
+			h.gateway.markEndpointSuccess(endpoint)
 			var out getResponse
 			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 				lastErr = err
@@ -311,9 +317,11 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 				firstNotFound = &copy
 			}
 		case resp.StatusCode < http.StatusInternalServerError:
+			h.gateway.markEndpointSuccess(endpoint)
 			copyResponse(w, resp)
 			return
 		default:
+			h.gateway.markEndpointFailure(endpoint)
 			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 			_ = resp.Body.Close()
 		}
