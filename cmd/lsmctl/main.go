@@ -1757,11 +1757,27 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 	)
 	for _, node := range status.Nodes {
 		if node.Error != "" {
-			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, node.Error)
+			fmt.Fprintf(
+				w,
+				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s error=%q\n",
+				node.Node,
+				node.Endpoint,
+				node.Degraded,
+				node.DegradedUntil,
+				node.Error,
+			)
 			continue
 		}
 		if node.Status == nil {
-			fmt.Fprintf(w, "node=%s endpoint=%s ok=false error=%q\n", node.Node, node.Endpoint, "missing status")
+			fmt.Fprintf(
+				w,
+				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s error=%q\n",
+				node.Node,
+				node.Endpoint,
+				node.Degraded,
+				node.DegradedUntil,
+				"missing status",
+			)
 			continue
 		}
 		nodeID := node.Node
@@ -1771,9 +1787,11 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 		runtime := node.Status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
+			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
 			nodeID,
 			node.Endpoint,
+			node.Degraded,
+			node.DegradedUntil,
 			runtime.Health,
 			runtime.Leader,
 			runtime.WriteAvailable,

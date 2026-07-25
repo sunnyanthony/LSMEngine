@@ -472,6 +472,11 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	if len(out.Nodes) != 2 || !out.Nodes[0].OK || !out.Nodes[1].OK {
 		t.Fatalf("expected two successful node statuses: %+v", out.Nodes)
 	}
+	for _, node := range out.Nodes {
+		if node.Degraded || node.DegradedUntil != "" {
+			t.Fatalf("successful status probe should clear degraded state: %+v", node)
+		}
+	}
 }
 
 func TestGatewayHandlerStatusUnavailableWhenBackendsFail(t *testing.T) {
@@ -500,6 +505,58 @@ func TestGatewayHandlerStatusUnavailableWhenBackendsFail(t *testing.T) {
 	}
 	if out.Ready || out.ReachableNodes != 0 || len(out.Nodes) != 1 || out.Nodes[0].Error == "" {
 		t.Fatalf("unexpected unavailable status: %+v", out)
+	}
+	if !out.Nodes[0].Degraded || out.Nodes[0].DegradedUntil == "" {
+		t.Fatalf("expected failed backend to report degraded cooldown: %+v", out.Nodes[0])
+	}
+}
+
+func TestGatewayHandlerStatusClearsDegradedStateOnSuccess(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:         "ready",
+				Leader:         true,
+				LeaderKnown:    true,
+				WriteAvailable: true,
+			},
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+		}),
+		EndpointFailureCooldown: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	gateway.markEndpointFailure("http://node-a")
+
+	req := httptest.NewRequest(http.MethodGet, "/gateway/status", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out GatewayClusterStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if len(out.Nodes) != 1 || !out.Nodes[0].OK {
+		t.Fatalf("unexpected gateway status: %+v", out)
+	}
+	if out.Nodes[0].Degraded || out.Nodes[0].DegradedUntil != "" {
+		t.Fatalf("expected successful status probe to clear degraded state: %+v", out.Nodes[0])
 	}
 }
 
