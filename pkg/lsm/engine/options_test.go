@@ -45,6 +45,21 @@ func TestNormalizeOptionsRequiresDataDir(t *testing.T) {
 	}
 }
 
+func TestNormalizeOptionsRejectsNegativeBackpressureThresholds(t *testing.T) {
+	if _, err := normalizeOptions(Options{
+		DataDir:                         t.TempDir(),
+		FlushBackpressureQueueThreshold: -1,
+	}); err == nil {
+		t.Fatalf("expected error for negative flush backpressure threshold")
+	}
+	if _, err := normalizeOptions(Options{
+		DataDir:                           t.TempDir(),
+		CompactionBackpressureL0Threshold: -1,
+	}); err == nil {
+		t.Fatalf("expected error for negative compaction backpressure threshold")
+	}
+}
+
 func TestWalRepairPolicyDefaults(t *testing.T) {
 	autoRepair, missing := walRepairPolicy(Options{})
 	if !autoRepair {

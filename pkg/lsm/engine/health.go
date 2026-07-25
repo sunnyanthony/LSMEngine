@@ -37,6 +37,16 @@ type CompactionRuntimeStats struct {
 	Running           bool
 }
 
+// WriteBackpressureStats describes current write-admission pressure state.
+type WriteBackpressureStats struct {
+	Active                 bool
+	Reason                 string
+	Rejects                uint64
+	FlushQueueThreshold    int
+	CompactionL0Threshold  int
+	CompactionL0TableCount int
+}
+
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
 	MemtableBytes             int
@@ -63,6 +73,7 @@ type Stats struct {
 	PointReadMaxSSTableProbes uint64
 	SSTableFlow               SSTableFlowStats
 	CompactionRuntime         CompactionRuntimeStats
+	WriteBackpressure         WriteBackpressureStats
 	Seq                       uint64
 	Closing                   bool
 	Closed                    bool
@@ -115,6 +126,7 @@ func (l *LSM) Stats() Stats {
 		out.L0TableCount >= out.CompactionL0Threshold
 	out.applyReadStats(l)
 	out.applyCompactionRuntimeStats(l)
+	out.applyWriteBackpressureStats(l)
 	return out
 }
 
@@ -130,6 +142,9 @@ func (l *LSM) Health() Health {
 		return Health{Ready: false, Reason: "closing"}
 	}
 	if l.flushBlocked.Load() {
+		return Health{Ready: false, Reason: "backpressure"}
+	}
+	if l.writeBackpressureSnapshot().active {
 		return Health{Ready: false, Reason: "backpressure"}
 	}
 	return Health{Ready: true, Reason: "ok"}
@@ -216,5 +231,20 @@ func (s *Stats) applyCompactionRuntimeStats(l *LSM) {
 		SuccessfulSteps:   stats.SuccessfulSteps,
 		Errors:            stats.Errors,
 		Running:           stats.Running,
+	}
+}
+
+func (s *Stats) applyWriteBackpressureStats(l *LSM) {
+	if s == nil || l == nil {
+		return
+	}
+	stats := l.writeBackpressureSnapshot()
+	s.WriteBackpressure = WriteBackpressureStats{
+		Active:                 stats.active,
+		Reason:                 stats.reason,
+		Rejects:                stats.rejects,
+		FlushQueueThreshold:    stats.queueLimit,
+		CompactionL0Threshold:  stats.l0Limit,
+		CompactionL0TableCount: stats.l0TableCount,
 	}
 }

@@ -80,4 +80,8 @@ control plane decoupled from IO.
   run, step, successful-step, error, and running counters. These counters help
   distinguish "threshold reached" from "runtime is executing or failing" without
   introducing a durable compaction job model.
-- Scheduler/backpressure policies are planned.
+- Basic write admission can reject new local writes with `ErrBackpressure` when
+  configured flush queue or L0 pressure thresholds are reached. This admission
+  happens before commit-log proposal; committed entries still apply locally even
+  when the node is under local compaction pressure.
+- Richer debt scheduling, priority policy, and adaptive throttling remain planned.

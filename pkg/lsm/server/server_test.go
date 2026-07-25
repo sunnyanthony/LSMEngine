@@ -37,6 +37,7 @@ func (stubProvider) Stats() lsm.Stats {
 		PointReadMaxSSTableProbes: 4,
 		SSTableFlow:               lsm.SSTableFlowStats{CacheHit: 3, CacheMiss: 4},
 		CompactionRuntime:         lsm.CompactionRuntimeStats{Triggers: 1, Runs: 2, Steps: 3, SuccessfulSteps: 2},
+		WriteBackpressure:         lsm.WriteBackpressureStats{Active: true, Reason: "l0_compaction_pressure", Rejects: 2},
 	}
 }
 
@@ -591,6 +592,9 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if stats.CompactionRuntime.Triggers != 1 || stats.CompactionRuntime.SuccessfulSteps != 2 {
 		t.Fatalf("unexpected compaction runtime stats: %+v", stats.CompactionRuntime)
+	}
+	if !stats.WriteBackpressure.Active || stats.WriteBackpressure.Rejects != 2 {
+		t.Fatalf("unexpected write backpressure stats: %+v", stats.WriteBackpressure)
 	}
 }
 

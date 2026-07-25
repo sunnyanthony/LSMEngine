@@ -132,17 +132,22 @@ func serveCmd(args []string) {
 		log.Fatalf("commitlog config: %v", err)
 	}
 	store, err := lsm.New(lsm.Options{
-		DataDir:            *dataDir,
-		NodeID:             cfg.NodeID,
-		ClusterID:          cfg.ClusterID,
-		StorageMode:        cfg.StorageMode,
-		ControlStatePath:   cfg.ControlStatePath,
-		CommitLog:          commitLogOpts,
-		Raft:               toRaftOptions(cfg.Raft),
-		ShardMap:           toShardMap(cfg.Shards),
-		IOBackend:          *ioBackend,
-		IOBackendStrict:    *ioBackendStrict,
-		IOAsyncMaxInFlight: *ioAsyncMax,
+		DataDir:                           *dataDir,
+		NodeID:                            cfg.NodeID,
+		ClusterID:                         cfg.ClusterID,
+		StorageMode:                       cfg.StorageMode,
+		ControlStatePath:                  cfg.ControlStatePath,
+		CommitLog:                         commitLogOpts,
+		Raft:                              toRaftOptions(cfg.Raft),
+		ShardMap:                          toShardMap(cfg.Shards),
+		MemtableLimit:                     cfg.MemtableLimit,
+		FlushQueueSize:                    cfg.FlushQueueSize,
+		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
+		CompactionL0Threshold:             cfg.CompactionL0Threshold,
+		CompactionBackpressureL0Threshold: cfg.CompactionBackpressureL0Threshold,
+		IOBackend:                         *ioBackend,
+		IOBackendStrict:                   *ioBackendStrict,
+		IOAsyncMaxInFlight:                *ioAsyncMax,
 	})
 	if err != nil {
 		log.Fatalf("open: %v", err)
@@ -345,6 +350,12 @@ func statsCmd(args []string) {
 	fmt.Printf("compaction_successful_steps=%d\n", stats.CompactionRuntime.SuccessfulSteps)
 	fmt.Printf("compaction_errors=%d\n", stats.CompactionRuntime.Errors)
 	fmt.Printf("compaction_running=%v\n", stats.CompactionRuntime.Running)
+	fmt.Printf("write_backpressure_active=%v\n", stats.WriteBackpressure.Active)
+	fmt.Printf("write_backpressure_reason=%s\n", stats.WriteBackpressure.Reason)
+	fmt.Printf("write_backpressure_rejects=%d\n", stats.WriteBackpressure.Rejects)
+	fmt.Printf("write_backpressure_flush_queue_threshold=%d\n", stats.WriteBackpressure.FlushQueueThreshold)
+	fmt.Printf("write_backpressure_compaction_l0_threshold=%d\n", stats.WriteBackpressure.CompactionL0Threshold)
+	fmt.Printf("write_backpressure_compaction_l0_tables=%d\n", stats.WriteBackpressure.CompactionL0TableCount)
 	fmt.Printf("seq=%d\n", stats.Seq)
 	fmt.Printf("closing=%v closed=%v\n", stats.Closing, stats.Closed)
 	fmt.Printf("flush_blocked=%v compaction_enabled=%v\n", stats.FlushBlocked, stats.CompactionEnabled)

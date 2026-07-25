@@ -38,6 +38,10 @@ func (s *writeService) Put(key []byte, value []byte) error {
 			return err
 		}
 	}
+	if err := s.admitWrite(len(key) + len(value)); err != nil {
+		s.l.notifyWriteEvent("put", key, 0, "failed", err)
+		return err
+	}
 
 	seq, err := s.commitPut(key, value)
 	if err != nil {
@@ -63,6 +67,10 @@ func (s *writeService) Delete(key []byte) error {
 			s.l.notifyWriteEvent("delete", key, 0, "failed", err)
 			return err
 		}
+	}
+	if err := s.admitWrite(len(key)); err != nil {
+		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
+		return err
 	}
 
 	seq, err := s.commitDelete(key)
@@ -205,32 +213,12 @@ func (s *writeService) flushService() *flushService {
 	return s.l.flushSvc
 }
 
-func (s *writeService) shouldThrottleWriteForMem(mem memtable.Table, delta int) bool {
-	if s.l == nil || s.l.dispatch == nil || s.l.mtLimit <= 0 {
-		return false
-	}
-	if s.l.flushBlocked.Load() {
-		return true
-	}
-	if mem == nil {
-		return false
-	}
-	if mem.Size()+delta < s.l.mtLimit {
-		return false
-	}
-	return !s.l.dispatch.CanEnqueue()
-}
-
 func (s *writeService) acquireMemForWrite(delta int) (memtable.Table, error) {
 	if s.l.isClosing() {
 		return nil, errs.ErrClosed
 	}
 	s.l.memMu.RLock()
 	mem := s.l.mem
-	if s.shouldThrottleWriteForMem(mem, delta) {
-		s.l.memMu.RUnlock()
-		return nil, errs.ErrBackpressure
-	}
 	if mem == nil {
 		s.l.memMu.RUnlock()
 		return nil, errs.ErrBackpressure

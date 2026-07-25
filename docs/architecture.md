@@ -45,7 +45,7 @@ Goals:
 - IO: shared IO layer for WAL/SSTable; OS specifics isolated in `internal/lsm/iofs`.
   - External core libraries must stay behind LSM-owned adapter layers before affecting public or server APIs. The builtin etcd-raft provider follows this rule by keeping raftpb details inside `internal/lsm/commitlog` and exposing LSM-owned commit, transport, and snapshot contracts.
 - External dependency boundaries: third-party core libraries must sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example. The builtin etcd-raft integration follows the same rule: raftpb messages and storage details stay inside `internal/lsm/commitlog`, while public/server callers use `CommitLogConsensus`, `CommitLogOptions`, and `RaftPeerMessage`. If a dependency becomes hard to replace without public API churn, add or tighten an LSM-owned adapter before adding more call sites. See `docs/dependency-boundaries.md`.
-- Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
+- Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush). Optional write-admission thresholds can reject new local writes before commit when flush backlog or L0 compaction pressure is too high.
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
 - Distributed transport and membership: outbound HTTP peer transport, LSM-owned peer and node endpoint resolver contracts, reloaded peer URL file support, DNS SRV node endpoint discovery for gateways, inbound raft message hooks, provider-owned raft background ticking, follower committed-entry apply, shard replica add/remove metadata, segmented raft log persistence, raft snapshot persistence/apply plumbing, provider-owned raft log snapshot policy, LSM state snapshot payload export/restore/reset, manual raft ConfChange hooks, raft join-mode startup, join-peer URL wiring, three-node static/dynamic/restart smoke coverage, leader hints, bounded gateway retries, basic gateway endpoint health policy, and retryable commit-log availability errors are present, but richer service-registry integrations and fully automated orchestration remain deferred for later phases.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
@@ -80,8 +80,7 @@ Data plane (TableSet) -> metadata snapshot -> Planner (control)
 - Sequence assignment: data writes use the committed data entry `Seq` before WAL append. The local provider derives it from the ordered commit index; replicated providers must supply the same sequence on every replica.
 - Background flush: channel of drained memtables; workers write SSTables and update manifest.
 - Compaction: scheduled by size/level thresholds; merges SSTables asynchronously.
-- Backpressure: when flush queue is full, writes return `ErrBackpressure` and a background goroutine
-  blocks until the flush queue has capacity; WAL lag tracking is planned.
+- Backpressure: when the flush queue is full, or optional write-admission thresholds for flush backlog / L0 compaction pressure are reached, new local writes return `ErrBackpressure`. Already committed log entries continue through local apply so raft/follower state machines do not drop committed data; WAL lag tracking is planned.
 - Snapshots: freezing the active memtable pins it until closed; release enqueues flush.
 - Snapshots also pin SSTables to prevent compaction from deleting files still visible to readers.
 
@@ -220,7 +219,7 @@ opts := engine.Options{
 ```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
-- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, compaction runtime activity counters, point-read probe counters, SSTable read-pipeline counters, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler. Compaction runtime counters report trigger/run/step/error activity for the current process, not durable job history. Point-read probe counters are cumulative process-local observability for read amplification, not latency histograms or a full query profiler.
+- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, write-backpressure state/reject counts, compaction runtime activity counters, point-read probe counters, SSTable read-pipeline counters, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler. Compaction runtime counters report trigger/run/step/error activity for the current process, not durable job history. Point-read probe counters are cumulative process-local observability for read amplification, not latency histograms or a full query profiler.
 
 ## External library boundaries
 - Third-party libraries must sit behind an LSM-owned interface or adapter before they affect public APIs or cross-package contracts.
