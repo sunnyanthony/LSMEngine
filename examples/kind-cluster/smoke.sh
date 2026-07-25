@@ -51,6 +51,13 @@ retry_kubectl_lsm_contains() {
   printf '%s\n' "$output"
 }
 
+node_endpoint_args() {
+  printf '%s\n' \
+    --node-endpoint "lsm-cluster-0=http://lsm-cluster-0.lsm-cluster:8080" \
+    --node-endpoint "lsm-cluster-1=http://lsm-cluster-1.lsm-cluster:8080" \
+    --node-endpoint "lsm-cluster-2=http://lsm-cluster-2.lsm-cluster:8080"
+}
+
 wait_for_gateway_status() {
   local deadline=$((SECONDS + 90))
   local output=""
@@ -81,6 +88,26 @@ require_contains() {
   fi
 }
 
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ -z "$seq" ]]; then
+    echo "write did not return seq" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
+wait_cluster_applied() {
+  local seq="$1"
+  local output
+  output="$(kubectl_lsm wait-cluster $(node_endpoint_args) --timeout 90s --min-applied-index "$seq")"
+  require_contains "$output" "ready=true"
+  require_contains "$output" "ready_nodes=3"
+}
+
 require_cmd docker
 require_cmd kind
 require_cmd kubectl
@@ -101,6 +128,8 @@ wait_for_gateway_status
 
 put_output="$(retry_kubectl_lsm_contains "state=committed" put --addr "$GATEWAY_URL" --key kind --value ok)"
 require_contains "$put_output" "state=committed"
+put_seq="$(seq_from_output "$put_output")"
+wait_cluster_applied "$put_seq"
 
 get_output="$(retry_kubectl_lsm_contains "found=true" get --addr "$GATEWAY_URL" --key kind)"
 require_contains "$get_output" "found=true"
@@ -116,6 +145,8 @@ require_contains "$range_output" "value=ok"
 
 delete_output="$(retry_kubectl_lsm_contains "state=committed" delete --addr "$GATEWAY_URL" --key kind)"
 require_contains "$delete_output" "state=committed"
+delete_seq="$(seq_from_output "$delete_output")"
+wait_cluster_applied "$delete_seq"
 
 missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr "$GATEWAY_URL" --key kind)"
 require_contains "$missing_output" "found=false"
