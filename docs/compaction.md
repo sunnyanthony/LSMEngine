@@ -76,4 +76,8 @@ control plane decoupled from IO.
 - `Stats()` and `/stats` report L0 table count/bytes and whether the configured
   L0 threshold has been reached. This is currently a pressure signal for
   operators and tests, not a complete debt scheduler.
+- The compaction runtime also reports process-local trigger, coalesced trigger,
+  run, step, successful-step, error, and running counters. These counters help
+  distinguish "threshold reached" from "runtime is executing or failing" without
+  introducing a durable compaction job model.
 - Scheduler/backpressure policies are planned.

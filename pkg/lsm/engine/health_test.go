@@ -195,6 +195,40 @@ func TestStatsSSTableReadAmplificationMetrics(t *testing.T) {
 	}
 }
 
+func TestStatsCompactionRuntimeMetrics(t *testing.T) {
+	store, err := New(Options{
+		DataDir:               t.TempDir(),
+		MemtableLimit:         1,
+		CompactionL0Threshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	var stats Stats
+	waitForStats(t, func() bool {
+		stats = store.Stats()
+		return stats.CompactionRuntime.Triggers > 0 &&
+			stats.CompactionRuntime.Runs > 0 &&
+			stats.CompactionRuntime.SuccessfulSteps > 0
+	})
+	if stats.CompactionRuntime.Steps < stats.CompactionRuntime.SuccessfulSteps {
+		t.Fatalf("expected steps to include successful steps, got %+v", stats.CompactionRuntime)
+	}
+	if stats.CompactionRuntime.Errors != 0 {
+		t.Fatalf("expected no compaction errors, got %+v", stats.CompactionRuntime)
+	}
+}
+
 func TestHealthStates(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
 	if err != nil {

@@ -36,6 +36,7 @@ func (stubProvider) Stats() lsm.Stats {
 		PointReadSSTableProbes:    7,
 		PointReadMaxSSTableProbes: 4,
 		SSTableFlow:               lsm.SSTableFlowStats{CacheHit: 3, CacheMiss: 4},
+		CompactionRuntime:         lsm.CompactionRuntimeStats{Triggers: 1, Runs: 2, Steps: 3, SuccessfulSteps: 2},
 	}
 }
 
@@ -587,6 +588,9 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if stats.SSTableFlow.CacheHit != 3 || stats.SSTableFlow.CacheMiss != 4 {
 		t.Fatalf("unexpected sstable flow stats: %+v", stats.SSTableFlow)
+	}
+	if stats.CompactionRuntime.Triggers != 1 || stats.CompactionRuntime.SuccessfulSteps != 2 {
+		t.Fatalf("unexpected compaction runtime stats: %+v", stats.CompactionRuntime)
 	}
 }
 
