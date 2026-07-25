@@ -94,6 +94,25 @@ func (l *LSM) markCommitLogAppliedLocked(index uint64) {
 	}
 }
 
+func (l *LSM) commitLogApplied() uint64 {
+	if l == nil {
+		return 0
+	}
+	l.commitApplyMu.Lock()
+	defer l.commitApplyMu.Unlock()
+	return l.commitLogAppliedIndex
+}
+
+func (l *LSM) applyCommitLogRuntimeProgress(status CommitLogRuntimeStatus) CommitLogRuntimeStatus {
+	applied := l.commitLogApplied()
+	status.AppliedIndex = applied
+	status.ApplyLag = 0
+	if status.Index > applied {
+		status.ApplyLag = status.Index - applied
+	}
+	return status
+}
+
 func (l *LSM) observeCommitLogAppliedIndex(index uint64) {
 	if l == nil || index == 0 {
 		return

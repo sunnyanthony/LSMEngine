@@ -1774,7 +1774,7 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 		runtime := status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
+			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v\n",
 			status.NodeID,
 			node.Endpoint,
 			runtime.Health,
@@ -1783,6 +1783,8 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 			runtime.LeaderKnown,
 			runtime.Term,
 			runtime.Index,
+			runtime.AppliedIndex,
+			runtime.ApplyLag,
 			status.Revision,
 			status.ShardCount,
 			status.Draining,
@@ -1834,7 +1836,7 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 		runtime := node.Status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d revision=%d shards=%d draining=%v\n",
+			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v\n",
 			nodeID,
 			node.Endpoint,
 			node.Degraded,
@@ -1845,6 +1847,8 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 			runtime.LeaderKnown,
 			runtime.Term,
 			runtime.Index,
+			runtime.AppliedIndex,
+			runtime.ApplyLag,
 			node.Status.Revision,
 			node.Status.ShardCount,
 			node.Status.Draining,
