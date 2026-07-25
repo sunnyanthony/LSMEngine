@@ -42,23 +42,12 @@ node_endpoint_args() {
 }
 
 wait_for_gateway_status() {
-  local deadline=$((SECONDS + 90))
-  local output=""
-  until output="$(kubectl_lsm gateway-status --addr "$GATEWAY_URL")" \
-    && [[ "$output" == *"ready=true"* ]] \
-    && [[ "$output" == *"reachable_nodes=3"* ]] \
-    && [[ "$output" == *"read_mode=leader"* ]] \
-    && [[ "$output" == *"write_leader=lsm-cluster-"* ]]; do
-    if (( SECONDS >= deadline )); then
-      echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
-      if [[ -n "$output" ]]; then
-        echo "$output" >&2
-      fi
-      dump_diagnostics
-      return 1
-    fi
-    sleep 1
-  done
+  if ! kubectl_lsm wait-gateway --addr "$GATEWAY_URL" --timeout 90s --min-reachable 3 --read-mode leader >/dev/null; then
+    echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
+    kubectl_lsm gateway-status --addr "$GATEWAY_URL" >&2 || true
+    dump_diagnostics
+    return 1
+  fi
 }
 
 require_contains() {

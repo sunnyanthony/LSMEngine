@@ -82,24 +82,13 @@ wait_for_gateway_container_health() {
 }
 
 wait_for_gateway_status() {
-  local deadline=$((SECONDS + 60))
-  local output=""
-  until output="$(lsmctl gateway-status --addr "$GATEWAY_URL")" \
-    && [[ "$output" == *"ready=true"* ]] \
-    && [[ "$output" == *"reachable_nodes=3"* ]] \
-    && [[ "$output" == *"read_mode=leader"* ]] \
-    && [[ "$output" == *"write_leader=node-"* ]]; do
-    if (( SECONDS >= deadline )); then
-      echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
-      if [[ -n "$output" ]]; then
-        echo "$output" >&2
-      fi
-      compose --profile gateway ps >&2 || true
-      compose --profile gateway logs --tail=100 >&2 || true
-      return 1
-    fi
-    sleep 1
-  done
+  if ! lsmctl wait-gateway --addr "$GATEWAY_URL" --timeout 60s --min-reachable 3 --read-mode leader >/dev/null; then
+    echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
+    lsmctl gateway-status --addr "$GATEWAY_URL" >&2 || true
+    compose --profile gateway ps >&2 || true
+    compose --profile gateway logs --tail=100 >&2 || true
+    return 1
+  fi
 }
 
 require_contains() {

@@ -171,6 +171,7 @@ go run ./cmd/lsmctl async-put --addr http://127.0.0.1:8090 --key user:2 --value 
 go run ./cmd/lsmctl write-status --addr http://127.0.0.1:8090 --request-id <request_id>
 go run ./cmd/lsmctl async-delete --addr http://127.0.0.1:8090 --key user:2
 go run ./cmd/lsmctl gateway-status --addr http://127.0.0.1:8090
+go run ./cmd/lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode leader
 ```
 
 The gateway exposes `/kv/put`, `/kv/delete`, `/kv/get`, `/kv/range`,
@@ -197,8 +198,10 @@ backend in `any` mode. `/gateway/status` includes `read_mode`, per-backend
 configured and when gateway routing is temporarily avoiding an endpoint.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
-from the single gateway endpoint. Use the Compose gateway smoke for a repeatable
-local check:
+from the single gateway endpoint. `lsmctl wait-gateway` polls that same view for
+deployment scripts that need a bounded wait for reachable backends, the expected
+read mode, and a visible write leader. Use the Compose gateway smoke for a
+repeatable local check:
 
 ```bash
 examples/docker-compose-cluster/gateway-smoke.sh
@@ -210,8 +213,9 @@ stable endpoint while raft peer traffic stays inside the Compose network. The
 Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
 covers the file-backed node endpoint resolver used by long-running gateways. It
-also verifies `/readyz` reports backend write readiness and `/gateway/status`
-sees all three backend nodes plus a write leader. The Compose gateway service
+also verifies `/readyz` reports backend write readiness and uses
+`lsmctl wait-gateway` to wait until `/gateway/status` sees all three backend
+nodes, leader read mode, and a write leader. The Compose gateway service
 healthcheck uses `lsmctl health --ready` so container health follows backend
 write readiness, not just process liveness. The smoke covers point reads, range
 scans, committed writes/deletes, accepted writes/deletes, and accepted

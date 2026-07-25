@@ -40,6 +40,8 @@ func main() {
 		gatewayCmd(os.Args[2:])
 	case "gateway-status":
 		gatewayStatusCmd(os.Args[2:])
+	case "wait-gateway":
+		waitGatewayCmd(os.Args[2:])
 	case "get":
 		getCmd(os.Args[2:])
 	case "range":
@@ -87,7 +89,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -293,6 +295,43 @@ func gatewayStatusCmd(args []string) {
 		return
 	}
 	writeGatewayStatus(os.Stdout, status)
+}
+
+func waitGatewayCmd(args []string) {
+	fs := flag.NewFlagSet("wait-gateway", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "gateway HTTP address")
+	minReachable := fs.Int("min-reachable", 0, "minimum reachable backend nodes required; 0 requires all nodes reported by the gateway")
+	requireWriteLeader := fs.Bool("write-leader", true, "require a backend write leader")
+	readMode := fs.String("read-mode", "", "required gateway read mode; empty disables the gate")
+	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
+	interval := fs.Duration("interval", 200*time.Millisecond, "poll interval")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	result, err := waitGatewayStatus(*addr, waitGatewayOptions{
+		RequiredReachableNodes: *minReachable,
+		RequireWriteLeader:     *requireWriteLeader,
+		RequiredReadMode:       *readMode,
+		Timeout:                *timeout,
+		Interval:               *interval,
+	})
+	if err != nil {
+		if *jsonOut {
+			writeJSON(os.Stdout, result)
+		}
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeGatewayWait(os.Stdout, result)
 }
 
 func statsCmd(args []string) {
@@ -524,6 +563,25 @@ type waitClusterOptions struct {
 	MinAppliedIndex    *uint64
 	Timeout            time.Duration
 	Interval           time.Duration
+}
+
+type gatewayWaitResult struct {
+	Ready                  bool                        `json:"ready"`
+	ReachableNodes         int                         `json:"reachable_nodes"`
+	RequiredReachableNodes int                         `json:"required_reachable_nodes"`
+	RequireWriteLeader     bool                        `json:"require_write_leader"`
+	RequiredReadMode       string                      `json:"required_read_mode,omitempty"`
+	WriteLeader            string                      `json:"write_leader,omitempty"`
+	WriteLeaderEndpoint    string                      `json:"write_leader_endpoint,omitempty"`
+	Status                 server.GatewayClusterStatus `json:"status"`
+}
+
+type waitGatewayOptions struct {
+	RequiredReachableNodes int
+	RequireWriteLeader     bool
+	RequiredReadMode       string
+	Timeout                time.Duration
+	Interval               time.Duration
 }
 
 type drainNodeResult struct {
@@ -1710,6 +1768,87 @@ func readGatewayStatus(addr string) (server.GatewayClusterStatus, error) {
 	return status, nil
 }
 
+func waitGatewayStatus(addr string, opts waitGatewayOptions) (gatewayWaitResult, error) {
+	if strings.TrimSpace(addr) == "" {
+		return gatewayWaitResult{}, fmt.Errorf("wait-gateway requires --addr or config addr")
+	}
+	if opts.RequiredReachableNodes < 0 {
+		return gatewayWaitResult{}, fmt.Errorf("min-reachable must be non-negative")
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = 60 * time.Second
+	}
+	if opts.Interval <= 0 {
+		opts.Interval = 200 * time.Millisecond
+	}
+	opts.RequiredReadMode = strings.TrimSpace(opts.RequiredReadMode)
+	switch server.GatewayReadMode(opts.RequiredReadMode) {
+	case "", server.GatewayReadModeAny, server.GatewayReadModeLeader:
+	default:
+		return gatewayWaitResult{}, fmt.Errorf("read-mode must be empty, %q, or %q", server.GatewayReadModeAny, server.GatewayReadModeLeader)
+	}
+	deadline := time.Now().Add(opts.Timeout)
+	var last gatewayWaitResult
+	var lastErr error
+	for {
+		status, err := readGatewayStatus(addr)
+		if err != nil {
+			lastErr = err
+		} else {
+			last = evaluateGatewayWait(status, opts)
+			if last.Ready {
+				return last, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil && last.Status.NodeCount == 0 && len(last.Status.Nodes) == 0 {
+				return last, lastErr
+			}
+			message := fmt.Sprintf(
+				"wait-gateway timed out: reachable nodes %d/%d write_leader=%v",
+				last.ReachableNodes,
+				last.RequiredReachableNodes,
+				last.WriteLeader != "",
+			)
+			if opts.RequiredReadMode != "" {
+				message = fmt.Sprintf("%s read_mode=%s required_read_mode=%s", message, last.Status.ReadMode, opts.RequiredReadMode)
+			}
+			return last, errors.New(message)
+		}
+		time.Sleep(opts.Interval)
+	}
+}
+
+func evaluateGatewayWait(status server.GatewayClusterStatus, opts waitGatewayOptions) gatewayWaitResult {
+	requiredReachable := opts.RequiredReachableNodes
+	if requiredReachable == 0 {
+		requiredReachable = status.NodeCount
+		if requiredReachable == 0 {
+			requiredReachable = len(status.Nodes)
+		}
+		if requiredReachable == 0 {
+			requiredReachable = 1
+		}
+	}
+	result := gatewayWaitResult{
+		ReachableNodes:         status.ReachableNodes,
+		RequiredReachableNodes: requiredReachable,
+		RequireWriteLeader:     opts.RequireWriteLeader,
+		RequiredReadMode:       opts.RequiredReadMode,
+		WriteLeader:            status.WriteLeader,
+		WriteLeaderEndpoint:    status.WriteLeaderEndpoint,
+		Status:                 status,
+	}
+	result.Ready = status.ReachableNodes >= requiredReachable
+	if opts.RequireWriteLeader {
+		result.Ready = result.Ready && status.Ready && strings.TrimSpace(status.WriteLeader) != ""
+	}
+	if opts.RequiredReadMode != "" {
+		result.Ready = result.Ready && status.ReadMode == opts.RequiredReadMode
+	}
+	return result
+}
+
 func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterWaitResult, error) {
 	if len(endpoints) == 0 {
 		return clusterWaitResult{}, fmt.Errorf("wait-cluster requires node endpoints")
@@ -1851,7 +1990,27 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 		status.WriteLeaderEndpoint,
 		status.Reason,
 	)
-	for _, node := range status.Nodes {
+	writeGatewayStatusNodes(w, status.Nodes)
+}
+
+func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
+	fmt.Fprintf(
+		w,
+		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
+		result.Ready,
+		result.ReachableNodes,
+		result.RequiredReachableNodes,
+		result.RequireWriteLeader,
+		result.Status.ReadMode,
+		result.RequiredReadMode,
+		result.WriteLeader,
+		result.WriteLeaderEndpoint,
+	)
+	writeGatewayStatusNodes(w, result.Status.Nodes)
+}
+
+func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatus) {
+	for _, node := range nodes {
 		if node.Error != "" {
 			fmt.Fprintf(
 				w,
