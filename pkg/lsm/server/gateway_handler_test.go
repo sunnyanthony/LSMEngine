@@ -253,6 +253,193 @@ func TestGatewayHandlerGetRotatesHealthyEndpoints(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerGetLeaderReadModeUsesWriteLeader(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:      "follower",
+					LeaderKnown: true,
+				},
+			})
+		case "/kv/get":
+			nodeAReads.Add(1)
+			http.Error(w, "follower read should not be used", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:         "ready",
+					Leader:         true,
+					LeaderKnown:    true,
+					WriteAvailable: true,
+				},
+			})
+		case "/kv/get":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 8})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		ReadMode:     GatewayReadModeLeader,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected read only through leader, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
+func TestGatewayHandlerRangeLeaderReadModeUsesWriteLeader(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:      "follower",
+					LeaderKnown: true,
+				},
+			})
+		case "/kv/range":
+			nodeAReads.Add(1)
+			http.Error(w, "follower range read should not be used", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:         "ready",
+					Leader:         true,
+					LeaderKnown:    true,
+					WriteAvailable: true,
+				},
+			})
+		case "/kv/range":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, rangeResponse{
+				Entries: []rangeEntryResponse{{KeyBase64: "Yw==", ValueBase64: "MQ==", Seq: 8}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		ReadMode:     GatewayReadModeLeader,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/range?start_key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected range read only through leader, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
+func TestGatewayHandlerGetLeaderReadModeUnavailableWithoutLeader(t *testing.T) {
+	var reads atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:      "follower",
+					LeaderKnown: true,
+				},
+			})
+		case "/kv/get":
+			reads.Add(1)
+			writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 1})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		ReadMode:     GatewayReadModeLeader,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handler,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if reads.Load() != 0 {
+		t.Fatalf("expected no follower read when leader is unavailable, got %d", reads.Load())
+	}
+}
+
+func TestGatewayRejectsInvalidReadMode(t *testing.T) {
+	if _, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		ReadMode:     "strict",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+	}); err == nil {
+		t.Fatalf("expected invalid read mode error")
+	}
+}
+
 func TestGatewayHandlerGetDefersRecentlyFailedEndpoint(t *testing.T) {
 	var nodeAReads atomic.Int32
 	var nodeBReads atomic.Int32
@@ -322,6 +509,7 @@ func TestGatewayHandlerWriteStatusFallsBackOnNotFound(t *testing.T) {
 	})
 	gateway, err := NewGateway(GatewayOptions{
 		BootstrapURL: "http://node-a",
+		ReadMode:     GatewayReadModeLeader,
 		NodeEndpoints: map[string]string{
 			"node-a": "http://node-a",
 			"node-b": "http://node-b",
@@ -553,6 +741,9 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	}
 	if !out.Ready || out.NodeCount != 2 || out.ReachableNodes != 2 {
 		t.Fatalf("unexpected gateway status: %+v", out)
+	}
+	if out.ReadMode != string(GatewayReadModeAny) {
+		t.Fatalf("unexpected read mode: %+v", out)
 	}
 	if out.WriteLeader != "node-b" || out.WriteLeaderEndpoint != "http://node-b" {
 		t.Fatalf("unexpected write leader: %+v", out)

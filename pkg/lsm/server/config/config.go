@@ -27,6 +27,7 @@ type Config struct {
 	ReadTimeout                       time.Duration   `yaml:"read_timeout"`
 	WriteTimeout                      time.Duration   `yaml:"write_timeout"`
 	WriteConsistencyDefault           string          `yaml:"write_consistency_default"`
+	GatewayReadMode                   string          `yaml:"gateway_read_mode"`
 	MemtableLimit                     int             `yaml:"memtable_limit"`
 	FlushQueueSize                    int             `yaml:"flush_queue_size"`
 	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
