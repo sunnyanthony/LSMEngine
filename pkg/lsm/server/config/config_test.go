@@ -45,6 +45,11 @@ addr: "127.0.0.1:9090"
 read_timeout: "2s"
 write_timeout: "3s"
 write_consistency_default: "accepted"
+memtable_limit: 2048
+flush_queue_size: 8
+flush_backpressure_queue_threshold: 6
+compaction_l0_threshold: 4
+compaction_backpressure_l0_threshold: 12
 io_backend: "async"
 io_backend_strict: true
 io_async_max_in_flight: 8
@@ -104,6 +109,21 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.PeerURLFile != "/var/lib/lsm/raft-peers.yaml" {
 		t.Fatalf("expected raft peer url file, got %q", cfg.Raft.PeerURLFile)
+	}
+	if cfg.MemtableLimit != 2048 {
+		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)
+	}
+	if cfg.FlushQueueSize != 8 {
+		t.Fatalf("expected flush queue size, got %d", cfg.FlushQueueSize)
+	}
+	if cfg.FlushBackpressureQueueThreshold != 6 {
+		t.Fatalf("expected flush backpressure threshold, got %d", cfg.FlushBackpressureQueueThreshold)
+	}
+	if cfg.CompactionL0Threshold != 4 {
+		t.Fatalf("expected compaction l0 threshold, got %d", cfg.CompactionL0Threshold)
+	}
+	if cfg.CompactionBackpressureL0Threshold != 12 {
+		t.Fatalf("expected compaction backpressure l0 threshold, got %d", cfg.CompactionBackpressureL0Threshold)
 	}
 	if len(cfg.Shards) != 2 {
 		t.Fatalf("expected shard configs, got %d", len(cfg.Shards))

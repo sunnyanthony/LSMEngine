@@ -106,7 +106,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl replace-node --old-node node-a --new-node node-c ...` composes the manual replacement sequence for static clusters: preflight the endpoints, raft-add the replacement, add it to shards that contain the old node, drain the old node, remove the old shard replicas, and raft-remove the old node. Use `--dry-run` to print the preflighted plan without submitting membership mutations. `--allow-unavailable-old-node` lets replacement complete drain after shard leadership has moved when the old node endpoint remains unreachable. The replacement node must already be running and reachable; `examples/docker-compose-cluster/replace-node-smoke.sh` exercises this with join-mode node-d.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode or gateway mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`; `lsmctl health --ready --addr <url>` checks `/readyz` instead of `/healthz` for gateway/load-balancer readiness.
-- `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
+- `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose write-backpressure state/reject counts, process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
@@ -126,6 +126,12 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `commitlog.snapshot_policy.retain_entries` (optional): number of recent raft log entries to keep after provider-owned snapshot compaction.
   - `shards` must be declared in route order with non-overlapping ranges; open-ended range is only allowed on the last shard.
   - Startup validates persisted identity; mismatch fails startup to prevent cross-cluster state reuse.
+- Local storage write admission config:
+  - `memtable_limit` and `flush_queue_size` pass through to engine options when non-zero.
+  - `flush_backpressure_queue_threshold` rejects new local writes before commit when the immutable flush backlog reaches the configured depth.
+  - `compaction_l0_threshold` enables background L0 compaction.
+  - `compaction_backpressure_l0_threshold` rejects new local writes that would force another flush while L0 table count is already at or above the configured threshold.
+  - These thresholds are node-local safeguards; they do not replace commit-log quorum semantics or create a distributed admission controller.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.
 - Keep the app server thin; let the proxy handle most ingress concerns.
 - End-to-end example (Envoy + kind): `examples/k8s-envoy/`.

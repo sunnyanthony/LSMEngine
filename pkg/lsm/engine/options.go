@@ -37,6 +37,12 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.FlushQueueSize == 0 {
 		opts.FlushQueueSize = 4
 	}
+	if opts.FlushBackpressureQueueThreshold < 0 {
+		return opts, fmt.Errorf("flush backpressure queue threshold must be non-negative")
+	}
+	if opts.CompactionBackpressureL0Threshold < 0 {
+		return opts, fmt.Errorf("compaction backpressure l0 threshold must be non-negative")
+	}
 	if opts.BusBuffer == 0 {
 		opts.BusBuffer = 16
 	}

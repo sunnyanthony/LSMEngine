@@ -47,6 +47,12 @@ addr: "127.0.0.1:8080"
 read_timeout: "5s"
 write_timeout: "5s"
 write_consistency_default: "accepted"
+# Optional local storage tuning. Backpressure thresholds are disabled when 0.
+# memtable_limit: 1048576
+# flush_queue_size: 4
+# compaction_l0_threshold: 4
+# flush_backpressure_queue_threshold: 0
+# compaction_backpressure_l0_threshold: 0
 # io_backend: "async"
 # io_backend_strict: false
 # io_async_max_in_flight: 64

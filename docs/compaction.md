@@ -91,4 +91,12 @@ control plane decoupled from IO.
   `SuccessfulSteps` counts completed compactions. Counters are sampled independently.
 - Cancellation stops the service between steps and clears `Running`. An in-flight
   step finishes before exit because the controller's step interface is synchronous.
-- Scheduler/backpressure policies are planned.
+- Basic write admission can reject new local writes with `ErrBackpressure` when
+  configured flush queue or L0 pressure thresholds are reached. This admission
+  happens before commit-log proposal; committed entries still apply locally even
+  when the node is under local compaction pressure.
+- Admission checks observe current pressure without reserving capacity. Concurrent
+  proposals and already committed entries can exceed a threshold; these settings
+  are not a hard memory limit. L0 pressure only rejects writes estimated to trigger
+  another flush, while the health signal reports the pressure even for smaller writes.
+- Richer debt scheduling, priority policy, and adaptive throttling remain planned.

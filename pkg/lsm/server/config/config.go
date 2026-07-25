@@ -15,21 +15,26 @@ import (
 
 // Config captures server-mode defaults.
 type Config struct {
-	DataDir                 string          `yaml:"data_dir"`
-	NodeID                  string          `yaml:"node_id"`
-	ClusterID               string          `yaml:"cluster_id"`
-	StorageMode             string          `yaml:"storage_mode"`
-	ControlStatePath        string          `yaml:"control_state_path"`
-	CommitLog               CommitLogConfig `yaml:"commitlog"`
-	Raft                    RaftConfig      `yaml:"raft"`
-	Shards                  []ShardConfig   `yaml:"shards"`
-	Addr                    string          `yaml:"addr"`
-	ReadTimeout             time.Duration   `yaml:"read_timeout"`
-	WriteTimeout            time.Duration   `yaml:"write_timeout"`
-	WriteConsistencyDefault string          `yaml:"write_consistency_default"`
-	IOBackend               string          `yaml:"io_backend"`
-	IOBackendStrict         bool            `yaml:"io_backend_strict"`
-	IOAsyncMaxInFlight      int             `yaml:"io_async_max_in_flight"`
+	DataDir                           string          `yaml:"data_dir"`
+	NodeID                            string          `yaml:"node_id"`
+	ClusterID                         string          `yaml:"cluster_id"`
+	StorageMode                       string          `yaml:"storage_mode"`
+	ControlStatePath                  string          `yaml:"control_state_path"`
+	CommitLog                         CommitLogConfig `yaml:"commitlog"`
+	Raft                              RaftConfig      `yaml:"raft"`
+	Shards                            []ShardConfig   `yaml:"shards"`
+	Addr                              string          `yaml:"addr"`
+	ReadTimeout                       time.Duration   `yaml:"read_timeout"`
+	WriteTimeout                      time.Duration   `yaml:"write_timeout"`
+	WriteConsistencyDefault           string          `yaml:"write_consistency_default"`
+	MemtableLimit                     int             `yaml:"memtable_limit"`
+	FlushQueueSize                    int             `yaml:"flush_queue_size"`
+	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
+	CompactionL0Threshold             int             `yaml:"compaction_l0_threshold"`
+	CompactionBackpressureL0Threshold int             `yaml:"compaction_backpressure_l0_threshold"`
+	IOBackend                         string          `yaml:"io_backend"`
+	IOBackendStrict                   bool            `yaml:"io_backend_strict"`
+	IOAsyncMaxInFlight                int             `yaml:"io_async_max_in_flight"`
 }
 
 // CommitLogConfig captures commit-log provider selection.

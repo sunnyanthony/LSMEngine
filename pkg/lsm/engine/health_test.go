@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	compactionruntime "lsmengine/internal/lsm/compaction/runtime"
 	"lsmengine/internal/lsm/metadata"
 	"lsmengine/internal/lsm/tableset"
+	"lsmengine/pkg/lsm/errs"
 )
 
 func TestStatsSnapshot(t *testing.T) {
@@ -258,6 +260,182 @@ func TestStatsCompactionRuntimeMetrics(t *testing.T) {
 	}
 	if stats.CompactionRuntime.Errors != 0 {
 		t.Fatalf("expected no compaction errors, got %+v", stats.CompactionRuntime)
+	}
+}
+
+func TestWriteBackpressureRejectsBeforeCompactionThresholdFlush(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                           t.TempDir(),
+		MemtableLimit:                     1,
+		CompactionL0Threshold:             0,
+		CompactionBackpressureL0Threshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	waitForStats(t, func() bool {
+		return store.Stats().L0TableCount >= 1
+	})
+
+	err = store.Put([]byte("c"), []byte("d"))
+	if !errors.Is(err, errs.ErrBackpressure) {
+		t.Fatalf("expected backpressure, got %v", err)
+	}
+	stats := store.Stats()
+	if !stats.WriteBackpressure.Active {
+		t.Fatalf("expected write backpressure active, got %+v", stats.WriteBackpressure)
+	}
+	if stats.WriteBackpressure.Reason != writeBackpressureReasonL0 {
+		t.Fatalf("expected l0 reason, got %+v", stats.WriteBackpressure)
+	}
+	if stats.WriteBackpressure.Rejects != 1 {
+		t.Fatalf("expected one rejected write, got %+v", stats.WriteBackpressure)
+	}
+	if stats.Seq != 1 {
+		t.Fatalf("expected rejected write not to commit, got seq=%d", stats.Seq)
+	}
+}
+
+func TestWriteBackpressureDoesNotBlockCommittedApply(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                           t.TempDir(),
+		MemtableLimit:                     1,
+		CompactionL0Threshold:             0,
+		CompactionBackpressureL0Threshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	waitForStats(t, func() bool {
+		return store.Stats().L0TableCount >= 1
+	})
+
+	seq, err := store.writer.applyCommittedData(dataCommittedEntry{
+		Commit:   CommitLogCommit{Index: 2, Term: 1},
+		Seq:      2,
+		Mutation: dataMutation{Kind: "put", Key: []byte("c"), Value: []byte("d")},
+	})
+	if err != nil {
+		t.Fatalf("apply committed data: %v", err)
+	}
+	if seq != 2 {
+		t.Fatalf("expected seq 2, got %d", seq)
+	}
+	if _, ok := store.Get([]byte("c")); !ok {
+		t.Fatalf("expected committed entry to apply despite local write backpressure")
+	}
+	stats := store.Stats()
+	if stats.WriteBackpressure.Rejects != 0 {
+		t.Fatalf("expected committed apply not to count as rejected write, got %+v", stats.WriteBackpressure)
+	}
+}
+
+func TestWriteBackpressureRejectsAtFlushQueueThreshold(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                         t.TempDir(),
+		MemtableLimit:                   1,
+		FlushBackpressureQueueThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		store.memMu.Lock()
+		store.flushQueue = nil
+		store.memMu.Unlock()
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	store.memMu.Lock()
+	store.flushQueue = append(store.flushQueue, store.mem)
+	store.memMu.Unlock()
+
+	err = store.Put([]byte("a"), []byte("b"))
+	if !errors.Is(err, errs.ErrBackpressure) {
+		t.Fatalf("expected backpressure, got %v", err)
+	}
+	stats := store.Stats()
+	if stats.WriteBackpressure.Reason != writeBackpressureReasonFlushQueue {
+		t.Fatalf("expected flush queue reason, got %+v", stats.WriteBackpressure)
+	}
+}
+
+func TestFlushBackpressurePreservesCommittedMutations(t *testing.T) {
+	for _, kind := range []string{"put", "delete"} {
+		t.Run(kind, func(t *testing.T) {
+			opts := Options{DataDir: t.TempDir(), MemtableLimit: 4096}
+			store, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				store.flushBlocked.Store(false)
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}()
+			if err := store.Put([]byte("key"), []byte("old")); err != nil {
+				t.Fatal(err)
+			}
+			before := store.commitLog.RuntimeStatus().Index
+			store.flushBlocked.Store(true)
+			mutation := dataMutation{Kind: kind, Key: []byte("key")}
+			if kind == "put" {
+				mutation.Value = []byte("new")
+				err = store.Put(mutation.Key, mutation.Value)
+			} else {
+				err = store.Delete(mutation.Key)
+			}
+			if !errors.Is(err, errs.ErrBackpressure) || store.commitLog.RuntimeStatus().Index != before {
+				t.Fatalf("rejected mutation reached commit log: err=%v status=%+v", err, store.commitLog.RuntimeStatus())
+			}
+			seq := store.Stats().Seq + 1
+			if _, err := store.writer.applyCommittedData(dataCommittedEntry{
+				Commit: CommitLogCommit{Index: before + 1, Term: 1}, Seq: seq, Mutation: mutation,
+			}); err != nil {
+				t.Fatalf("committed mutation blocked: %v", err)
+			}
+			if got := store.Stats().WriteBackpressure.Rejects; got != 1 {
+				t.Fatalf("apply changed admission rejects: %d", got)
+			}
+			store.flushBlocked.Store(false)
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}()
+			entry, found := reopened.Get(mutation.Key)
+			if found != (kind == "put") || (found && string(entry.Value) != "new") {
+				t.Fatalf("committed mutation lost after reopen: found=%v entry=%+v", found, entry)
+			}
+		})
 	}
 }
 
