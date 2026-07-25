@@ -21,7 +21,17 @@ import (
 type stubProvider struct{}
 
 func (stubProvider) Stats() lsm.Stats {
-	return lsm.Stats{MemtableBytes: 1, MemtableEntries: 2}
+	return lsm.Stats{
+		MemtableBytes:      1,
+		MemtableEntries:    2,
+		FlushQueueCapacity: 4,
+		SSTableCount:       3,
+		SSTableBytes:       64,
+		SSTableLevels: []lsm.SSTableLevelStats{
+			{Level: 0, TableCount: 2, SizeBytes: 40},
+			{Level: 1, TableCount: 1, SizeBytes: 24},
+		},
+	}
 }
 
 func (stubProvider) Health() lsm.Health {
@@ -560,6 +570,12 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if stats.MemtableBytes != 1 || stats.MemtableEntries != 2 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if stats.SSTableCount != 3 || stats.SSTableBytes != 64 {
+		t.Fatalf("unexpected sstable stats: %+v", stats)
+	}
+	if len(stats.SSTableLevels) != 2 || stats.SSTableLevels[0].Level != 0 {
+		t.Fatalf("unexpected level stats: %+v", stats.SSTableLevels)
 	}
 }
 

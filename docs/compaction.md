@@ -73,4 +73,13 @@ control plane decoupled from IO.
 
 ## Async scheduling and backpressure
 - Compaction is triggered on flush events and runs in the background.
+- `Stats()` and `/stats` report L0 table count/bytes and whether the configured
+  L0 threshold has been reached. This is currently a pressure signal for
+  operators and tests, not a complete debt scheduler.
+- SSTable counts and bytes describe the active table set; they exclude obsolete
+  files retained by snapshots, trash, WAL, and raft storage.
+- `FlushQueueDepth` counts outstanding flush work, including work in progress
+  and waiting for dispatcher space. `FlushQueueCapacity` is the configured
+  dispatcher buffer capacity, so depth can exceed capacity; their ratio is not
+  a buffer utilization measurement.
 - Scheduler/backpressure policies are planned.

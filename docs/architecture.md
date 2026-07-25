@@ -228,6 +228,7 @@ opts := engine.Options{
 ```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
+- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler.
 
 ## Next steps (implementation order)
 1) Snapshot range iterator over SSTables (merge + tombstone filtering).
