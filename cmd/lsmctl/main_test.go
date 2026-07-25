@@ -445,9 +445,11 @@ func TestWriteGatewayStatus(t *testing.T) {
 				},
 			},
 			{
-				Node:     "node-d",
-				Endpoint: "http://127.0.0.1:8083",
-				Error:    "connection refused",
+				Node:          "node-d",
+				Endpoint:      "http://127.0.0.1:8083",
+				Degraded:      true,
+				DegradedUntil: "2026-07-25T12:00:00Z",
+				Error:         "connection refused",
 			},
 		},
 	})
@@ -463,6 +465,8 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"health=ready",
 		"node=node-d",
 		"ok=false",
+		"degraded=true",
+		"degraded_until=2026-07-25T12:00:00Z",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)

@@ -691,6 +691,35 @@ func TestGatewayBackendTransportFailureDegradesEndpoint(t *testing.T) {
 	}
 }
 
+func TestGatewayEndpointHealthExpiry(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%v", expired), func(t *testing.T) {
+			until := time.Now().Add(time.Hour)
+			if expired {
+				until = time.Now().Add(-time.Hour)
+			}
+			gateway := &Gateway{endpoint: endpointPolicy{
+				failedUntil: map[string]time.Time{"http://node-a": until},
+			}}
+			degraded, timestamp := gateway.endpointHealth("http://node-a/")
+			if degraded == expired {
+				t.Fatalf("degraded=%v for expired=%v", degraded, expired)
+			}
+			if expired {
+				if timestamp != "" || len(gateway.endpoint.failedUntil) != 0 {
+					t.Fatal("expired cooldown still visible")
+				}
+			} else if timestamp != until.UTC().Format(time.RFC3339Nano) {
+				t.Fatalf("unexpected cooldown timestamp: %s", timestamp)
+			}
+			ids := gateway.nodeEndpointIDs(map[string]string{"node-a": "http://node-a", "node-b": "http://node-b"}, false)
+			if (ids[0] == "node-a") != expired {
+				t.Fatalf("routing order disagrees with reported health: %v", ids)
+			}
+		})
+	}
+}
+
 func newInMemoryHTTPClient(hostHandlers map[string]http.Handler) *http.Client {
 	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		handler, ok := hostHandlers[req.URL.Host]

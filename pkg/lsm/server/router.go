@@ -56,11 +56,13 @@ type GatewayClusterStatus struct {
 
 // GatewayClusterNodeStatus is one backend node status sample.
 type GatewayClusterNodeStatus struct {
-	Node     string             `json:"node"`
-	Endpoint string             `json:"endpoint"`
-	OK       bool               `json:"ok"`
-	Error    string             `json:"error,omitempty"`
-	Status   *lsm.ClusterStatus `json:"status,omitempty"`
+	Node          string             `json:"node"`
+	Endpoint      string             `json:"endpoint"`
+	OK            bool               `json:"ok"`
+	Degraded      bool               `json:"degraded"`
+	DegradedUntil string             `json:"degraded_until,omitempty"`
+	Error         string             `json:"error,omitempty"`
+	Status        *lsm.ClusterStatus `json:"status,omitempty"`
 }
 
 type cachedRoutes struct {
@@ -193,10 +195,12 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
 			g.markEndpointRequestFailure(ctx, endpoint)
+			node.Degraded, node.DegradedUntil = g.endpointHealth(endpoint)
 			node.Error = err.Error()
 			lastErr = err
 		} else {
 			g.markEndpointSuccess(endpoint)
+			node.Degraded, node.DegradedUntil = g.endpointHealth(endpoint)
 			node.OK = true
 			node.Status = &status
 			result.ReachableNodes++
@@ -499,6 +503,25 @@ func (g *Gateway) markEndpointSuccess(endpoint string) {
 	g.endpoint.mu.Lock()
 	delete(g.endpoint.failedUntil, endpoint)
 	g.endpoint.mu.Unlock()
+}
+
+func (g *Gateway) endpointHealth(endpoint string) (bool, string) {
+	if g == nil {
+		return false, ""
+	}
+	endpoint = NormalizeHTTPBaseURL(endpoint)
+	now := time.Now()
+	g.endpoint.mu.Lock()
+	defer g.endpoint.mu.Unlock()
+	until, failed := g.endpoint.failedUntil[endpoint]
+	if !failed {
+		return false, ""
+	}
+	if !now.Before(until) {
+		delete(g.endpoint.failedUntil, endpoint)
+		return false, ""
+	}
+	return true, until.UTC().Format(time.RFC3339Nano)
 }
 
 func (g *Gateway) alignShardLeader(ctx context.Context, endpoint string, key []byte, target string) error {

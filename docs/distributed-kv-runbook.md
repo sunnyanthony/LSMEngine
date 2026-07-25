@@ -172,7 +172,9 @@ linearizable read protocol. The gateway keeps short-lived backend endpoint
 health state: transport failures and 5xx responses put an endpoint behind
 healthy endpoints for a cooldown window, while successful probes clear that
 state. Healthy read endpoints are rotated so a single stable gateway does not
-always send reads to the same backend.
+always send reads to the same backend. `/gateway/status` includes per-backend
+`degraded` and `degraded_until` fields so operators can see when gateway routing
+is temporarily avoiding an endpoint.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. Use the Compose gateway smoke for a repeatable
