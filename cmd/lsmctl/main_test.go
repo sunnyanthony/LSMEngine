@@ -558,6 +558,83 @@ func TestEvaluateClusterWaitRejectsMissingWriteLeader(t *testing.T) {
 	}
 }
 
+func TestEvaluateClusterWaitAppliesMaxApplyLag(t *testing.T) {
+	got := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+						Index:          10,
+						AppliedIndex:   10,
+						ApplyLag:       0,
+					},
+				},
+			},
+			{
+				Node:     "node-b",
+				Endpoint: "http://127.0.0.1:8081",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-b",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:       "follower",
+						LeaderKnown:  true,
+						Index:        10,
+						AppliedIndex: 7,
+						ApplyLag:     3,
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 2,
+		RequireWriteLeader: true,
+		MaxApplyLag:        uint64Ptr(0),
+	})
+	if got.Ready {
+		t.Fatalf("expected lagging node to keep wait result not ready: %+v", got)
+	}
+	if got.ReadyNodes != 1 {
+		t.Fatalf("expected one caught-up ready node, got %+v", got)
+	}
+	if got.MaxApplyLag == nil || *got.MaxApplyLag != 0 {
+		t.Fatalf("expected max apply lag in result, got %+v", got)
+	}
+}
+
+func TestClusterWaitRequiresLeaderWithinApplyLag(t *testing.T) {
+	statuses := clusterStatusResult{Nodes: []clusterStatusNodeResult{
+		{Node: "leader", Status: &lsm.ClusterStatus{NodeID: "leader", CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+			Health: "ready", Leader: true, LeaderKnown: true, WriteAvailable: true, Index: 10, AppliedIndex: 7, ApplyLag: 3,
+		}}},
+		{Node: "follower", Status: &lsm.ClusterStatus{NodeID: "follower", CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+			Health: "follower", LeaderKnown: true, Index: 10, AppliedIndex: 10,
+		}}},
+	}}
+	opts := waitClusterOptions{RequiredReadyNodes: 1, RequireWriteLeader: true, MaxApplyLag: uint64Ptr(0)}
+	if got := evaluateClusterWait(statuses, opts); got.Ready {
+		t.Fatalf("lagging leader passed readiness gate: %+v", got)
+	}
+	opts.MaxApplyLag = uint64Ptr(3)
+	if got := evaluateClusterWait(statuses, opts); !got.Ready {
+		t.Fatalf("leader at threshold should pass: %+v", got)
+	}
+	opts.MaxApplyLag = nil
+	if got := evaluateClusterWait(statuses, opts); !got.Ready {
+		t.Fatalf("disabled lag gate changed readiness: %+v", got)
+	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
+}
+
 func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {
 	var drainCalls atomic.Int32
 

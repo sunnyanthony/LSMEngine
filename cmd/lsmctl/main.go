@@ -513,6 +513,7 @@ type clusterWaitResult struct {
 	Ready               bool                `json:"ready"`
 	ReadyNodes          int                 `json:"ready_nodes"`
 	RequiredReadyNodes  int                 `json:"required_ready_nodes"`
+	MaxApplyLag         *uint64             `json:"max_apply_lag,omitempty"`
 	WriteLeader         string              `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string              `json:"write_leader_endpoint,omitempty"`
 	Statuses            clusterStatusResult `json:"statuses"`
@@ -521,6 +522,7 @@ type clusterWaitResult struct {
 type waitClusterOptions struct {
 	RequiredReadyNodes int
 	RequireWriteLeader bool
+	MaxApplyLag        *uint64
 	Timeout            time.Duration
 	Interval           time.Duration
 }
@@ -923,6 +925,7 @@ func waitClusterCmd(args []string) {
 	addr := fs.String("addr", "", "http address for one server node")
 	minReady := fs.Int("min-ready", 0, "minimum healthy nodes required; 0 requires all configured endpoints")
 	requireWriteLeader := fs.Bool("write-leader", true, "require a node that can accept committed writes")
+	maxApplyLag := fs.Int64("max-apply-lag", -1, "maximum commit-log apply lag for ready nodes; -1 disables the gate")
 	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
 	interval := fs.Duration("interval", 200*time.Millisecond, "poll interval")
 	var nodeEndpoints nodeEndpointFlags
@@ -942,9 +945,18 @@ func waitClusterCmd(args []string) {
 	if len(endpoints) == 0 {
 		log.Fatal("wait-cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
+	if *maxApplyLag < -1 {
+		log.Fatal("max-apply-lag must be -1 or greater")
+	}
+	var maxApplyLagOpt *uint64
+	if *maxApplyLag >= 0 {
+		value := uint64(*maxApplyLag)
+		maxApplyLagOpt = &value
+	}
 	result, err := waitCluster(endpoints, waitClusterOptions{
 		RequiredReadyNodes: *minReady,
 		RequireWriteLeader: *requireWriteLeader,
+		MaxApplyLag:        maxApplyLagOpt,
 		Timeout:            *timeout,
 		Interval:           *interval,
 	})
@@ -1762,12 +1774,16 @@ func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterW
 			if lastErr != nil && len(last.Statuses.Nodes) == 0 {
 				return last, lastErr
 			}
-			return last, fmt.Errorf(
+			message := fmt.Sprintf(
 				"wait-cluster timed out: ready nodes %d/%d write_leader=%v",
 				last.ReadyNodes,
 				last.RequiredReadyNodes,
 				last.WriteLeader != "",
 			)
+			if opts.MaxApplyLag != nil {
+				message = fmt.Sprintf("%s max_apply_lag=%d", message, *opts.MaxApplyLag)
+			}
+			return last, errors.New(message)
 		}
 		time.Sleep(opts.Interval)
 	}
@@ -1776,13 +1792,18 @@ func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterW
 func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) clusterWaitResult {
 	result := clusterWaitResult{
 		RequiredReadyNodes: opts.RequiredReadyNodes,
+		MaxApplyLag:        opts.MaxApplyLag,
 		Statuses:           statuses,
 	}
 	for _, node := range statuses.Nodes {
-		if clusterNodeReplacementHealthy(node) {
+		nodeReady := clusterNodeReadyForWait(node, opts.MaxApplyLag)
+		if nodeReady {
 			result.ReadyNodes++
 		}
 		if node.Error != "" || node.Status == nil {
+			continue
+		}
+		if opts.MaxApplyLag != nil && !nodeReady {
 			continue
 		}
 		runtime := node.Status.CommitLogRuntime
@@ -1799,6 +1820,16 @@ func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) 
 		result.Ready = result.Ready && result.WriteLeader != ""
 	}
 	return result
+}
+
+func clusterNodeReadyForWait(node clusterStatusNodeResult, maxApplyLag *uint64) bool {
+	if !clusterNodeReplacementHealthy(node) {
+		return false
+	}
+	if maxApplyLag == nil {
+		return true
+	}
+	return node.Status.CommitLogRuntime.ApplyLag <= *maxApplyLag
 }
 
 func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
@@ -1907,6 +1938,9 @@ func writeClusterWait(w io.Writer, result clusterWaitResult) {
 		result.WriteLeader,
 		result.WriteLeaderEndpoint,
 	)
+	if result.MaxApplyLag != nil {
+		fmt.Fprintf(w, "max_apply_lag=%d\n", *result.MaxApplyLag)
+	}
 	writeClusterStatuses(w, result.Statuses)
 }
 

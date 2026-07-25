@@ -74,6 +74,12 @@ By default, `wait-cluster` requires every configured endpoint to report a
 healthy `ready` or `follower` runtime state and requires one write-available
 raft leader. Use `--min-ready 2` for a planned degraded-quorum operation, or
 `--write-leader=false` when only endpoint/status reachability matters.
+`--max-apply-lag <n>` requires counted ready nodes and the required write leader
+to report an index gap at or below `n`; the gate is disabled by default (`-1`).
+A zero threshold can remain unsatisfied after Raft no-op or membership entries,
+even when all KV mutations have applied. This node-local, separately sampled gap
+does not prove cluster-wide catch-up or a read barrier. For a specific write,
+compare its committed index against each target node's `applied_index`.
 
 The useful fields are:
 
