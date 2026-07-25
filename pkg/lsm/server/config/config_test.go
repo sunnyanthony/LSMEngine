@@ -45,6 +45,7 @@ addr: "127.0.0.1:9090"
 read_timeout: "2s"
 write_timeout: "3s"
 write_consistency_default: "accepted"
+gateway_read_mode: "leader"
 memtable_limit: 2048
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
@@ -109,6 +110,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.Raft.PeerURLFile != "/var/lib/lsm/raft-peers.yaml" {
 		t.Fatalf("expected raft peer url file, got %q", cfg.Raft.PeerURLFile)
+	}
+	if cfg.GatewayReadMode != "leader" {
+		t.Fatalf("expected gateway read mode, got %q", cfg.GatewayReadMode)
 	}
 	if cfg.MemtableLimit != 2048 {
 		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)

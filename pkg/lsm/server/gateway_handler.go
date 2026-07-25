@@ -14,7 +14,7 @@ import (
 )
 
 // NewGatewayHandler returns an HTTP handler that exposes route-aware writes and
-// best-effort cluster read fallback through one gateway endpoint.
+// configured cluster read proxying through one gateway endpoint.
 func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 	resolved := resolveHandlerOptions(opts)
 	mux := http.NewServeMux()
@@ -231,17 +231,26 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		writeGatewayUnavailable(w, err.Error())
 		return
 	}
-	nodeIDs := h.gateway.readNodeEndpointIDs(endpoints)
+	targets, err := h.gateway.readTargets(r.Context(), endpoints, isKVReadRequest(r))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
+			Error:     err.Error(),
+			Code:      "gateway_unavailable",
+			Retryable: true,
+		})
+		return
+	}
 	if r.URL.Path == "/kv/get" {
-		h.proxyClusterGet(w, r, endpoints, nodeIDs)
+		h.proxyClusterGet(w, r, targets)
 		return
 	}
 	writeStatusLookup := isWriteStatusRequest(r)
 	var firstNotFoundHeader http.Header
 	var firstNotFoundBody []byte
 	var lastErr error
-	for _, nodeID := range nodeIDs {
-		endpoint := endpoints[nodeID]
+	for _, target := range targets {
+		nodeID := target.nodeID
+		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
 			lastErr = err
@@ -282,11 +291,12 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	writeGatewayUnavailable(w, lastErr.Error())
 }
 
-func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request, endpoints map[string]string, nodeIDs []string) {
+func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request, targets []gatewayReadTarget) {
 	var firstNotFound *getResponse
 	var lastErr error
-	for _, nodeID := range nodeIDs {
-		endpoint := endpoints[nodeID]
+	for _, target := range targets {
+		nodeID := target.nodeID
+		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
 			lastErr = err
@@ -346,6 +356,10 @@ func writeGatewayUnavailable(w http.ResponseWriter, msg string) {
 
 func isWriteStatusRequest(r *http.Request) bool {
 	return r != nil && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/kv/write-status/")
+}
+
+func isKVReadRequest(r *http.Request) bool {
+	return r != nil && r.Method == http.MethodGet && (r.URL.Path == "/kv/get" || r.URL.Path == "/kv/range")
 }
 
 func sortedNodeEndpointIDs(endpoints map[string]string) []string {

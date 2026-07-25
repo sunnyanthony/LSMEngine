@@ -47,6 +47,9 @@ addr: "127.0.0.1:8080"
 read_timeout: "5s"
 write_timeout: "5s"
 write_consistency_default: "accepted"
+# Gateway-only option used by `lsmctl gateway --config`.
+# Valid values: "any" (default) or "leader".
+# gateway_read_mode: "any"
 # Optional local storage tuning. Backpressure thresholds are disabled when 0.
 # memtable_limit: 1048576
 # flush_queue_size: 4
