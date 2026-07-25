@@ -32,8 +32,10 @@ examples/docker-compose-cluster/smoke.sh
 ```
 
 The script builds the server image, waits for all three health endpoints, writes
-and deletes a key through cluster-aware `lsmctl`, and tears the cluster down unless
-`LSM_COMPOSE_KEEP=1` is set.
+and deletes a key through cluster-aware `lsmctl`, waits for all nodes to apply
+the committed write/delete sequence using `wait-cluster` with
+`--min-applied-index`, and tears the cluster down unless `LSM_COMPOSE_KEEP=1`
+is set.
 
 Useful environment overrides:
 
@@ -75,8 +77,9 @@ This starts the same static three-node cluster, drains one node at a time with
 `lsmctl drain-node`, stops it, uses `lsmctl wait-cluster --min-ready 2` to
 verify the remaining quorum, uses `lsmctl put --cluster` to commit a write,
 restarts the stopped node with its existing volume, resumes it with
-`lsmctl resume-node`, and verifies all three nodes can read the write before the
-next node is restarted.
+`lsmctl resume-node`, waits for all three nodes to apply the write's committed
+sequence, and verifies all three nodes can read the write before the next node
+is restarted.
 
 ## Replacement smoke
 
@@ -100,8 +103,9 @@ This starts node-a/node-b/node-c, writes committed values, stops node-a before
 replacement, uses `lsmctl wait-cluster --min-ready 2` to verify the surviving
 quorum, starts node-d with `raft.join: true`, runs `lsmctl replacement-plan`,
 then runs `lsmctl replacement-apply`. It waits for the node-b/node-c/node-d
-quorum, verifies node-d catches up to values committed before and after node-a
-stopped, then verifies the new cluster can accept and read a committed write.
+quorum to apply the committed sequences from before and after node-a stopped,
+verifies node-d can read those values, then verifies the new cluster can accept
+and read a committed write.
 
 ## Manual commands
 

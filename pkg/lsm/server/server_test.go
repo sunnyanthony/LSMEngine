@@ -59,6 +59,7 @@ type writeStubProvider struct {
 	stubProvider
 	mu        sync.Mutex
 	data      map[string][]byte
+	seq       uint64
 	putErr    error
 	deleteErr error
 	putGate   chan struct{}
@@ -189,6 +190,12 @@ func (p *writeControlStubProvider) Put(key []byte, value []byte) error {
 	return p.write.Put(key, value)
 }
 func (p *writeControlStubProvider) Delete(key []byte) error { return p.write.Delete(key) }
+func (p *writeControlStubProvider) PutWithSeq(key []byte, value []byte) (uint64, error) {
+	return p.write.PutWithSeq(key, value)
+}
+func (p *writeControlStubProvider) DeleteWithSeq(key []byte) (uint64, error) {
+	return p.write.DeleteWithSeq(key)
+}
 func (p *writeControlStubProvider) Get(key []byte) (types.Entry, bool) {
 	return p.write.Get(key)
 }
@@ -200,26 +207,38 @@ func newWriteStubProvider() *writeStubProvider {
 }
 
 func (w *writeStubProvider) Put(key []byte, value []byte) error {
+	_, err := w.PutWithSeq(key, value)
+	return err
+}
+
+func (w *writeStubProvider) PutWithSeq(key []byte, value []byte) (uint64, error) {
 	if w.putGate != nil {
 		<-w.putGate
 	}
 	if w.putErr != nil {
-		return w.putErr
+		return 0, w.putErr
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.seq++
 	w.data[string(key)] = append([]byte(nil), value...)
-	return nil
+	return w.seq, nil
 }
 
 func (w *writeStubProvider) Delete(key []byte) error {
+	_, err := w.DeleteWithSeq(key)
+	return err
+}
+
+func (w *writeStubProvider) DeleteWithSeq(key []byte) (uint64, error) {
 	if w.deleteErr != nil {
-		return w.deleteErr
+		return 0, w.deleteErr
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.seq++
 	delete(w.data, string(key))
-	return nil
+	return w.seq, nil
 }
 
 func (w *writeStubProvider) Get(key []byte) (types.Entry, bool) {
@@ -1064,6 +1083,9 @@ func TestHandlerPutLocalCommitted(t *testing.T) {
 	if status.Consistency != lsm.WriteConsistencyLocalCommitted {
 		t.Fatalf("expected local_committed consistency, got %s", status.Consistency)
 	}
+	if status.Seq != 1 {
+		t.Fatalf("expected committed seq 1, got %d", status.Seq)
+	}
 	if got, ok := p.Value("a"); !ok || string(got) != "1" {
 		t.Fatalf("expected stored value 1, got %q found=%v", string(got), ok)
 	}
@@ -1247,6 +1269,9 @@ func TestHandlerPutAcceptedStatusLifecycle(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if final.Seq != 1 {
+		t.Fatalf("expected final seq 1, got %+v", final)
+	}
 	if got, ok := p.Value("a"); !ok || string(got) != "1" {
 		t.Fatalf("expected stored value 1, got %q found=%v", string(got), ok)
 	}
@@ -1366,7 +1391,7 @@ func TestWriteRequestStoreCompactionKeepsPending(t *testing.T) {
 		t.Fatalf("expected pending request %s to be retained", s2.RequestID)
 	}
 
-	store.Commit(s1.RequestID)
+	store.Commit(s1.RequestID, 1)
 	s3 := store.New("put", lsm.WriteConsistencyAccepted)
 	if _, ok := store.Get(s1.RequestID); ok {
 		t.Fatalf("expected committed request %s to be evicted", s1.RequestID)

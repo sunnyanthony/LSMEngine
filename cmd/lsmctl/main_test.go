@@ -483,6 +483,27 @@ func TestWriteGatewayStatus(t *testing.T) {
 	}
 }
 
+func TestWriteKVStatusPrintsCommittedSeq(t *testing.T) {
+	var buf bytes.Buffer
+	writeKVStatus(&buf, lsm.WriteRequestStatus{
+		RequestID:   "wr-1",
+		Operation:   "put",
+		State:       lsm.WriteRequestCommitted,
+		Consistency: lsm.WriteConsistencyLocalCommitted,
+		Seq:         12,
+	}, false)
+	out := buf.String()
+	for _, want := range []string{
+		"request_id=wr-1",
+		"state=committed",
+		"seq=12",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+}
+
 func TestEvaluateClusterWaitRequiresReadyNodesAndWriteLeader(t *testing.T) {
 	got := evaluateClusterWait(clusterStatusResult{
 		Nodes: []clusterStatusNodeResult{
@@ -604,6 +625,54 @@ func TestEvaluateClusterWaitAppliesMaxApplyLag(t *testing.T) {
 	}
 	if got.MaxApplyLag == nil || *got.MaxApplyLag != 0 {
 		t.Fatalf("expected max apply lag in result, got %+v", got)
+	}
+}
+
+func TestEvaluateClusterWaitAppliesMinAppliedIndex(t *testing.T) {
+	got := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+						Index:          10,
+						AppliedIndex:   10,
+					},
+				},
+			},
+			{
+				Node:     "node-b",
+				Endpoint: "http://127.0.0.1:8081",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-b",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:       "follower",
+						LeaderKnown:  true,
+						Index:        10,
+						AppliedIndex: 9,
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 2,
+		RequireWriteLeader: true,
+		MinAppliedIndex:    uint64Ptr(10),
+	})
+	if got.Ready {
+		t.Fatalf("expected node below min applied index to keep wait result not ready: %+v", got)
+	}
+	if got.ReadyNodes != 1 {
+		t.Fatalf("expected one min-index ready node, got %+v", got)
+	}
+	if got.MinAppliedIndex == nil || *got.MinAppliedIndex != 10 {
+		t.Fatalf("expected min applied index in result, got %+v", got)
 	}
 }
 

@@ -73,10 +73,12 @@ go run ./cmd/lsmctl wait-cluster \
 By default, `wait-cluster` requires every configured endpoint to report a
 healthy `ready` or `follower` runtime state and requires one write-available
 raft leader. Use `--min-ready 2` for a planned degraded-quorum operation, or
-`--write-leader=false` when only endpoint/status reachability matters. Use
-`--max-apply-lag 0` when an operation should wait for counted ready nodes to
-have materialized every commit-log entry they have observed; use a larger value
-to tolerate bounded follower catch-up lag.
+`--write-leader=false` when only endpoint/status reachability matters. For a
+specific committed write, use the write response's `seq` as
+`--min-applied-index <seq>` so counted ready nodes must have materialized that
+commit into local LSM/control state. `--max-apply-lag <n>` is also available for
+raw runtime gap checks, but that gap can include provider/internal raft entries
+and is not a precise pending-KV-mutation count.
 
 The useful fields are:
 

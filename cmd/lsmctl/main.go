@@ -511,6 +511,7 @@ type clusterWaitResult struct {
 	ReadyNodes          int                 `json:"ready_nodes"`
 	RequiredReadyNodes  int                 `json:"required_ready_nodes"`
 	MaxApplyLag         *uint64             `json:"max_apply_lag,omitempty"`
+	MinAppliedIndex     *uint64             `json:"min_applied_index,omitempty"`
 	WriteLeader         string              `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string              `json:"write_leader_endpoint,omitempty"`
 	Statuses            clusterStatusResult `json:"statuses"`
@@ -520,6 +521,7 @@ type waitClusterOptions struct {
 	RequiredReadyNodes int
 	RequireWriteLeader bool
 	MaxApplyLag        *uint64
+	MinAppliedIndex    *uint64
 	Timeout            time.Duration
 	Interval           time.Duration
 }
@@ -925,6 +927,7 @@ func waitClusterCmd(args []string) {
 	minReady := fs.Int("min-ready", 0, "minimum healthy nodes required; 0 requires all configured endpoints")
 	requireWriteLeader := fs.Bool("write-leader", true, "require a node that can accept committed writes")
 	maxApplyLag := fs.Int64("max-apply-lag", -1, "maximum commit-log apply lag for ready nodes; -1 disables the gate")
+	minAppliedIndex := fs.Int64("min-applied-index", -1, "minimum applied commit-log index for ready nodes; -1 disables the gate")
 	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
 	interval := fs.Duration("interval", 200*time.Millisecond, "poll interval")
 	var nodeEndpoints nodeEndpointFlags
@@ -947,15 +950,24 @@ func waitClusterCmd(args []string) {
 	if *maxApplyLag < -1 {
 		log.Fatal("max-apply-lag must be -1 or greater")
 	}
+	if *minAppliedIndex < -1 {
+		log.Fatal("min-applied-index must be -1 or greater")
+	}
 	var maxApplyLagOpt *uint64
 	if *maxApplyLag >= 0 {
 		value := uint64(*maxApplyLag)
 		maxApplyLagOpt = &value
 	}
+	var minAppliedIndexOpt *uint64
+	if *minAppliedIndex >= 0 {
+		value := uint64(*minAppliedIndex)
+		minAppliedIndexOpt = &value
+	}
 	result, err := waitCluster(endpoints, waitClusterOptions{
 		RequiredReadyNodes: *minReady,
 		RequireWriteLeader: *requireWriteLeader,
 		MaxApplyLag:        maxApplyLagOpt,
+		MinAppliedIndex:    minAppliedIndexOpt,
 		Timeout:            *timeout,
 		Interval:           *interval,
 	})
@@ -1776,6 +1788,9 @@ func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterW
 			if opts.MaxApplyLag != nil {
 				message = fmt.Sprintf("%s max_apply_lag=%d", message, *opts.MaxApplyLag)
 			}
+			if opts.MinAppliedIndex != nil {
+				message = fmt.Sprintf("%s min_applied_index=%d", message, *opts.MinAppliedIndex)
+			}
 			return last, errors.New(message)
 		}
 		time.Sleep(opts.Interval)
@@ -1786,10 +1801,11 @@ func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) 
 	result := clusterWaitResult{
 		RequiredReadyNodes: opts.RequiredReadyNodes,
 		MaxApplyLag:        opts.MaxApplyLag,
+		MinAppliedIndex:    opts.MinAppliedIndex,
 		Statuses:           statuses,
 	}
 	for _, node := range statuses.Nodes {
-		if clusterNodeReadyForWait(node, opts.MaxApplyLag) {
+		if clusterNodeReadyForWait(node, opts.MaxApplyLag, opts.MinAppliedIndex) {
 			result.ReadyNodes++
 		}
 		if node.Error != "" || node.Status == nil {
@@ -1811,14 +1827,18 @@ func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) 
 	return result
 }
 
-func clusterNodeReadyForWait(node clusterStatusNodeResult, maxApplyLag *uint64) bool {
+func clusterNodeReadyForWait(node clusterStatusNodeResult, maxApplyLag *uint64, minAppliedIndex *uint64) bool {
 	if !clusterNodeReplacementHealthy(node) {
 		return false
 	}
-	if maxApplyLag == nil {
-		return true
+	runtime := node.Status.CommitLogRuntime
+	if maxApplyLag != nil && runtime.ApplyLag > *maxApplyLag {
+		return false
 	}
-	return node.Status.CommitLogRuntime.ApplyLag <= *maxApplyLag
+	if minAppliedIndex != nil && runtime.AppliedIndex < *minAppliedIndex {
+		return false
+	}
+	return true
 }
 
 func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
@@ -1929,6 +1949,9 @@ func writeClusterWait(w io.Writer, result clusterWaitResult) {
 	)
 	if result.MaxApplyLag != nil {
 		fmt.Fprintf(w, "max_apply_lag=%d\n", *result.MaxApplyLag)
+	}
+	if result.MinAppliedIndex != nil {
+		fmt.Fprintf(w, "min_applied_index=%d\n", *result.MinAppliedIndex)
 	}
 	writeClusterStatuses(w, result.Statuses)
 }
@@ -3050,6 +3073,9 @@ func writeKVStatus(w io.Writer, status lsm.WriteRequestStatus, jsonOut bool) {
 	fmt.Fprintf(w, "operation=%s\n", status.Operation)
 	fmt.Fprintf(w, "state=%s\n", status.State)
 	fmt.Fprintf(w, "consistency=%s\n", status.Consistency)
+	if status.Seq != 0 {
+		fmt.Fprintf(w, "seq=%d\n", status.Seq)
+	}
 	if status.Error != "" {
 		fmt.Fprintf(w, "error=%s\n", status.Error)
 	}
