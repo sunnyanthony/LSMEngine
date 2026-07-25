@@ -27,11 +27,11 @@ examples/kind-cluster/smoke.sh
 The script creates or reuses a kind cluster, builds and loads the server image,
 waits for the StatefulSet and gateway Deployment, then verifies
 writes/read/range/delete through the `lsm-gateway` Service using the `lsmctl`
-binary inside the image. The gateway mounts `peer-urls.yaml` from a ConfigMap
-and passes it to `lsmctl gateway --endpoint-file`, matching the endpoint-file
-contract used by Compose gateways and operator commands. The smoke also reads
-from follower pods directly to verify the gateway write reached the replicated
-cluster state.
+binary inside the image. The gateway discovers backend nodes from Kubernetes DNS
+SRV records through `lsmctl gateway --endpoint-dns-name`, keeping service
+discovery behind the LSM-owned node endpoint resolver contract. The smoke also
+reads from follower pods directly to verify the gateway write reached the
+replicated cluster state.
 
 ## Persistent restart smoke
 

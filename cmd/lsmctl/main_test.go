@@ -219,7 +219,7 @@ func TestGatewayNodeEndpointResolverUsesEndpointFileWithFallback(t *testing.T) {
 				"node-b": "http://static-b:8080",
 			},
 		},
-	}, "http://bootstrap-a:8080", path, nodeEndpointFlags{
+	}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{EndpointFile: path}, nodeEndpointFlags{
 		"node-c": "http://override-c:8080",
 	})
 	if err != nil {
@@ -237,6 +237,28 @@ func TestGatewayNodeEndpointResolverUsesEndpointFileWithFallback(t *testing.T) {
 	}
 	if got["node-c"] != "http://override-c:8080" {
 		t.Fatalf("expected override fallback for node-c, got %+v", got)
+	}
+}
+
+func TestGatewayNodeEndpointResolverRejectsFileAndDNS(t *testing.T) {
+	_, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{
+		EndpointFile: "/tmp/endpoints.yaml",
+		DNSSRVName:   "lsm-cluster.lsm-cluster.svc.cluster.local",
+	}, nil)
+	if err == nil {
+		t.Fatalf("expected mutually exclusive endpoint source error")
+	}
+}
+
+func TestGatewayNodeEndpointResolverUsesDNSSRV(t *testing.T) {
+	resolver, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{
+		DNSSRVName: "lsm-cluster.lsm-cluster.svc.cluster.local",
+	}, nil)
+	if err != nil {
+		t.Fatalf("gateway resolver: %v", err)
+	}
+	if _, ok := resolver.(*server.NodeEndpointDNSResolver); !ok {
+		t.Fatalf("expected DNS resolver, got %T", resolver)
 	}
 }
 

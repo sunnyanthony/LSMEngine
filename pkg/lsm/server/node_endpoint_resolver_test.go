@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"reflect"
 	"testing"
@@ -155,9 +157,8 @@ func TestNodeEndpointFileResolverReturnsLastGoodOnReloadFailure(t *testing.T) {
 }
 
 func TestNodeEndpointFileResolverUsesFallbackWhenInitialLoadFails(t *testing.T) {
-	path := t.TempDir() + "/missing.yaml"
 	resolver, err := NewNodeEndpointFileResolver(NodeEndpointFileResolverOptions{
-		Path: path,
+		Path: t.TempDir() + "/missing.yaml",
 		FallbackNodeEndpoints: map[string]string{
 			"node-a": "127.0.0.1:8080",
 		},
@@ -195,5 +196,154 @@ func TestNodeEndpointFileResolverRejectsRelativePath(t *testing.T) {
 	_, err := NewNodeEndpointFileResolver(NodeEndpointFileResolverOptions{Path: "endpoints.yaml"})
 	if err == nil {
 		t.Fatalf("expected relative path error")
+	}
+}
+
+func TestNodeEndpointDNSResolverResolvesSRVRecords(t *testing.T) {
+	resolver, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{
+		Service: "_http",
+		Proto:   "_tcp",
+		Name:    "lsm-cluster.lsm-cluster.svc.cluster.local.",
+		LookupSRV: func(ctx context.Context, service string, proto string, name string) (string, []*net.SRV, error) {
+			if err := ctx.Err(); err != nil {
+				return "", nil, err
+			}
+			if service != "http" || proto != "tcp" || name != "lsm-cluster.lsm-cluster.svc.cluster.local" {
+				return "", nil, fmt.Errorf("unexpected lookup %s %s %s", service, proto, name)
+			}
+			return "", []*net.SRV{
+				{Target: "lsm-cluster-1.lsm-cluster.lsm-cluster.svc.cluster.local.", Port: 8080},
+				{Target: "lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local.", Port: 8080},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+
+	got, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve endpoints: %v", err)
+	}
+	want := map[string]string{
+		"lsm-cluster-0": "http://lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local:8080",
+		"lsm-cluster-1": "http://lsm-cluster-1.lsm-cluster.lsm-cluster.svc.cluster.local:8080",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected endpoints:\n got: %#v\nwant: %#v", got, want)
+	}
+	got["lsm-cluster-0"] = "http://mutated"
+	again, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve endpoints again: %v", err)
+	}
+	if again["lsm-cluster-0"] != want["lsm-cluster-0"] {
+		t.Fatalf("resolver returned mutable state: %+v", again)
+	}
+}
+
+func TestNodeEndpointDNSResolverIgnoresNilSRVRecords(t *testing.T) {
+	resolver, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{
+		Name: "lsm-cluster.lsm-cluster.svc.cluster.local",
+		LookupSRV: func(context.Context, string, string, string) (string, []*net.SRV, error) {
+			return "", []*net.SRV{
+				nil,
+				{Target: "lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local.", Port: 8080},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+
+	got, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve endpoints: %v", err)
+	}
+	if got["lsm-cluster-0"] != "http://lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local:8080" {
+		t.Fatalf("unexpected endpoints: %+v", got)
+	}
+}
+
+func TestNodeEndpointDNSResolverUsesFallbackOnInitialLookupFailure(t *testing.T) {
+	resolver, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{
+		Name: "lsm-cluster.lsm-cluster.svc.cluster.local",
+		FallbackNodeEndpoints: map[string]string{
+			"node-a": "http://fallback-a:8080/",
+		},
+		LookupSRV: func(context.Context, string, string, string) (string, []*net.SRV, error) {
+			return "", nil, errors.New("dns unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+
+	got, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve fallback endpoints: %v", err)
+	}
+	if got["node-a"] != "http://fallback-a:8080" {
+		t.Fatalf("unexpected fallback endpoints: %+v", got)
+	}
+}
+
+func TestNodeEndpointDNSResolverReturnsLastGoodOnReloadFailure(t *testing.T) {
+	failLookup := false
+	resolver, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{
+		Name: "lsm-cluster.lsm-cluster.svc.cluster.local",
+		FallbackNodeEndpoints: map[string]string{
+			"node-b": "http://fallback-b:8080/",
+		},
+		LookupSRV: func(context.Context, string, string, string) (string, []*net.SRV, error) {
+			if failLookup {
+				return "", nil, errors.New("dns unavailable")
+			}
+			return "", []*net.SRV{
+				{Target: "node-a.svc.local.", Port: 8080},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+	if _, err := resolver.ResolveNodeEndpoints(context.Background()); err != nil {
+		t.Fatalf("prime resolver: %v", err)
+	}
+
+	failLookup = true
+	got, err := resolver.ResolveNodeEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("resolve cached endpoints: %v", err)
+	}
+	if got["node-a"] != "http://node-a.svc.local:8080" || got["node-b"] != "http://fallback-b:8080" {
+		t.Fatalf("expected last-good plus fallback endpoints, got %+v", got)
+	}
+}
+
+func TestNodeEndpointDNSResolverRejectsMissingName(t *testing.T) {
+	_, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{})
+	if err == nil {
+		t.Fatalf("expected missing name error")
+	}
+}
+
+func TestNodeEndpointDNSResolverHonorsContextCancellation(t *testing.T) {
+	resolver, err := NewNodeEndpointDNSResolver(NodeEndpointDNSResolverOptions{
+		Name: "lsm-cluster.lsm-cluster.svc.cluster.local",
+		FallbackNodeEndpoints: map[string]string{
+			"node-a": "http://fallback-a:8080",
+		},
+		LookupSRV: func(ctx context.Context, service string, proto string, name string) (string, []*net.SRV, error) {
+			return "", nil, ctx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := resolver.ResolveNodeEndpoints(ctx); err == nil {
+		t.Fatalf("expected canceled context error")
 	}
 }
