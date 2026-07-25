@@ -136,6 +136,97 @@ func TestStatsIncludesFlushedSSTables(t *testing.T) {
 	}
 }
 
+func TestStatsPointReadMetrics(t *testing.T) {
+	store, err := New(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, ok := store.Get([]byte("a")); !ok {
+		t.Fatalf("expected memtable hit")
+	}
+	if _, ok := store.Get([]byte("missing")); ok {
+		t.Fatalf("expected miss")
+	}
+	if err := store.Delete([]byte("a")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok := store.Get([]byte("a")); ok {
+		t.Fatal("tombstone returned a value")
+	}
+
+	stats := store.Stats()
+	if stats.PointReads != 3 {
+		t.Fatalf("expected 3 point reads, got %d", stats.PointReads)
+	}
+	if stats.PointReadMemtableHits != 2 {
+		t.Fatalf("expected value and tombstone memtable hits, got %d", stats.PointReadMemtableHits)
+	}
+	if stats.PointReadMisses != 1 {
+		t.Fatalf("expected 1 miss, got %d", stats.PointReadMisses)
+	}
+	if stats.PointReadSSTableProbes != 0 || stats.PointReadMaxSSTableProbes != 0 {
+		t.Fatalf("expected no sstable probes, got probes=%d max=%d", stats.PointReadSSTableProbes, stats.PointReadMaxSSTableProbes)
+	}
+}
+
+func TestStatsSSTableReadAmplificationMetrics(t *testing.T) {
+	store, err := New(Options{
+		DataDir:       t.TempDir(),
+		MemtableLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	if err := store.Put([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Put([]byte("c"), []byte("d")); err != nil {
+		t.Fatalf("second put: %v", err)
+	}
+	waitForStats(t, func() bool {
+		stats := store.Stats()
+		return stats.SSTableCount == 2 && stats.ImmutableCount == 0 && stats.FlushQueueDepth == 0
+	})
+	if _, ok := store.Get([]byte("a")); !ok {
+		t.Fatalf("expected sstable hit")
+	}
+	if _, ok := store.Get([]byte("c")); !ok {
+		t.Fatalf("expected newest sstable hit")
+	}
+	if _, ok := store.Get([]byte("z")); ok {
+		t.Fatalf("expected sstable miss")
+	}
+
+	stats := store.Stats()
+	if stats.PointReads != 3 {
+		t.Fatalf("expected 3 point reads, got %d", stats.PointReads)
+	}
+	if stats.PointReadSSTableHits != 2 || stats.PointReadMisses != 1 {
+		t.Fatalf("expected two sstable hits and one miss, got hits=%d misses=%d", stats.PointReadSSTableHits, stats.PointReadMisses)
+	}
+	if stats.PointReadSSTableProbes != 5 || stats.PointReadMaxSSTableProbes != 2 {
+		t.Fatalf("expected 2+1+2 probes and max=2, got probes=%d max=%d", stats.PointReadSSTableProbes, stats.PointReadMaxSSTableProbes)
+	}
+	if stats.SSTableFlow.CacheHit+stats.SSTableFlow.CacheMiss+stats.SSTableFlow.FilterPass == 0 {
+		t.Fatalf("expected sstable flow metrics, got %+v", stats.SSTableFlow)
+	}
+}
+
 func TestHealthStates(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
 	if err != nil {

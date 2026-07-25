@@ -166,6 +166,7 @@ type LSM struct {
 	flushBlocked          atomic.Bool
 	writer                *writeService
 	reader                *readService
+	pointReads            pointReadMetrics
 	flushSvc              *flushService
 	compactionSvc         *compactionruntime.Runtime
 	tableEdits            tableedit.Editor

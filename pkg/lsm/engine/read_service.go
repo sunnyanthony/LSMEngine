@@ -16,15 +16,19 @@ func (s *readService) Get(key []byte) (types.Entry, bool) {
 	mem, immutables := s.l.memSnapshot()
 	if mem != nil {
 		if e, ok := mem.Get(key); ok {
+			s.l.pointReads.record(pointReadMemtable, 0)
 			return copyEntry(e), !e.Tombstone
 		}
 	}
 	for _, table := range immutables {
 		if e, ok := table.Get(key); ok {
+			s.l.pointReads.record(pointReadImmutable, 0)
 			return copyEntry(e), !e.Tombstone
 		}
 	}
+	var sstableProbes uint64
 	for _, table := range s.l.tables.Tables() {
+		sstableProbes++
 		if view, ok := table.GetView(key); ok {
 			entry := types.Entry{
 				Key:       view.Key,
@@ -32,9 +36,11 @@ func (s *readService) Get(key []byte) (types.Entry, bool) {
 				Tombstone: view.Tombstone,
 				Seq:       view.Seq,
 			}
+			s.l.pointReads.record(pointReadSSTable, sstableProbes)
 			return copyEntry(entry), !view.Tombstone
 		}
 	}
+	s.l.pointReads.record(pointReadMiss, sstableProbes)
 	return types.Entry{}, false
 }
 
