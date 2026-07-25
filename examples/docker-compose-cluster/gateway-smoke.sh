@@ -111,6 +111,47 @@ require_contains() {
   fi
 }
 
+wait_write_committed() {
+  local request_id="$1"
+  local deadline=$((SECONDS + 60))
+  local output=""
+  while (( SECONDS < deadline )); do
+    if output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$request_id" 2>&1)"; then
+      if [[ "$output" == *"state=committed"* ]]; then
+        printf '%s\n' "$output"
+        return 0
+      fi
+      if [[ "$output" == *"state=rejected"* ]]; then
+        echo "$output" >&2
+        return 1
+      fi
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for write $request_id: $output" >&2
+  return 1
+}
+
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ ! "$seq" =~ ^[1-9][0-9]*$ ]]; then
+    echo "write did not return a positive sequence" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
+wait_cluster_applied() {
+  local seq="$1"
+  local output
+  output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --min-applied-index "$seq")"
+  require_contains "$output" "ready=true"
+  require_contains "$output" "ready_nodes=3"
+}
+
 request_id_from_output() {
   local output="$1"
   local request_id
@@ -159,6 +200,8 @@ wait_for_gateway_status
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"
 require_contains "$put_output" "state=committed"
+put_seq="$(seq_from_output "$put_output")"
+wait_cluster_applied "$put_seq"
 
 get_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$get_output" "found=true"
@@ -172,21 +215,27 @@ async_output="$(lsmctl async-put --addr "$GATEWAY_URL" --key gateway-async --val
 require_contains "$async_output" "state=pending"
 request_id="$(request_id_from_output "$async_output")"
 
-status_output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$request_id")"
+status_output="$(wait_write_committed "$request_id")"
 require_contains "$status_output" "state=committed"
+async_seq="$(seq_from_output "$status_output")"
+wait_cluster_applied "$async_seq"
 
 async_delete_output="$(lsmctl async-delete --addr "$GATEWAY_URL" --key gateway-async)"
 require_contains "$async_delete_output" "state=pending"
 delete_request_id="$(request_id_from_output "$async_delete_output")"
 
-delete_status_output="$(lsmctl write-status --addr "$GATEWAY_URL" --request-id "$delete_request_id")"
+delete_status_output="$(wait_write_committed "$delete_request_id")"
 require_contains "$delete_status_output" "state=committed"
+async_delete_seq="$(seq_from_output "$delete_status_output")"
+wait_cluster_applied "$async_delete_seq"
 
 async_missing_output="$(wait_for_gateway_missing gateway-async)"
 require_contains "$async_missing_output" "found=false"
 
 delete_output="$(lsmctl delete --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$delete_output" "state=committed"
+delete_seq="$(seq_from_output "$delete_output")"
+wait_cluster_applied "$delete_seq"
 
 missing_output="$(wait_for_gateway_missing gateway-smoke)"
 require_contains "$missing_output" "found=false"

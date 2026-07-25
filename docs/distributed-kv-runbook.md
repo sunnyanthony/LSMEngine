@@ -81,6 +81,12 @@ even when all KV mutations have applied. This node-local, separately sampled gap
 does not prove cluster-wide catch-up or a read barrier. For a specific write,
 compare its committed index against each target node's `applied_index`.
 
+With the built-in Raft provider, a committed write's `seq` is its commit-log
+index. Use `--min-applied-index <seq>` to require counted nodes and the required
+write leader to have applied at least that index. Custom providers need not map
+data sequences to commit-log indexes; do not use their `seq` as this gate unless
+the provider guarantees that mapping. This gate is not a linearizable read barrier.
+
 The useful fields are:
 
 - `commit_log_runtime.mode`: should be `raft_transport_foundation` for the

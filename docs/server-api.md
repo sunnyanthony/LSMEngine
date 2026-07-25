@@ -26,9 +26,9 @@ the LSM engine. It is intentionally separate from the engine internals.
 ### M1 control-plane HTTP
 - `GET /kv/get?key_base64=<base64>`: point read from the local node; returns `200` with `found/key_base64/value_base64/seq` when present and `404` with `found=false` when absent.
 - `GET /kv/range?start_key_base64=<base64>&end_key_base64=<base64>&limit=<n>`: bounded local snapshot range scan; `start_key_base64` and `end_key_base64` are optional, `limit` defaults to 100 and is capped at 1000.
-- `POST /kv/put` with `{ "key_base64": "<base64>", "value_base64": "<base64>", "consistency": "accepted|local_committed" }`.
-- `POST /kv/delete` with `{ "key_base64": "<base64>", "consistency": "accepted|local_committed" }`.
-- `GET /kv/write-status/{request_id}`: async write lifecycle state for `accepted` writes.
+- `POST /kv/put` with `{ "key_base64": "<base64>", "value_base64": "<base64>", "consistency": "accepted|local_committed" }`; committed responses include `seq` when the backing engine exposes the committed sequence.
+- `POST /kv/delete` with `{ "key_base64": "<base64>", "consistency": "accepted|local_committed" }`; committed responses include `seq` when the backing engine exposes the committed sequence.
+- `GET /kv/write-status/{request_id}`: async write lifecycle state for `accepted` writes, including `seq` after commit when available.
 - `GET /cluster/status`: node id, cluster id, storage mode, commit log provider, commit-log runtime (`mode/index/term/snapshot_index/applied_index/apply_lag/leader/replicas/write_available/leader_known/health/last_error_*`), raft, shard count, draining, `revision`.
 - `GET /cluster/shards`: shard ids, key ranges, leader and replica roles.
 - `POST /cluster/shards/{id}/transfer-leader` with `{ "target": "node-x", "operation_id": "...", "expected_revision": 12 }`.
@@ -97,6 +97,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl gateway-status --addr http://127.0.0.1:8090` reads a gateway's `/gateway/status` aggregate and prints gateway readiness, reachable backend count, current write leader, and per-backend status/errors.
 - `lsmctl cluster-status --node-endpoint node-a=http://... --node-endpoint node-b=http://...` polls `/cluster/status` across configured endpoints and prints health, write availability, leader state, term/index, applied index, apply lag, revision, shard count, and per-node errors.
 - `lsmctl wait-cluster --node-endpoint node-a=http://... --timeout 60s` polls `/cluster/status` until the required number of healthy nodes is present and, by default, a write-available raft leader exists. `--min-ready` supports degraded-quorum waits and `--write-leader=false` disables the leader requirement. Optional `--max-apply-lag <n>` requires counted nodes and the required leader to report `commit_log_runtime.apply_lag <= n`; `-1` disables the gate. This is a raw node-local index-gap threshold, not proof of cluster-wide catch-up or linearizable reads; Raft no-op and membership entries can prevent a zero gap despite applied KV state.
+- `wait-cluster --min-applied-index <n>` requires counted nodes and the required write leader to have applied at least commit-log index `n`. For the built-in Raft provider, a committed write's `seq` is its commit-log index and can be used as this threshold. Custom providers must explicitly guarantee that mapping before their sequences can be used here. This gate is not a linearizable read barrier.
 - `lsmctl drain-node --node node-a --node-endpoint node-a=http://...` submits a committed drain mutation through the current commit-log write leader, waits for shard leadership to move away from the target, and waits for the target to report `draining=true`.
 - `lsmctl resume-node --node node-a --node-endpoint node-a=http://...` submits the matching committed resume mutation and waits for the target to report `draining=false` after maintenance.
 - `lsmctl raft-add-node --node node-c --node-endpoint node-a=http://...` and `lsmctl raft-remove-node --node node-c ...` submit provider-level raft voter membership changes through the current commit-log write leader. These are separate from shard replica metadata.

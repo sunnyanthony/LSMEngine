@@ -484,6 +484,27 @@ func TestWriteGatewayStatus(t *testing.T) {
 	}
 }
 
+func TestWriteKVStatusPrintsCommittedSeq(t *testing.T) {
+	var buf bytes.Buffer
+	writeKVStatus(&buf, lsm.WriteRequestStatus{
+		RequestID:   "wr-1",
+		Operation:   "put",
+		State:       lsm.WriteRequestCommitted,
+		Consistency: lsm.WriteConsistencyLocalCommitted,
+		Seq:         12,
+	}, false)
+	out := buf.String()
+	for _, want := range []string{
+		"request_id=wr-1",
+		"state=committed",
+		"seq=12",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+}
+
 func TestEvaluateClusterWaitRequiresReadyNodesAndWriteLeader(t *testing.T) {
 	got := evaluateClusterWait(clusterStatusResult{
 		Nodes: []clusterStatusNodeResult{
@@ -631,8 +652,75 @@ func TestClusterWaitRequiresLeaderWithinApplyLag(t *testing.T) {
 	}
 }
 
+func TestEvaluateClusterWaitAppliesMinAppliedIndex(t *testing.T) {
+	got := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://127.0.0.1:8080",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						LeaderKnown:    true,
+						WriteAvailable: true,
+						Index:          10,
+						AppliedIndex:   10,
+					},
+				},
+			},
+			{
+				Node:     "node-b",
+				Endpoint: "http://127.0.0.1:8081",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-b",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:       "follower",
+						LeaderKnown:  true,
+						Index:        10,
+						AppliedIndex: 9,
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 2,
+		RequireWriteLeader: true,
+		MinAppliedIndex:    uint64Ptr(10),
+	})
+	if got.Ready {
+		t.Fatalf("expected node below min applied index to keep wait result not ready: %+v", got)
+	}
+	if got.ReadyNodes != 1 {
+		t.Fatalf("expected one min-index ready node, got %+v", got)
+	}
+	if got.MinAppliedIndex == nil || *got.MinAppliedIndex != 10 {
+		t.Fatalf("expected min applied index in result, got %+v", got)
+	}
+}
+
 func uint64Ptr(value uint64) *uint64 {
 	return &value
+}
+
+func TestClusterWaitRequiresLeaderAtMinAppliedIndex(t *testing.T) {
+	statuses := clusterStatusResult{Nodes: []clusterStatusNodeResult{
+		{Node: "leader", Status: &lsm.ClusterStatus{CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+			Health: "ready", Leader: true, LeaderKnown: true, WriteAvailable: true, AppliedIndex: 7,
+		}}},
+		{Node: "follower", Status: &lsm.ClusterStatus{CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+			Health: "follower", LeaderKnown: true, AppliedIndex: 10,
+		}}},
+	}}
+	opts := waitClusterOptions{RequiredReadyNodes: 1, RequireWriteLeader: true, MinAppliedIndex: uint64Ptr(10)}
+	if got := evaluateClusterWait(statuses, opts); got.Ready || got.WriteLeader != "" || got.ReadyNodes != 1 {
+		t.Fatalf("lagging leader must not satisfy the write-leader gate: %+v", got)
+	}
+	opts.MinAppliedIndex = uint64Ptr(7)
+	if got := evaluateClusterWait(statuses, opts); !got.Ready {
+		t.Fatalf("leader at threshold should pass: %+v", got)
+	}
 }
 
 func TestDrainClusterNodeSubmitsToWriteLeaderAndWaitsForDrain(t *testing.T) {

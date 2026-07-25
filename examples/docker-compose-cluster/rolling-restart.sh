@@ -91,6 +91,28 @@ wait_cluster_ready() {
     --timeout 60s >/dev/null
 }
 
+wait_cluster_applied() {
+  local min_ready="$1"
+  local seq="$2"
+  lsmctl wait-cluster \
+    $(cluster_config_args) \
+    --min-ready "$min_ready" \
+    --min-applied-index "$seq" \
+    --timeout 60s >/dev/null
+}
+
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ ! "$seq" =~ ^[1-9][0-9]*$ ]]; then
+    echo "write did not return a positive sequence" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
 drain_service() {
   local service="$1"
   lsmctl drain-node \
@@ -120,6 +142,7 @@ put_on_any_live_node() {
       --key "$key" \
       --value "$value" 2>&1)" &&
       [[ "$output" == *"state=committed"* ]]; then
+      printf '%s\n' "$output"
       return 0
     fi
     sleep 1
@@ -155,7 +178,9 @@ compose up -d --build
 wait_for_cluster
 wait_cluster_ready 3
 
-put_on_any_live_node "" "rolling-before" "all-up"
+initial_put_output="$(put_on_any_live_node "" "rolling-before" "all-up")"
+initial_put_seq="$(seq_from_output "$initial_put_output")"
+wait_cluster_applied 3 "$initial_put_seq"
 
 for service in "${services[@]}"; do
   key="rolling-$service"
@@ -163,12 +188,15 @@ for service in "${services[@]}"; do
   drain_service "$service"
   compose stop "$service" >/dev/null
   wait_cluster_ready 2
-  put_on_any_live_node "$service" "$key" "$value"
+  put_output="$(put_on_any_live_node "$service" "$key" "$value")"
+  put_seq="$(seq_from_output "$put_output")"
+  wait_cluster_applied 2 "$put_seq"
   compose start "$service" >/dev/null
   wait_for_health "$(url_for_service "$service")"
   wait_for_value "$service" "rolling-before" "all-up"
   resume_service "$service"
   wait_cluster_ready 3
+  wait_cluster_applied 3 "$put_seq"
   for read_service in "${services[@]}"; do
     wait_for_value "$read_service" "$key" "$value"
   done

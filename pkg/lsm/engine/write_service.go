@@ -19,68 +19,78 @@ func newWriteService(l *LSM) *writeService {
 }
 
 func (s *writeService) Put(key []byte, value []byte) error {
+	_, err := s.PutWithSeq(key, value)
+	return err
+}
+
+func (s *writeService) PutWithSeq(key []byte, value []byte) (uint64, error) {
 	if s.l.isClosing() {
-		return errs.ErrClosed
+		return 0, errs.ErrClosed
 	}
 	if len(key) == 0 {
 		err := errs.ErrWALEmptyKey
 		s.l.notifyWriteEvent("put", key, 0, "failed", err)
-		return err
+		return 0, err
 	}
 	if len(value) == 0 {
 		err := errs.ErrWALEmptyValue
 		s.l.notifyWriteEvent("put", key, 0, "failed", err)
-		return err
+		return 0, err
 	}
 	if s.l.control != nil {
 		if err := s.l.control.allowWrite(key); err != nil {
 			s.l.notifyWriteEvent("put", key, 0, "failed", err)
-			return err
+			return 0, err
 		}
 	}
 	if err := s.admitWrite(len(key) + len(value)); err != nil {
 		s.l.notifyWriteEvent("put", key, 0, "failed", err)
-		return err
+		return 0, err
 	}
 
 	seq, err := s.commitPut(key, value)
 	if err != nil {
 		s.l.notifyWriteEvent("put", key, seq, "failed", err)
-		return err
+		return seq, err
 	}
 	s.l.recordCDCEvent("put", key, value, seq, false)
 	s.l.notifyWriteEvent("put", key, seq, "committed", nil)
-	return nil
+	return seq, nil
 }
 
 func (s *writeService) Delete(key []byte) error {
+	_, err := s.DeleteWithSeq(key)
+	return err
+}
+
+func (s *writeService) DeleteWithSeq(key []byte) (uint64, error) {
 	if s.l.isClosing() {
-		return errs.ErrClosed
+		return 0, errs.ErrClosed
 	}
 	if len(key) == 0 {
 		err := errs.ErrWALEmptyKey
 		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
-		return err
+		return 0, err
 	}
 	if s.l.control != nil {
 		if err := s.l.control.allowWrite(key); err != nil {
 			s.l.notifyWriteEvent("delete", key, 0, "failed", err)
-			return err
+			return 0, err
 		}
 	}
 	if err := s.admitWrite(len(key)); err != nil {
 		s.l.notifyWriteEvent("delete", key, 0, "failed", err)
-		return err
+		return 0, err
 	}
 
 	seq, err := s.commitDelete(key)
 	if err != nil {
 		s.l.notifyWriteEvent("delete", key, seq, "failed", err)
-		return err
+		return seq, err
 	}
 	s.l.recordCDCEvent("delete", key, nil, seq, true)
 	s.l.notifyWriteEvent("delete", key, seq, "committed", nil)
-	return nil
+	return seq, nil
 }
 
 func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {

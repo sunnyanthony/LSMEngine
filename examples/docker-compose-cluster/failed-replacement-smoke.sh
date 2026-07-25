@@ -97,6 +97,28 @@ wait_cluster_ready() {
     --timeout 60s >/dev/null
 }
 
+wait_cluster_applied() {
+  local min_ready="$1"
+  local seq="$2"
+  lsmctl wait-cluster \
+    $(cluster_config_args) \
+    --min-ready "$min_ready" \
+    --min-applied-index "$seq" \
+    --timeout 60s >/dev/null
+}
+
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ ! "$seq" =~ ^[1-9][0-9]*$ ]]; then
+    echo "write did not return a positive sequence" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
 put_cluster() {
   local key="$1"
   local value="$2"
@@ -105,6 +127,7 @@ put_cluster() {
   while (( SECONDS < deadline )); do
     if output="$(lsmctl put --cluster $(cluster_config_args) --key "$key" --value "$value" 2>&1)" &&
       [[ "$output" == *"state=committed"* ]]; then
+      printf '%s\n' "$output"
       return 0
     fi
     sleep 1
@@ -142,7 +165,9 @@ for service in "${initial_services[@]}"; do
 done
 wait_cluster_ready 3
 
-put_cluster "failed-replace-before" "old-cluster"
+before_output="$(put_cluster "failed-replace-before" "old-cluster")"
+before_seq="$(seq_from_output "$before_output")"
+wait_cluster_applied 3 "$before_seq"
 for service in "${initial_services[@]}"; do
   wait_for_value "$service" "failed-replace-before" "old-cluster"
 done
@@ -150,7 +175,9 @@ done
 compose stop node-a >/dev/null
 wait_cluster_ready 2
 
-put_cluster "failed-replace-quorum" "remaining-quorum"
+quorum_output="$(put_cluster "failed-replace-quorum" "remaining-quorum")"
+quorum_seq="$(seq_from_output "$quorum_output")"
+wait_cluster_applied 2 "$quorum_seq"
 for service in node-b node-c; do
   wait_for_value "$service" "failed-replace-quorum" "remaining-quorum"
 done
@@ -186,8 +213,11 @@ require_contains "$apply_output" "step=raft-remove"
 wait_for_value node-d "failed-replace-before" "old-cluster"
 wait_for_value node-d "failed-replace-quorum" "remaining-quorum"
 wait_cluster_ready 3
+wait_cluster_applied 3 "$quorum_seq"
 
-put_cluster "failed-replace-after" "new-cluster"
+after_output="$(put_cluster "failed-replace-after" "new-cluster")"
+after_seq="$(seq_from_output "$after_output")"
+wait_cluster_applied 3 "$after_seq"
 for service in node-b node-c node-d; do
   wait_for_value "$service" "failed-replace-after" "new-cluster"
 done
