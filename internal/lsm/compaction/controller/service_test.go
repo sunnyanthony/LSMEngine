@@ -57,6 +57,21 @@ func TestServiceRunsOnTrigger(t *testing.T) {
 	if got := atomic.LoadInt32(&ctrl.calls); got != 2 {
 		t.Fatalf("expected 2 steps, got %d", got)
 	}
+	stats := service.Stats()
+	if stats.Triggers != 1 || stats.Runs != 1 || stats.Steps != 2 || stats.SuccessfulSteps != 1 || stats.Errors != 0 {
+		t.Fatalf("unexpected service stats: %+v", stats)
+	}
+}
+
+func TestServiceStatsCountCoalescedTriggers(t *testing.T) {
+	service := NewService(&serviceControllerStub{}, func() compaction.State { return compaction.State{} })
+	service.Trigger()
+	service.Trigger()
+
+	stats := service.Stats()
+	if stats.Triggers != 1 || stats.CoalescedTriggers != 1 {
+		t.Fatalf("unexpected trigger stats: %+v", stats)
+	}
 }
 
 func TestServiceOnErrorStopsLoop(t *testing.T) {
@@ -84,5 +99,9 @@ func TestServiceOnErrorStopsLoop(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&ctrl.calls); got != 1 {
 		t.Fatalf("expected 1 step, got %d", got)
+	}
+	stats := service.Stats()
+	if stats.Triggers != 1 || stats.Runs != 1 || stats.Steps != 1 || stats.Errors != 1 {
+		t.Fatalf("unexpected error stats: %+v", stats)
 	}
 }

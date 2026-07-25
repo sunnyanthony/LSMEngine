@@ -37,6 +37,7 @@ type Snapshot = engine.Snapshot
 type Stats = engine.Stats
 type SSTableLevelStats = engine.SSTableLevelStats
 type SSTableFlowStats = engine.SSTableFlowStats
+type CompactionRuntimeStats = engine.CompactionRuntimeStats
 type Health = engine.Health
 
 const (

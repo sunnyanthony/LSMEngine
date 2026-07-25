@@ -220,7 +220,7 @@ opts := engine.Options{
 ```
 - SSTable: block sizes, compression, bloom/caches/prefetch, `FlowObserver`, `PolicyOverride`.
 - SSTable: `SSTable` options (block sizing, restart interval/adaptive, compression, bloom bits per key, block cache bytes, index/filter cache bytes, read buffer cap, mmap reads, prefetch blocks/bytes/budget/async, checksum).
-- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, point-read probe counters, SSTable read-pipeline counters, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler. Point-read probe counters are cumulative process-local observability for read amplification, not latency histograms or a full query profiler.
+- Monitoring: `Stats()` and `/stats` expose memtable pressure, immutable flush backlog, SSTable count/bytes by level, L0 threshold pressure, compaction runtime activity counters, point-read probe counters, SSTable read-pipeline counters, and lifecycle health. `CompactionPending` is an L0 threshold signal only; it is not a full compaction debt scheduler. Compaction runtime counters report trigger/run/step/error activity for the current process, not durable job history. Point-read probe counters are cumulative process-local observability for read amplification, not latency histograms or a full query profiler.
 
 ## External library boundaries
 - Third-party libraries must sit behind an LSM-owned interface or adapter before they affect public APIs or cross-package contracts.

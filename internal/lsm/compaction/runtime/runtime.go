@@ -33,6 +33,9 @@ type Runtime struct {
 	service *controller.Service
 }
 
+// Stats describes cumulative compaction runtime activity.
+type Stats = controller.Stats
+
 // NewRuntime builds a compaction runtime using the default strict levelled planner.
 func NewRuntime(opts RuntimeOptions, state controller.StateSource) *Runtime {
 	if opts.L0FileThreshold <= 0 || opts.Flusher == nil || opts.Resolve == nil || opts.Apply == nil || state == nil {
@@ -75,6 +78,14 @@ func (r *Runtime) Run(ctx context.Context) {
 		return
 	}
 	r.service.Run(ctx)
+}
+
+// Stats returns cumulative activity counters for the runtime service.
+func (r *Runtime) Stats() Stats {
+	if r == nil || r.service == nil {
+		return Stats{}
+	}
+	return r.service.Stats()
 }
 
 type applyFunc func(compaction.Result) error

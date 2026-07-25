@@ -26,6 +26,17 @@ type SSTableFlowStats struct {
 	Errors     uint64
 }
 
+// CompactionRuntimeStats describes cumulative background compaction activity.
+type CompactionRuntimeStats struct {
+	Triggers          uint64
+	CoalescedTriggers uint64
+	Runs              uint64
+	Steps             uint64
+	SuccessfulSteps   uint64
+	Errors            uint64
+	Running           bool
+}
+
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
 	MemtableBytes             int
@@ -51,6 +62,7 @@ type Stats struct {
 	PointReadSSTableProbes    uint64
 	PointReadMaxSSTableProbes uint64
 	SSTableFlow               SSTableFlowStats
+	CompactionRuntime         CompactionRuntimeStats
 	Seq                       uint64
 	Closing                   bool
 	Closed                    bool
@@ -102,6 +114,7 @@ func (l *LSM) Stats() Stats {
 		out.CompactionL0Threshold > 0 &&
 		out.L0TableCount >= out.CompactionL0Threshold
 	out.applyReadStats(l)
+	out.applyCompactionRuntimeStats(l)
 	return out
 }
 
@@ -187,5 +200,21 @@ func (s *Stats) applyReadStats(l *LSM) {
 		FilterPass: flow.FilterPass,
 		FilterSkip: flow.FilterSkip,
 		Errors:     flow.Errors,
+	}
+}
+
+func (s *Stats) applyCompactionRuntimeStats(l *LSM) {
+	if s == nil || l == nil || l.compactionSvc == nil {
+		return
+	}
+	stats := l.compactionSvc.Stats()
+	s.CompactionRuntime = CompactionRuntimeStats{
+		Triggers:          stats.Triggers,
+		CoalescedTriggers: stats.CoalescedTriggers,
+		Runs:              stats.Runs,
+		Steps:             stats.Steps,
+		SuccessfulSteps:   stats.SuccessfulSteps,
+		Errors:            stats.Errors,
+		Running:           stats.Running,
 	}
 }
