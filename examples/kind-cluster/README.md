@@ -15,8 +15,8 @@ It is still a static raft foundation:
   shard leader;
 - each pod mounts a `ReadWriteOnce` PVC at `/data`, so raft state, WAL, SSTables,
   and control state survive pod replacement;
-- dynamic raft membership, node bootstrap/join, and full state-machine snapshot
-  catch-up remain future work.
+- this static example does not exercise dynamic raft membership, node
+  bootstrap/join, or full state-machine snapshot catch-up.
 
 ## Run
 
@@ -33,8 +33,13 @@ discovery behind the LSM-owned node endpoint resolver contract. It uses the
 default gateway `read_mode=any`; switch the gateway args to `--read-mode leader`
 when `/kv/get` and `/kv/range` should only proxy to the current commit-log write
 leader. Leader read mode is a routing policy, not a raft ReadIndex or lease-read
-implementation. The smoke also reads from follower pods directly to verify the
-gateway write reached the replicated cluster state.
+implementation. The smoke waits for all pods to apply the committed write/delete
+sequence with `wait-cluster --min-applied-index` before reading followers, so it
+checks catch-up instead of only endpoint reachability.
+These sequences map to commit-log indexes in the built-in Raft provider used by
+this example; this is not a generic custom-provider guarantee or read barrier.
+Both scripts explicitly use the `kind-$LSM_KIND_CLUSTER` Kubernetes context
+(`kind-lsm-cluster` by default), including cleanup, rather than the current context.
 
 ## Persistent restart smoke
 
@@ -44,7 +49,7 @@ examples/kind-cluster/restart-smoke.sh
 
 This uses the same StatefulSet, writes a committed value, deletes each pod one
 at a time, waits for Kubernetes to recreate it with the same PVC, and verifies
-the restarted pod can still read the committed value.
+the restarted pod applies and reads the committed value.
 
 Useful environment overrides:
 

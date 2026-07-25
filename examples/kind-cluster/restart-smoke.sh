@@ -9,6 +9,10 @@ KEEP="${LSM_KIND_KEEP:-0}"
 
 pods=(lsm-cluster-0 lsm-cluster-1 lsm-cluster-2)
 
+kubectl() {
+  command kubectl --context "kind-$CLUSTER_NAME" "$@"
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null; then
     echo "$1 is required" >&2
@@ -39,6 +43,13 @@ kubectl_lsm() {
 
 addr_for_pod() {
   echo "http://$1.lsm-cluster:8080"
+}
+
+node_endpoint_args() {
+  printf '%s\n' \
+    --node-endpoint "lsm-cluster-0=http://lsm-cluster-0.lsm-cluster:8080" \
+    --node-endpoint "lsm-cluster-1=http://lsm-cluster-1.lsm-cluster:8080" \
+    --node-endpoint "lsm-cluster-2=http://lsm-cluster-2.lsm-cluster:8080"
 }
 
 wait_for_pod_replacement() {
@@ -87,7 +98,7 @@ put_until_committed() {
     for pod in "${pods[@]}"; do
       if output="$(kubectl_lsm "$pod" put --addr "$(addr_for_pod "$pod")" --key "$key" --value "$value" 2>&1)" &&
         [[ "$output" == *"state=committed"* ]]; then
-        echo "$pod"
+        printf '%s\n' "$output"
         return 0
       fi
     done
@@ -96,6 +107,26 @@ put_until_committed() {
   echo "timed out writing $key=$value through any pod" >&2
   dump_diagnostics
   return 1
+}
+
+seq_from_output() {
+  local output="$1"
+  local seq
+  seq="$(awk -F= '/^seq=/{print $2; exit}' <<<"$output")"
+  if [[ ! "$seq" =~ ^[1-9][0-9]*$ ]]; then
+    echo "write did not return a positive sequence" >&2
+    echo "$output" >&2
+    return 1
+  fi
+  printf '%s\n' "$seq"
+}
+
+wait_cluster_applied() {
+  local seq="$1"
+  kubectl_lsm lsm-cluster-0 wait-cluster \
+    $(node_endpoint_args) \
+    --timeout 90s \
+    --min-applied-index "$seq" >/dev/null
 }
 
 require_cmd docker
@@ -113,8 +144,9 @@ kubectl apply -k "$ROOT_DIR/examples/kind-cluster"
 kubectl -n "$NAMESPACE" set image statefulset/lsm-cluster "lsm=$IMAGE"
 kubectl -n "$NAMESPACE" rollout status statefulset/lsm-cluster --timeout=180s
 
-write_pod="$(put_until_committed restart durable)"
-echo "committed restart baseline through $write_pod"
+put_output="$(put_until_committed restart durable)"
+put_seq="$(seq_from_output "$put_output")"
+wait_cluster_applied "$put_seq"
 
 for pod in "${pods[@]}"; do
   wait_for_value "$pod" restart durable
@@ -124,6 +156,7 @@ for pod in "${pods[@]}"; do
   old_uid="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.metadata.uid}')"
   kubectl -n "$NAMESPACE" delete pod "$pod" --wait=false
   wait_for_pod_replacement "$pod" "$old_uid"
+  wait_cluster_applied "$put_seq"
   for read_pod in "${pods[@]}"; do
     wait_for_value "$read_pod" restart durable
   done
