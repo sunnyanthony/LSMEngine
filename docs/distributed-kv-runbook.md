@@ -157,7 +157,7 @@ go run ./cmd/lsmctl gateway \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
   --node-endpoint node-c=http://127.0.0.1:8082 \
-  --read-mode any \
+  --read-mode leader \
   --write-consistency-default local_committed
 ```
 
@@ -180,13 +180,13 @@ gateway can currently see a backend commit-log write leader. Writes are
 route-aware and retry stale leader metadata through `server.Gateway`.
 
 Gateway reads default to `--read-mode any`, which uses best-effort endpoint
-fallback with healthy-endpoint rotation. `--read-mode leader` sends `/kv/get`
-and `/kv/range` only to the current commit-log write leader and returns
-unavailable when no leader can be identified. This avoids stale follower reads
-for clients that want to prefer the node accepting committed writes, but it is
-not raft ReadIndex, lease-read, or a complete linearizable read protocol.
-Accepted write status lookups keep best-effort endpoint fallback because the
-request-status tracker is node-local.
+fallback with healthy-endpoint rotation. The Compose and kind gateway examples
+use `--read-mode leader`, which sends `/kv/get` and `/kv/range` only to the
+current commit-log write leader and returns unavailable when no leader can be
+identified. This avoids stale follower reads for clients that want to prefer the
+node accepting committed writes, but it is not raft ReadIndex, lease-read, or a
+complete linearizable read protocol. Accepted write status lookups keep
+best-effort endpoint fallback because the request-status tracker is node-local.
 
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown

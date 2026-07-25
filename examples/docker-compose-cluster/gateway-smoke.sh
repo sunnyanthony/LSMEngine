@@ -87,6 +87,7 @@ wait_for_gateway_status() {
   until output="$(lsmctl gateway-status --addr "$GATEWAY_URL")" \
     && [[ "$output" == *"ready=true"* ]] \
     && [[ "$output" == *"reachable_nodes=3"* ]] \
+    && [[ "$output" == *"read_mode=leader"* ]] \
     && [[ "$output" == *"write_leader=node-"* ]]; do
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
