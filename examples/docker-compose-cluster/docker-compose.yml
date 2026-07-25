@@ -61,6 +61,8 @@ services:
       - http://node-a:8080
       - --write-consistency-default
       - local_committed
+      - --read-mode
+      - leader
       - --endpoint-file
       - /etc/lsm/peer-urls.yaml
     ports:

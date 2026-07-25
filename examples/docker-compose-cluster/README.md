@@ -54,12 +54,11 @@ This starts node-a/node-b/node-c, waits for cluster readiness, starts
 the Compose `gateway` service on `127.0.0.1:8090`, then verifies ordinary
 `lsmctl put/get/delete --addr http://127.0.0.1:8090` calls work through the
 single gateway endpoint. The gateway routes writes to the current raft write
-leader, loads node endpoints from the mounted `peer-urls.yaml`, and defaults
-to `--read-mode any` for best-effort endpoint fallback reads. Operators can use
-`--read-mode leader` when `/kv/get` and `/kv/range` should only proxy to the
-current commit-log write leader; that mode returns unavailable if no leader is
-visible and is not a raft ReadIndex or lease-read implementation. The smoke
-also verifies gateway `/readyz` reports backend write readiness, the Compose
+leader, loads node endpoints from the mounted `peer-urls.yaml`, and runs with
+`--read-mode leader` so `/kv/get` and `/kv/range` proxy to the current
+commit-log write leader. That mode returns unavailable if no leader is visible
+and is not a raft ReadIndex or lease-read implementation. The smoke also
+verifies gateway `/readyz` reports backend write readiness, the Compose
 healthcheck
 marks the gateway container healthy from that readiness check,
 `lsmctl gateway-status --addr http://127.0.0.1:8090` reports all three backend

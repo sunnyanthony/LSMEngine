@@ -68,6 +68,7 @@ wait_for_gateway_status() {
   until output="$(kubectl_lsm gateway-status --addr "$GATEWAY_URL")" \
     && [[ "$output" == *"ready=true"* ]] \
     && [[ "$output" == *"reachable_nodes=3"* ]] \
+    && [[ "$output" == *"read_mode=leader"* ]] \
     && [[ "$output" == *"write_leader=lsm-cluster-"* ]]; do
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
@@ -139,7 +140,7 @@ get_output="$(retry_kubectl_lsm_contains "found=true" get --addr "$GATEWAY_URL" 
 require_contains "$get_output" "found=true"
 require_contains "$get_output" "value=ok"
 
-follower_output="$(retry_kubectl_lsm_contains "found=true" get --addr http://lsm-cluster-1.lsm-cluster.lsm-cluster.svc.cluster.local:8080 --key kind)"
+follower_output="$(retry_kubectl_lsm_contains "found=true" get --addr http://lsm-cluster-1.lsm-cluster:8080 --key kind)"
 require_contains "$follower_output" "found=true"
 require_contains "$follower_output" "value=ok"
 
@@ -155,7 +156,7 @@ wait_cluster_applied "$delete_seq"
 missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr "$GATEWAY_URL" --key kind)"
 require_contains "$missing_output" "found=false"
 
-follower_missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr http://lsm-cluster-2.lsm-cluster.lsm-cluster.svc.cluster.local:8080 --key kind)"
+follower_missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr http://lsm-cluster-2.lsm-cluster:8080 --key kind)"
 require_contains "$follower_missing_output" "found=false"
 
 echo "kind gateway cluster smoke passed"
