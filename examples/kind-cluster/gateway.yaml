@@ -46,6 +46,8 @@ spec:
             - http://lsm-cluster-0.lsm-cluster.lsm-cluster.svc.cluster.local:8080
             - --write-consistency-default
             - local_committed
+            - --read-mode
+            - leader
             - --endpoint-dns-name
             - lsm-cluster.lsm-cluster.svc.cluster.local
             - --endpoint-dns-service
