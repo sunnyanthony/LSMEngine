@@ -82,4 +82,13 @@ control plane decoupled from IO.
   and waiting for dispatcher space. `FlushQueueCapacity` is the configured
   dispatcher buffer capacity, so depth can exceed capacity; their ratio is not
   a buffer utilization measurement.
+- The compaction runtime also reports process-local trigger, coalesced trigger,
+  run, step, successful-step, error, and running counters. These counters help
+  distinguish "threshold reached" from "runtime is executing or failing" without
+  introducing a durable compaction job model.
+- `Triggers` counts enqueued requests; `CoalescedTriggers` counts requests merged
+  into an already pending run. `Steps` includes no-work checks and failed steps;
+  `SuccessfulSteps` counts completed compactions. Counters are sampled independently.
+- Cancellation stops the service between steps and clears `Running`. An in-flight
+  step finishes before exit because the controller's step interface is synchronous.
 - Scheduler/backpressure policies are planned.
