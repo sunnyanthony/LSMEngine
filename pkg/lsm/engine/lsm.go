@@ -161,6 +161,8 @@ type LSM struct {
 	seq                   uint64
 	missingSegmentPolicy  MissingSegmentPolicy
 	replayBatchSize       int
+	flushQueueCapacity    int
+	compactionL0Threshold int
 	flushBlocked          atomic.Bool
 	writer                *writeService
 	reader                *readService

@@ -106,6 +106,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl async-put --addr <url> --key <key> --value <value>` and `lsmctl async-delete --addr <url> --key <key>` submit writes with `accepted` consistency and return a request id for `write-status`.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode or gateway mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`; `lsmctl health --ready --addr <url>` checks `/readyz` instead of `/healthz` for gateway/load-balancer readiness.
+- `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
