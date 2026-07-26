@@ -39,6 +39,7 @@ type SSTableLevelStats = engine.SSTableLevelStats
 type SSTableFlowStats = engine.SSTableFlowStats
 type CompactionRuntimeStats = engine.CompactionRuntimeStats
 type WriteBackpressureStats = engine.WriteBackpressureStats
+type WALStats = engine.WALStats
 type Health = engine.Health
 
 const (

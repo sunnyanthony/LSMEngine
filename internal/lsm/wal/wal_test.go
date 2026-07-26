@@ -243,6 +243,58 @@ func TestWALSyncFalseFlushesBlocks(t *testing.T) {
 	}
 }
 
+func TestWALStatsSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal.log")
+	w, err := NewWAL(Options{
+		Path:       path,
+		Sync:       true,
+		MaxSegment: 128,
+		BlockSize:  64,
+	})
+	if err != nil {
+		t.Fatalf("new wal: %v", err)
+	}
+
+	initial := w.Stats()
+	if initial.SegmentID != 1 || initial.SegmentCount != 1 {
+		t.Fatalf("unexpected initial segment stats: %+v", initial)
+	}
+	if initial.BlockSize != 64 || !initial.Sync || initial.Async {
+		t.Fatalf("unexpected initial config stats: %+v", initial)
+	}
+	if initial.ActiveSegmentBytes == 0 || initial.TotalBytes < initial.ActiveSegmentBytes {
+		t.Fatalf("unexpected initial byte stats: %+v", initial)
+	}
+
+	for i := 0; i < 4; i++ {
+		appendOwned(t, w, types.Entry{
+			Key:   []byte(fmt.Sprintf("k-%d", i)),
+			Value: []byte("value"),
+			Seq:   uint64(i + 1),
+		})
+	}
+
+	stats := w.Stats()
+	if stats.SegmentID <= 1 || stats.ArchivedSegmentCount == 0 || stats.SegmentCount != stats.ArchivedSegmentCount+1 {
+		t.Fatalf("expected rotated segment stats, got %+v", stats)
+	}
+	if stats.ArchivedSegmentBytes == 0 || stats.TotalBytes != stats.ActiveSegmentBytes+stats.ArchivedSegmentBytes {
+		t.Fatalf("unexpected rotated byte stats: %+v", stats)
+	}
+	if stats.PendingBlockBytes != 0 || stats.PendingBlockRecords != 0 {
+		t.Fatalf("expected flushed sync WAL block, got %+v", stats)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
+	closed := w.Stats()
+	if !closed.Closed {
+		t.Fatalf("expected closed WAL stats, got %+v", closed)
+	}
+}
+
 func TestWALCorruptHeaderLenStops(t *testing.T) {
 	entries := []types.Entry{
 		{Key: []byte("a"), Value: []byte("1"), Seq: 1},

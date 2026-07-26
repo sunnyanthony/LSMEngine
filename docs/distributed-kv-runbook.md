@@ -96,6 +96,10 @@ The useful fields are:
   can currently be proposed;
 - `commit_log_runtime.health`: `ready` on the leader, `follower` on healthy
   followers, and `no_leader` or `unavailable` during election or quorum loss.
+- `Stats.WAL.SegmentCount`, `Stats.WAL.TotalBytes`, and related
+  `lsmctl stats` `wal_*` fields: local WAL segment pressure for one node. Use
+  them with SSTable and compaction stats to understand whether a node is
+  accumulating write-ahead log data faster than flush/compaction can keep up.
 
 ## Manual KV Commands
 
