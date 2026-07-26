@@ -143,6 +143,7 @@ func serveCmd(args []string) {
 		Raft:                              toRaftOptions(cfg.Raft),
 		ShardMap:                          toShardMap(cfg.Shards),
 		MemtableLimit:                     cfg.MemtableLimit,
+		WALMaxSegmentBytes:                cfg.WALMaxSegmentBytes,
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,

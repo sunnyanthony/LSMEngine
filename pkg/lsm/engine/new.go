@@ -50,6 +50,7 @@ func New(opts Options) (*LSM, error) {
 	w, err := wal.NewWAL(wal.Options{
 		Path:           walPath,
 		Sync:           opts.WALSync,
+		MaxSegment:     opts.WALMaxSegmentBytes,
 		MaxRecordBytes: opts.WALMaxRecord,
 		BlockSize:      opts.WALBlockSize,
 		Async:          opts.WALAsync,

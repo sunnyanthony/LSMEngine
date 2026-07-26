@@ -100,6 +100,8 @@ The useful fields are:
   `lsmctl stats` `wal_*` fields: local WAL segment pressure for one node. Use
   them with SSTable and compaction stats to understand whether a node is
   accumulating write-ahead log data faster than flush/compaction can keep up.
+  `wal_max_segment_bytes` can bound active WAL segment size, but archived
+  segment retention remains a separate policy decision.
 
 ## Manual KV Commands
 
