@@ -22,6 +22,30 @@ type testNodeEndpointResolver struct {
 	endpoints map[string]string
 }
 
+func TestGatewayReadLagRequiresExplicitObservation(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"commit_log_runtime":{}}`, `{"commit_log_runtime":{"apply_lag":null}}`, `{"commit_log_runtime":{"apply_lag":0}}`} {
+		t.Run(payload, func(t *testing.T) {
+			limit := uint64(0)
+			gateway, err := NewGateway(GatewayOptions{
+				BootstrapURL: "http://node-a", MaxReadApplyLag: &limit,
+				NodeEndpoints: map[string]string{"node-a": "http://node-a"},
+				HTTPClient:    newInMemoryHTTPClient(map[string]http.Handler{"node-a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) })}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			targets, err := gateway.readTargets(context.Background(), map[string]string{"node-a": "http://node-a"}, true)
+			valid := strings.Contains(payload, `"apply_lag":0`)
+			if valid && (err != nil || len(targets) != 1) {
+				t.Fatalf("explicit zero rejected: %v %v", targets, err)
+			}
+			if !valid && (err == nil || len(targets) != 0) {
+				t.Fatalf("unknown lag accepted: %v %v", targets, err)
+			}
+		})
+	}
+}
+
 func TestGatewayEndpointFailureCooldownOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

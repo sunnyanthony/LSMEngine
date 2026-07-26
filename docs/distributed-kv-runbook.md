@@ -252,6 +252,15 @@ request-status tracker is node-local.
 Use `--read-balance-policy ordered` or `gateway_read_balance_policy: "ordered"`
 to keep sorted endpoint order while still placing recently failed endpoints last.
 The default policy is `round_robin`; neither policy changes leader-only reads.
+For `any` mode, `--max-read-apply-lag <n>` or
+`gateway_max_read_apply_lag: <n>` makes the gateway probe backend
+`/cluster/status` before `/kv/get` and `/kv/range`, then skip endpoints whose
+reported `commit_log_runtime.apply_lag` is above the configured bound. `-1`
+disables this gate. This is a freshness guard for obviously lagged followers,
+not a linearizable read protocol.
+Missing or null apply-lag observations are rejected when the gate is enabled.
+The sampled lag is node-local and can change before the read; zero does not
+prove quorum catch-up or linearizability.
 
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
@@ -260,10 +269,10 @@ window, while successful probes clear that state. Tune the window with
 `gateway_endpoint_failure_cooldown` in server config; `0` uses the gateway
 default. Healthy read endpoints rotate by default so a single stable gateway
 does not always send reads to the same backend in `any` mode. `/gateway/status`
-includes `read_mode`, `read_balance_policy`, per-backend `degraded`, and
-`degraded_until` fields so operators can see how reads are configured and when
-gateway routing is temporarily avoiding an endpoint. The status routing block
-also includes process-local `read_attempts`, `read_fallbacks`, and
+includes `read_mode`, `read_balance_policy`, `max_read_apply_lag`, per-backend
+`degraded`, and `degraded_until` fields so operators can see how reads are
+configured and when gateway routing is temporarily avoiding an endpoint. The
+status routing block also includes process-local `read_attempts`, `read_fallbacks`, and
 `read_failures` counters so operators can see whether fallback is doing useful
 work or masking backend instability.
 `/gateway/metrics` exposes the same gateway readiness, backend health, apply

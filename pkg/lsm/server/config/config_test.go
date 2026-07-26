@@ -47,6 +47,7 @@ write_timeout: "3s"
 write_consistency_default: "accepted"
 gateway_read_mode: "leader"
 gateway_read_balance_policy: "ordered"
+gateway_max_read_apply_lag: 3
 gateway_max_write_attempts: 4
 gateway_write_retry_backoff: "25ms"
 gateway_endpoint_failure_cooldown: "750ms"
@@ -128,6 +129,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.GatewayReadBalancePolicy != "ordered" {
 		t.Fatalf("expected gateway read balance policy, got %q", cfg.GatewayReadBalancePolicy)
+	}
+	if cfg.GatewayMaxReadApplyLag == nil || *cfg.GatewayMaxReadApplyLag != 3 {
+		t.Fatalf("expected gateway max read apply lag, got %v", cfg.GatewayMaxReadApplyLag)
 	}
 	if cfg.GatewayMaxWriteAttempts != 4 {
 		t.Fatalf("expected gateway max write attempts, got %d", cfg.GatewayMaxWriteAttempts)
