@@ -267,6 +267,22 @@ Missing or null apply-lag observations are rejected when the gate is enabled.
 The sampled lag is node-local and can change before the read; zero does not
 prove quorum catch-up or linearizability.
 
+Smoke tests and operator rollouts can add the same freshness bound to gateway
+readiness:
+
+```bash
+go run ./cmd/lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode any --max-read-apply-lag 2 --min-read-ready 2
+```
+
+`--max-read-apply-lag` makes `wait-gateway` count reachable backends whose latest
+reported `commit_log_runtime.health` is `ready` or `follower` and whose
+`commit_log_runtime.apply_lag` is within the bound. `--min-read-ready` sets the
+required count. In leader read mode, only the selected write-leader endpoint is
+eligible; a healthy follower cannot satisfy the read gate, and requiring more
+than one read-ready node cannot succeed in that mode. When the max lag gate is enabled and `--min-read-ready` is
+omitted or `0`, the wait requires at least one read-ready backend. This is an
+operator/status gate only and does not change gateway read routing.
+
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
 window, while successful probes clear that state. Tune the window with
