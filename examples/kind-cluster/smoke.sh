@@ -7,6 +7,19 @@ NAMESPACE="lsm-cluster"
 IMAGE="${LSM_KIND_IMAGE:-lsmengine-server:kind}"
 KEEP="${LSM_KIND_KEEP:-0}"
 GATEWAY_URL="http://lsm-gateway:8090"
+GATEWAY_READ_READY_MIN="${LSM_GATEWAY_READ_READY_MIN:-1}"
+GATEWAY_READ_READY_MAX_LAG="${LSM_GATEWAY_READ_READY_MAX_LAG:-2}"
+
+if [[ "$GATEWAY_READ_READY_MAX_LAG" != "-1" ]]; then
+  if [[ ! "$GATEWAY_READ_READY_MAX_LAG" =~ ^[0-9]+$ ]]; then
+    echo "LSM_GATEWAY_READ_READY_MAX_LAG must be -1 or a non-negative integer" >&2
+    exit 1
+  fi
+  if [[ "$GATEWAY_READ_READY_MIN" != "0" && "$GATEWAY_READ_READY_MIN" != "1" ]]; then
+    echo "leader-mode smoke requires LSM_GATEWAY_READ_READY_MIN=0 or 1" >&2
+    exit 1
+  fi
+fi
 
 kubectl() {
   command kubectl --context "kind-$CLUSTER_NAME" "$@"
@@ -63,7 +76,19 @@ node_endpoint_args() {
 }
 
 wait_for_gateway_status() {
-  if ! kubectl_lsm wait-gateway --addr "$GATEWAY_URL" --timeout 90s --min-reachable 3 --read-mode leader >/dev/null; then
+  local read_ready_args=(--write-leader=true)
+  if [[ "${1:-read}" != "startup" && "$GATEWAY_READ_READY_MAX_LAG" != "-1" ]]; then
+    read_ready_args+=(
+      --max-read-apply-lag "$GATEWAY_READ_READY_MAX_LAG"
+      --min-read-ready "$GATEWAY_READ_READY_MIN"
+    )
+  fi
+  if ! kubectl_lsm wait-gateway \
+    --addr "$GATEWAY_URL" \
+    --timeout 90s \
+    --min-reachable 3 \
+    --read-mode leader \
+    "${read_ready_args[@]}" >/dev/null; then
     echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
     kubectl_lsm gateway-status --addr "$GATEWAY_URL" >&2 || true
     dump_diagnostics
@@ -117,12 +142,13 @@ kubectl -n "$NAMESPACE" set image statefulset/lsm-cluster lsm="$IMAGE"
 kubectl -n "$NAMESPACE" set image deployment/lsm-gateway gateway="$IMAGE"
 kubectl -n "$NAMESPACE" rollout status statefulset/lsm-cluster --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/lsm-gateway --timeout=180s
-wait_for_gateway_status
+wait_for_gateway_status startup
 
 put_output="$(retry_kubectl_lsm_contains "state=committed" put --addr "$GATEWAY_URL" --key kind --value ok)"
 require_contains "$put_output" "state=committed"
 put_seq="$(seq_from_output "$put_output")"
 wait_cluster_applied "$put_seq"
+wait_for_gateway_status
 
 get_output="$(retry_kubectl_lsm_contains "found=true" get --addr "$GATEWAY_URL" --key kind)"
 require_contains "$get_output" "found=true"
@@ -140,6 +166,7 @@ delete_output="$(retry_kubectl_lsm_contains "state=committed" delete --addr "$GA
 require_contains "$delete_output" "state=committed"
 delete_seq="$(seq_from_output "$delete_output")"
 wait_cluster_applied "$delete_seq"
+wait_for_gateway_status
 
 missing_output="$(retry_kubectl_lsm_contains "found=false" get --addr "$GATEWAY_URL" --key kind)"
 require_contains "$missing_output" "found=false"

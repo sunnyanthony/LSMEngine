@@ -317,14 +317,20 @@ Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
 containers and passes it to `lsmctl gateway --endpoint-file`; production-style
 gateway processes can put the same path in `gateway_endpoint_file` when they
 want endpoint discovery to come from config. The smoke also covers the
-file-backed node endpoint resolver used by long-running gateways. It
-also verifies `/readyz` reports backend write readiness and uses
+file-backed node endpoint resolver used by long-running gateways. It verifies
+`/readyz` reports backend write readiness and uses
 `lsmctl wait-gateway` to wait until `/gateway/status` sees all three backend
-nodes, leader read mode, and a write leader. The Compose gateway service
-healthcheck uses `lsmctl health --ready` so container health follows backend
-write readiness, not just process liveness. The smoke covers point reads, range
-scans, committed writes/deletes, accepted writes/deletes, and accepted
-write-status lookup through the single gateway endpoint.
+nodes, leader read mode, and a write leader. After the first write and final
+delete are applied, it checks the selected leader against the read-lag bound.
+Empty-cluster bootstrap/election entries must not block the first write.
+Override that smoke gate with
+`LSM_GATEWAY_READ_READY_MIN` and `LSM_GATEWAY_READ_READY_MAX_LAG` when testing
+slower environments; set `LSM_GATEWAY_READ_READY_MAX_LAG=-1` to disable the
+smoke read-ready gate. The Compose gateway service healthcheck uses
+`lsmctl health --ready` so container health follows backend write readiness, not
+just process liveness. The smoke covers point reads, range scans, committed
+writes/deletes, accepted writes/deletes, and accepted write-status lookup through
+the single gateway endpoint.
 
 ## Rolling Restart Check
 
@@ -400,7 +406,11 @@ reads through `http://lsm-gateway:8090`, verifies `lsmctl gateway-status` can se
 all three backend nodes plus a write leader, and reads from follower pods
 directly to prove the gateway write reached replicated cluster state. The
 gateway discovers backend node endpoints from Kubernetes DNS SRV records through
-the LSM-owned DNS node endpoint resolver. The StatefulSet mounts a per-pod
+the LSM-owned DNS node endpoint resolver. The gateway smoke wait also requires
+the selected leader within the configured apply-lag bound after the first write
+and delete, not before traffic on an empty cluster. Follower catch-up is verified with
+`wait-cluster --min-applied-index`. Set `LSM_GATEWAY_READ_READY_MAX_LAG=-1` to
+disable only the smoke read-ready gate. The StatefulSet mounts a per-pod
 `ReadWriteOnce` PVC at `/data`, so committed raft state, WAL, SSTables, and
 control state survive pod replacement.
 

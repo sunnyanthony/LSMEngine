@@ -46,6 +46,13 @@ before reading followers, so it checks catch-up instead of only endpoint
 reachability. The manifests use short in-cluster DNS names such as
 `lsm-cluster-0.lsm-cluster` instead of assuming a specific cluster DNS suffix.
 
+After the first committed write and after delete catch-up, the smoke checks
+the selected leader's read-ready lag. Startup checks only leader/reachability:
+bootstrap and election entries can leave nonzero raw apply lag in an empty DB.
+`LSM_GATEWAY_READ_READY_MAX_LAG=-1` disables only this gate. While enabled,
+`LSM_GATEWAY_READ_READY_MIN` must be 0 or 1 because these examples use leader-only
+reads. Write/delete applied-index gates remain active.
+
 ## Persistent restart smoke
 
 ```bash

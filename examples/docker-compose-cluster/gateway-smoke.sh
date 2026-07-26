@@ -8,6 +8,19 @@ KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
 GATEWAY_ADDR="${LSM_GATEWAY_ADDR:-127.0.0.1:8090}"
 GATEWAY_URL="http://$GATEWAY_ADDR"
+GATEWAY_READ_READY_MIN="${LSM_GATEWAY_READ_READY_MIN:-1}"
+GATEWAY_READ_READY_MAX_LAG="${LSM_GATEWAY_READ_READY_MAX_LAG:-2}"
+
+if [[ "$GATEWAY_READ_READY_MAX_LAG" != "-1" ]]; then
+  if [[ ! "$GATEWAY_READ_READY_MAX_LAG" =~ ^[0-9]+$ ]]; then
+    echo "LSM_GATEWAY_READ_READY_MAX_LAG must be -1 or a non-negative integer" >&2
+    exit 1
+  fi
+  if [[ "$GATEWAY_READ_READY_MIN" != "0" && "$GATEWAY_READ_READY_MIN" != "1" ]]; then
+    echo "leader-mode smoke requires LSM_GATEWAY_READ_READY_MIN=0 or 1" >&2
+    exit 1
+  fi
+fi
 
 compose() {
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -82,7 +95,19 @@ wait_for_gateway_container_health() {
 }
 
 wait_for_gateway_status() {
-  if ! lsmctl wait-gateway --addr "$GATEWAY_URL" --timeout 60s --min-reachable 3 --read-mode leader >/dev/null; then
+  local read_ready_args=(--write-leader=true)
+  if [[ "${1:-read}" != "startup" && "$GATEWAY_READ_READY_MAX_LAG" != "-1" ]]; then
+    read_ready_args+=(
+      --max-read-apply-lag "$GATEWAY_READ_READY_MAX_LAG"
+      --min-read-ready "$GATEWAY_READ_READY_MIN"
+    )
+  fi
+  if ! lsmctl wait-gateway \
+    --addr "$GATEWAY_URL" \
+    --timeout 60s \
+    --min-reachable 3 \
+    --read-mode leader \
+    "${read_ready_args[@]}" >/dev/null; then
     echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
     lsmctl gateway-status --addr "$GATEWAY_URL" >&2 || true
     compose --profile gateway ps >&2 || true
@@ -186,12 +211,13 @@ compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
 wait_for_ready "$GATEWAY_URL"
 wait_for_gateway_container_health
-wait_for_gateway_status
+wait_for_gateway_status startup
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"
 require_contains "$put_output" "state=committed"
 put_seq="$(seq_from_output "$put_output")"
 wait_cluster_applied "$put_seq"
+wait_for_gateway_status
 
 get_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$get_output" "found=true"
@@ -226,6 +252,7 @@ delete_output="$(lsmctl delete --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$delete_output" "state=committed"
 delete_seq="$(seq_from_output "$delete_output")"
 wait_cluster_applied "$delete_seq"
+wait_for_gateway_status
 
 missing_output="$(wait_for_gateway_missing gateway-smoke)"
 require_contains "$missing_output" "found=false"
