@@ -50,6 +50,8 @@ write_consistency_default: "accepted"
 # Gateway-only option used by `lsmctl gateway --config`.
 # Valid values: "any" (default) or "leader".
 # gateway_read_mode: "any"
+# Valid values: "round_robin" (default) or "ordered".
+# gateway_read_balance_policy: "round_robin"
 # gateway_max_write_attempts: 2
 # gateway_write_retry_backoff: "0s"
 # gateway_endpoint_failure_cooldown: "5s"

@@ -253,6 +253,54 @@ func TestGatewayHandlerGetRotatesHealthyEndpoints(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerGetOrderedReadBalanceUsesFirstHealthyEndpoint(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeAReads.Add(1)
+		writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 1})
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/kv/get" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeBReads.Add(1)
+		writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 2})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		ReadBalancePolicy: GatewayReadBalanceOrdered,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	handler := NewGatewayHandler(gateway, HandlerOptions{})
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d expected 200, got %d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if nodeAReads.Load() != 3 || nodeBReads.Load() != 0 {
+		t.Fatalf("expected ordered reads to stay on first healthy endpoint, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
 func TestGatewayHandlerGetLeaderReadModeUsesWriteLeader(t *testing.T) {
 	var nodeAReads atomic.Int32
 	var nodeBReads atomic.Int32
@@ -437,6 +485,16 @@ func TestGatewayRejectsInvalidReadMode(t *testing.T) {
 		},
 	}); err == nil {
 		t.Fatalf("expected invalid read mode error")
+	}
+}
+
+func TestGatewayRejectsInvalidReadBalancePolicy(t *testing.T) {
+	if _, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		NodeEndpoints:     map[string]string{"node-a": "http://node-a"},
+		ReadBalancePolicy: "sticky",
+	}); err == nil {
+		t.Fatalf("expected invalid read balance policy error")
 	}
 }
 
@@ -744,6 +802,9 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	}
 	if out.ReadMode != string(GatewayReadModeAny) {
 		t.Fatalf("unexpected read mode: %+v", out)
+	}
+	if out.ReadBalancePolicy != string(GatewayReadBalanceRoundRobin) {
+		t.Fatalf("unexpected read balance policy: %+v", out)
 	}
 	if out.WriteLeader != "node-b" || out.WriteLeaderEndpoint != "http://node-b" {
 		t.Fatalf("unexpected write leader: %+v", out)

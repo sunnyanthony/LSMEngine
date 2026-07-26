@@ -25,6 +25,14 @@ const (
 	GatewayReadModeLeader GatewayReadMode = "leader"
 )
 
+// GatewayReadBalancePolicy controls how healthy read backends are ordered outside leader-only reads.
+type GatewayReadBalancePolicy string
+
+const (
+	GatewayReadBalanceRoundRobin GatewayReadBalancePolicy = "round_robin"
+	GatewayReadBalanceOrdered    GatewayReadBalancePolicy = "ordered"
+)
+
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
 	BootstrapURL            string
@@ -32,6 +40,7 @@ type GatewayOptions struct {
 	NodeEndpointResolver    NodeEndpointResolver
 	HTTPClient              *http.Client
 	ReadMode                GatewayReadMode
+	ReadBalancePolicy       GatewayReadBalancePolicy
 	MaxWriteAttempts        int
 	WriteRetryBackoff       time.Duration
 	AlignWriteLeader        bool
@@ -44,6 +53,7 @@ type Gateway struct {
 	endpointResolver        NodeEndpointResolver
 	client                  *http.Client
 	readMode                GatewayReadMode
+	readBalancePolicy       GatewayReadBalancePolicy
 	maxAttempts             int
 	retryBackoff            time.Duration
 	alignWriteLeader        bool
@@ -62,6 +72,7 @@ type GatewayClusterStatus struct {
 	NodeCount           int                        `json:"node_count"`
 	ReachableNodes      int                        `json:"reachable_nodes"`
 	ReadMode            string                     `json:"read_mode"`
+	ReadBalancePolicy   string                     `json:"read_balance_policy"`
 	WriteLeader         string                     `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string                     `json:"write_leader_endpoint,omitempty"`
 	Routing             GatewayRoutingStats        `json:"routing"`
@@ -172,6 +183,15 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	default:
 		return nil, fmt.Errorf("invalid gateway read mode %q", readMode)
 	}
+	readBalancePolicy := opts.ReadBalancePolicy
+	if readBalancePolicy == "" {
+		readBalancePolicy = GatewayReadBalanceRoundRobin
+	}
+	switch readBalancePolicy {
+	case GatewayReadBalanceRoundRobin, GatewayReadBalanceOrdered:
+	default:
+		return nil, fmt.Errorf("invalid gateway read balance policy %q", readBalancePolicy)
+	}
 	endpointFailureCooldown := opts.EndpointFailureCooldown
 	if endpointFailureCooldown < 0 {
 		return nil, fmt.Errorf("endpoint failure cooldown must be non-negative")
@@ -184,6 +204,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		endpointResolver:        resolver,
 		client:                  client,
 		readMode:                readMode,
+		readBalancePolicy:       readBalancePolicy,
 		maxAttempts:             maxAttempts,
 		retryBackoff:            opts.WriteRetryBackoff,
 		alignWriteLeader:        opts.AlignWriteLeader,
@@ -228,10 +249,11 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 	}
 	nodeIDs := sortedUniqueNodeEndpointIDs(endpoints)
 	result := GatewayClusterStatus{
-		NodeCount: len(nodeIDs),
-		ReadMode:  string(g.readMode),
-		Routing:   g.RoutingStats(),
-		Nodes:     make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
+		NodeCount:         len(nodeIDs),
+		ReadMode:          string(g.readMode),
+		ReadBalancePolicy: string(g.readBalancePolicy),
+		Routing:           g.RoutingStats(),
+		Nodes:             make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
 	}
 	var lastErr error
 	for _, nodeID := range nodeIDs {
@@ -511,7 +533,7 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 }
 
 func (g *Gateway) readNodeEndpointIDs(endpoints map[string]string) []string {
-	return g.nodeEndpointIDs(endpoints, true)
+	return g.nodeEndpointIDs(endpoints, g.readBalancePolicy == GatewayReadBalanceRoundRobin)
 }
 
 type gatewayReadTarget struct {

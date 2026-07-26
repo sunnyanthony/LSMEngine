@@ -205,9 +205,12 @@ gateway can currently see a backend commit-log write leader. Writes are
 route-aware and retry stale leader metadata through `server.Gateway`.
 
 Gateway reads default to `--read-mode any`, which uses best-effort endpoint
-fallback with healthy-endpoint rotation. The Compose and kind gateway examples
-use `--read-mode leader`, which sends `/kv/get` and `/kv/range` only to the
-current commit-log write leader and returns unavailable when no leader can be
+fallback and `--read-balance-policy round_robin` healthy-endpoint rotation. Use
+`--read-balance-policy ordered` or `gateway_read_balance_policy: "ordered"` when
+the gateway should keep sorted endpoint order while still deferring recently
+failed endpoints behind healthy ones. The Compose and kind gateway examples use
+`--read-mode leader`, which sends `/kv/get` and `/kv/range` only to the current
+commit-log write leader and returns unavailable when no leader can be
 identified. This avoids stale follower reads for clients that want to prefer the
 node accepting committed writes, but it is not raft ReadIndex, lease-read, or a
 complete linearizable read protocol. Accepted write status lookups keep
@@ -218,11 +221,11 @@ and 5xx responses put an endpoint behind healthy endpoints for a cooldown
 window, while successful probes clear that state. Tune the window with
 `lsmctl gateway --endpoint-failure-cooldown` or
 `gateway_endpoint_failure_cooldown` in server config; `0` uses the gateway
-default. Healthy read endpoints are
-rotated so a single stable gateway does not always send reads to the same
-backend in `any` mode. `/gateway/status` includes `read_mode`, per-backend
-`degraded`, and `degraded_until` fields so operators can see how reads are
-configured and when gateway routing is temporarily avoiding an endpoint.
+default. Healthy read endpoints rotate by default so a single stable gateway
+does not always send reads to the same backend in `any` mode. `/gateway/status`
+includes `read_mode`, `read_balance_policy`, per-backend `degraded`, and
+`degraded_until` fields so operators can see how reads are configured and when
+gateway routing is temporarily avoiding an endpoint.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. `lsmctl wait-gateway` polls that same view for
