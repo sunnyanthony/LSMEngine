@@ -50,6 +50,7 @@ write_consistency_default: "accepted"
 # Gateway-only option used by `lsmctl gateway --config`.
 # Valid values: "any" (default) or "leader".
 # gateway_read_mode: "any"
+# gateway_endpoint_failure_cooldown: "5s"
 # Optional local storage tuning. Backpressure thresholds are disabled when 0.
 # memtable_limit: 1048576
 # wal_max_segment_bytes: 67108864

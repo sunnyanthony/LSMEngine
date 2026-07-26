@@ -250,6 +250,33 @@ func TestGatewayNodeEndpointResolverRejectsFileAndDNS(t *testing.T) {
 	}
 }
 
+func TestSelectedGatewayEndpointFailureCooldownUsesConfig(t *testing.T) {
+	got := selectedGatewayEndpointFailureCooldown(serverconfig.Config{
+		GatewayEndpointFailureCooldown: 750 * time.Millisecond,
+	}, 2*time.Second, false)
+	if got != 750*time.Millisecond {
+		t.Fatalf("expected config cooldown, got %v", got)
+	}
+}
+
+func TestSelectedGatewayEndpointFailureCooldownUsesFlag(t *testing.T) {
+	got := selectedGatewayEndpointFailureCooldown(serverconfig.Config{
+		GatewayEndpointFailureCooldown: 750 * time.Millisecond,
+	}, 2*time.Second, true)
+	if got != 2*time.Second {
+		t.Fatalf("expected flag cooldown, got %v", got)
+	}
+}
+
+func TestSelectedGatewayEndpointFailureCooldownAllowsExplicitZeroFlag(t *testing.T) {
+	got := selectedGatewayEndpointFailureCooldown(serverconfig.Config{
+		GatewayEndpointFailureCooldown: 750 * time.Millisecond,
+	}, 0, true)
+	if got != 0 {
+		t.Fatalf("expected explicit zero cooldown flag, got %v", got)
+	}
+}
+
 func TestGatewayNodeEndpointResolverUsesDNSSRV(t *testing.T) {
 	resolver, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{
 		DNSSRVName: "lsm-cluster.lsm-cluster.svc.cluster.local",

@@ -209,7 +209,10 @@ best-effort endpoint fallback because the request-status tracker is node-local.
 
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
-window, while successful probes clear that state. Healthy read endpoints are
+window, while successful probes clear that state. Tune the window with
+`lsmctl gateway --endpoint-failure-cooldown` or
+`gateway_endpoint_failure_cooldown` in server config; `0` uses the gateway
+default. Healthy read endpoints are
 rotated so a single stable gateway does not always send reads to the same
 backend in `any` mode. `/gateway/status` includes `read_mode`, per-backend
 `degraded`, and `degraded_until` fields so operators can see how reads are

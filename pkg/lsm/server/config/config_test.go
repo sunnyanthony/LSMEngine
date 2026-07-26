@@ -46,6 +46,7 @@ read_timeout: "2s"
 write_timeout: "3s"
 write_consistency_default: "accepted"
 gateway_read_mode: "leader"
+gateway_endpoint_failure_cooldown: "750ms"
 memtable_limit: 2048
 wal_max_segment_bytes: 4096
 wal_retain_archived_segments: 2
@@ -115,6 +116,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.GatewayReadMode != "leader" {
 		t.Fatalf("expected gateway read mode, got %q", cfg.GatewayReadMode)
+	}
+	if cfg.GatewayEndpointFailureCooldown != 750*time.Millisecond {
+		t.Fatalf("expected gateway endpoint failure cooldown, got %v", cfg.GatewayEndpointFailureCooldown)
 	}
 	if cfg.MemtableLimit != 2048 {
 		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)
