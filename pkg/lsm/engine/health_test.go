@@ -162,6 +162,9 @@ func TestStatsWALSegmentRotation(t *testing.T) {
 	if stats.WAL.ArchivedSegmentBytes == 0 || stats.WAL.TotalBytes != stats.WAL.ActiveSegmentBytes+stats.WAL.ArchivedSegmentBytes {
 		t.Fatalf("expected WAL byte accounting across segments, got %+v", stats.WAL)
 	}
+	if stats.WAL.CheckpointSeq != 0 || stats.WAL.CheckpointLag != stats.Seq {
+		t.Fatalf("expected WAL checkpoint lag to match unflushed seq, got stats=%+v wal=%+v", stats, stats.WAL)
+	}
 }
 
 func TestWALRetentionPrunesArchivedSegmentsAfterFlush(t *testing.T) {
@@ -189,8 +192,16 @@ func TestWALRetentionPrunesArchivedSegmentsAfterFlush(t *testing.T) {
 		stats := store.Stats()
 		return stats.SSTableCount > 0 &&
 			stats.WAL.SegmentID > 1 &&
-			stats.WAL.ArchivedSegmentCount <= 1
+			stats.WAL.ArchivedSegmentCount <= 1 &&
+			stats.WAL.CheckpointSeq > 0
 	})
+	stats := store.Stats()
+	if stats.WAL.RetainArchivedSegments != 1 {
+		t.Fatalf("expected WAL retain setting in stats, got %+v", stats.WAL)
+	}
+	if stats.WAL.CheckpointSeq > stats.Seq || stats.WAL.CheckpointLag != stats.Seq-stats.WAL.CheckpointSeq {
+		t.Fatalf("expected WAL checkpoint lag to match seq/checkpoint, got stats=%+v wal=%+v", stats, stats.WAL)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

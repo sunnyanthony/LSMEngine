@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"sync/atomic"
 
 	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
@@ -70,6 +71,7 @@ func (s *flushService) onFlush(t sstable.SSTable) {
 			s.l.logger.Printf("flush apply: %v", err)
 		}
 	} else {
+		s.l.updateLastFlush(t.Seq)
 		s.l.pruneArchivedWALSegments(t.Seq)
 	}
 	if s.l.compactionSvc != nil {
@@ -84,6 +86,21 @@ func (s *flushService) editService() tableedit.Editor {
 		return nil
 	}
 	return s.l.tableEditor()
+}
+
+func (l *LSM) updateLastFlush(seq uint64) {
+	if l == nil || seq == 0 {
+		return
+	}
+	for {
+		last := atomic.LoadUint64(&l.lastFlush)
+		if seq <= last {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&l.lastFlush, last, seq) {
+			return
+		}
+	}
 }
 
 func (l *LSM) pruneArchivedWALSegments(checkpoint uint64) {
