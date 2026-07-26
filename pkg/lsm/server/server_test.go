@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +75,17 @@ func (stubProvider) Stats() lsm.Stats {
 
 func (stubProvider) Health() lsm.Health {
 	return lsm.Health{Ready: true, Reason: "ok"}
+}
+
+type compactionStubProvider struct {
+	stubProvider
+	triggers atomic.Int32
+	err      error
+}
+
+func (p *compactionStubProvider) TriggerCompaction() error {
+	p.triggers.Add(1)
+	return p.err
 }
 
 type controlStubProvider struct {
@@ -728,6 +740,61 @@ func TestHandlerMetricsUnavailableWithoutProvider(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected metrics to contain %q, got:\n%s", want, out)
 		}
+	}
+}
+
+func TestHandlerCompactTriggersCompaction(t *testing.T) {
+	provider := &compactionStubProvider{}
+	handler := NewHandler(provider)
+	req := httptest.NewRequest(http.MethodPost, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out map[string]bool
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out["ok"] || provider.triggers.Load() != 1 {
+		t.Fatalf("expected compaction trigger, out=%+v triggers=%d", out, provider.triggers.Load())
+	}
+}
+
+func TestHandlerCompactUnavailableWithoutProvider(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerCompactReportsProviderError(t *testing.T) {
+	provider := &compactionStubProvider{err: errors.New("planner unavailable")}
+	handler := NewHandler(provider)
+	req := httptest.NewRequest(http.MethodPost, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.triggers.Load() != 1 {
+		t.Fatalf("expected compaction trigger, got %d", provider.triggers.Load())
+	}
+	if !strings.Contains(rec.Body.String(), "planner unavailable") {
+		t.Fatalf("expected provider error in response, got %q", rec.Body.String())
+	}
+}
+
+func TestHandlerCompactRequiresPost(t *testing.T) {
+	handler := NewHandler(&compactionStubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

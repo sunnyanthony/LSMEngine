@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,6 +338,49 @@ func TestStatsCompactionRuntimeMetrics(t *testing.T) {
 	}
 	if stats.CompactionRuntime.Errors != 0 {
 		t.Fatalf("expected no compaction errors, got %+v", stats.CompactionRuntime)
+	}
+}
+
+func TestTriggerCompactionRequestsRuntimeRun(t *testing.T) {
+	store, err := New(Options{
+		DataDir:               t.TempDir(),
+		MemtableLimit:         1,
+		CompactionL0Threshold: 10,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	before := store.Stats().CompactionRuntime
+	if err := store.TriggerCompaction(); err != nil {
+		t.Fatalf("trigger compaction: %v", err)
+	}
+	waitForStats(t, func() bool {
+		stats := store.Stats().CompactionRuntime
+		return stats.Triggers > before.Triggers || stats.CoalescedTriggers > before.CoalescedTriggers
+	})
+}
+
+func TestTriggerCompactionRejectsWhenDisabled(t *testing.T) {
+	store, err := New(Options{
+		DataDir:               t.TempDir(),
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+	if err := store.TriggerCompaction(); err == nil || !strings.Contains(err.Error(), "compaction disabled") {
+		t.Fatalf("expected compaction disabled error, got %v", err)
 	}
 }
 

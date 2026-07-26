@@ -605,6 +605,38 @@ func TestReadGatewayStatusRequiresAddr(t *testing.T) {
 	}
 }
 
+func TestTriggerCompactionRemote(t *testing.T) {
+	var called atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		if r.URL.Path != "/compact" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		called.Add(1)
+		_ = json.NewEncoder(w).Encode(okResult{OK: true})
+	}))
+	defer srv.Close()
+
+	got, err := triggerCompaction(srv.URL)
+	if err != nil {
+		t.Fatalf("trigger compaction: %v", err)
+	}
+	if !got.OK {
+		t.Fatalf("expected ok result, got %+v", got)
+	}
+	if called.Load() != 1 {
+		t.Fatalf("expected one compact request, got %d", called.Load())
+	}
+}
+
+func TestTriggerCompactionRequiresAddr(t *testing.T) {
+	if _, err := triggerCompaction(""); err == nil {
+		t.Fatalf("expected missing addr error")
+	}
+}
+
 func TestWaitGatewayStatusReady(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/gateway/status" {

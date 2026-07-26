@@ -122,6 +122,10 @@ The useful fields are:
   `Stats()`. It includes the configured compaction/backpressure/WAL thresholds
   so alerts can compare pressure against policy. Use it for per-node monitoring;
   it is not a cluster-wide durability or replication health summary.
+- `POST /compact` and `lsmctl compact --addr <node-url>` wake one node's local
+  compaction runtime. This is useful after inspecting L0/table pressure, but it
+  does not bypass the planner's configured policy and is not a cluster-wide
+  rebalance or repair operation.
 
 ## Manual KV Commands
 
@@ -132,6 +136,7 @@ go run ./cmd/lsmctl put --addr http://127.0.0.1:8080 --key user:1 --value alice
 go run ./cmd/lsmctl get --addr http://127.0.0.1:8081 --key user:1
 go run ./cmd/lsmctl range --addr http://127.0.0.1:8082 --start user: --end user~ --limit 10
 go run ./cmd/lsmctl delete --addr http://127.0.0.1:8080 --key user:1
+go run ./cmd/lsmctl compact --addr http://127.0.0.1:8080
 ```
 
 For cluster-aware reads and writes, provide the node endpoint map:

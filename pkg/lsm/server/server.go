@@ -71,12 +71,16 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
+	if compaction, ok := provider.(lsm.CompactionProvider); ok {
+		handler.compaction = compaction
+	}
 	if raft, ok := provider.(raftPeerMessageHandler); ok {
 		handler.raft = raft
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
 	mux.HandleFunc("/metrics", handler.handleMetrics)
+	mux.HandleFunc("/compact", handler.handleCompact)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
@@ -112,6 +116,7 @@ type handler struct {
 	ranger                   lsm.RangeProvider
 	writer                   lsm.WriteProvider
 	cdc                      lsm.CDCProvider
+	compaction               lsm.CompactionProvider
 	raft                     raftPeerMessageHandler
 	requests                 *writeRequestStore
 	writeConsistencyDefault  lsm.WriteConsistency
@@ -181,6 +186,18 @@ func (h *handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeServerMetrics(w, h.provider.Stats())
+}
+
+func (h *handler) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.compaction == nil {
+		http.Error(w, "compaction unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeActionResult(w, h.compaction.TriggerCompaction())
 }
 
 func writeServerMetrics(w io.Writer, stats lsm.Stats) {

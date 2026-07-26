@@ -78,6 +78,8 @@ func main() {
 		replacementPlanCmd(os.Args[2:])
 	case "replacement-apply":
 		replacementApplyCmd(os.Args[2:])
+	case "compact":
+		compactCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	case "health":
@@ -89,7 +91,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|compact|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -465,6 +467,29 @@ func statsCmd(args []string) {
 	writeStats(os.Stdout, stats)
 }
 
+func compactCmd(args []string) {
+	fs := flag.NewFlagSet("compact", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	addr := fs.String("addr", "", "server HTTP address")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	result, err := triggerCompaction(*addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	fmt.Fprintf(os.Stdout, "compaction_triggered=%v\n", result.OK)
+}
+
 func writeStats(w io.Writer, stats lsm.Stats) {
 	fmt.Fprintf(w, "memtable_bytes=%d\n", stats.MemtableBytes)
 	fmt.Fprintf(w, "memtable_entries=%d\n", stats.MemtableEntries)
@@ -708,6 +733,10 @@ type waitGatewayOptions struct {
 	RequiredReadMode       string
 	Timeout                time.Duration
 	Interval               time.Duration
+}
+
+type okResult struct {
+	OK bool `json:"ok"`
 }
 
 type drainNodeResult struct {
@@ -1529,6 +1558,17 @@ func readStats(addr, dataDir string) (lsm.Stats, error) {
 	}
 	defer store.Close()
 	return store.Stats(), nil
+}
+
+func triggerCompaction(addr string) (okResult, error) {
+	if addr == "" {
+		return okResult{}, fmt.Errorf("compact requires --addr or config addr")
+	}
+	var out okResult
+	if err := postJSON(normalizeHTTPBaseURL(addr)+"/compact", map[string]bool{}, &out); err != nil {
+		return okResult{}, err
+	}
+	return out, nil
 }
 
 func readHealth(addr, dataDir string, ready bool) (lsm.Health, error) {
@@ -3220,6 +3260,11 @@ func shardForKey(endpoint string, key []byte) (lsm.ShardStatus, bool, error) {
 }
 
 func postControlAction(rawURL string, payload any) error {
+	var out map[string]any
+	return postJSON(rawURL, payload, &out)
+}
+
+func postJSON(rawURL string, payload any, out any) error {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
 		return err
@@ -3229,8 +3274,7 @@ func postControlAction(rawURL string, payload any) error {
 	if err != nil {
 		return err
 	}
-	var out map[string]any
-	return decodeHTTPJSON(resp, &out)
+	return decodeHTTPJSON(resp, out)
 }
 
 func sortedEndpointNodes(endpoints map[string]string) []string {
