@@ -2176,10 +2176,13 @@ func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
 func writeGatewayRoutingStats(w io.Writer, stats server.GatewayRoutingStats) {
 	fmt.Fprintf(
 		w,
-		"routing_write_attempts=%d routing_write_retries=%d routing_write_failures=%d routing_route_refreshes=%d routing_route_refresh_failures=%d routing_route_hint_updates=%d\n",
+		"routing_write_attempts=%d routing_write_retries=%d routing_write_failures=%d routing_read_attempts=%d routing_read_fallbacks=%d routing_read_failures=%d routing_route_refreshes=%d routing_route_refresh_failures=%d routing_route_hint_updates=%d\n",
 		stats.WriteAttempts,
 		stats.WriteRetries,
 		stats.WriteFailures,
+		stats.ReadAttempts,
+		stats.ReadFallbacks,
+		stats.ReadFailures,
 		stats.RouteRefreshes,
 		stats.RouteRefreshFailures,
 		stats.RouteHintUpdates,

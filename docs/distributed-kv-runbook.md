@@ -225,7 +225,10 @@ default. Healthy read endpoints rotate by default so a single stable gateway
 does not always send reads to the same backend in `any` mode. `/gateway/status`
 includes `read_mode`, `read_balance_policy`, per-backend `degraded`, and
 `degraded_until` fields so operators can see how reads are configured and when
-gateway routing is temporarily avoiding an endpoint.
+gateway routing is temporarily avoiding an endpoint. The status routing block
+also includes process-local `read_attempts`, `read_fallbacks`, and
+`read_failures` counters so operators can see whether fallback is doing useful
+work or masking backend instability.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. `lsmctl wait-gateway` polls that same view for

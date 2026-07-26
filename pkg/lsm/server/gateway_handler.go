@@ -228,11 +228,13 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	}
 	endpoints, err := h.gateway.endpointResolver.ResolveNodeEndpoints(r.Context())
 	if err != nil {
+		h.gateway.routing.readFailures.Add(1)
 		writeGatewayUnavailable(w, err.Error())
 		return
 	}
 	targets, err := h.gateway.readTargets(r.Context(), endpoints, isKVReadRequest(r))
 	if err != nil {
+		h.gateway.routing.readFailures.Add(1)
 		writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
 			Error:     err.Error(),
 			Code:      "gateway_unavailable",
@@ -248,7 +250,11 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	var firstNotFoundHeader http.Header
 	var firstNotFoundBody []byte
 	var lastErr error
-	for _, target := range targets {
+	for i, target := range targets {
+		h.gateway.routing.readAttempts.Add(1)
+		if i > 0 {
+			h.gateway.routing.readFallbacks.Add(1)
+		}
 		nodeID := target.nodeID
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
@@ -288,13 +294,18 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		writeCapturedResponse(w, http.StatusNotFound, firstNotFoundHeader, firstNotFoundBody)
 		return
 	}
+	h.gateway.routing.readFailures.Add(1)
 	writeGatewayUnavailable(w, lastErr.Error())
 }
 
 func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request, targets []gatewayReadTarget) {
 	var firstNotFound *getResponse
 	var lastErr error
-	for _, target := range targets {
+	for i, target := range targets {
+		h.gateway.routing.readAttempts.Add(1)
+		if i > 0 {
+			h.gateway.routing.readFallbacks.Add(1)
+		}
 		nodeID := target.nodeID
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
@@ -343,6 +354,7 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no node endpoints available")
 	}
+	h.gateway.routing.readFailures.Add(1)
 	writeGatewayUnavailable(w, lastErr.Error())
 }
 
