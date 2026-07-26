@@ -73,6 +73,10 @@ control plane decoupled from IO.
 
 ## Async scheduling and backpressure
 - Compaction is triggered on flush events and runs in the background.
+- Operators can manually wake the node-local compaction runtime with
+  `POST /compact` or `lsmctl compact --addr <url>`. This is a scheduling trigger,
+  not a forced rewrite: the configured planner still decides whether current
+  table metadata satisfies compaction policy.
 - `Stats()` and `/stats` report L0 table count/bytes and whether the configured
   L0 threshold has been reached. This is currently a pressure signal for
   operators and tests, not a complete debt scheduler.

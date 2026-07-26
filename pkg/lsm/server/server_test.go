@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +75,17 @@ func (stubProvider) Stats() lsm.Stats {
 
 func (stubProvider) Health() lsm.Health {
 	return lsm.Health{Ready: true, Reason: "ok"}
+}
+
+type compactionStubProvider struct {
+	stubProvider
+	triggers atomic.Int32
+	err      error
+}
+
+func (p *compactionStubProvider) TriggerCompaction() error {
+	p.triggers.Add(1)
+	return p.err
 }
 
 type controlStubProvider struct {
@@ -704,6 +716,44 @@ func TestHandlerMetrics(t *testing.T) {
 func TestHandlerMetricsRequiresGet(t *testing.T) {
 	handler := NewHandler(stubProvider{})
 	req := httptest.NewRequest(http.MethodPost, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerCompactTriggersCompaction(t *testing.T) {
+	provider := &compactionStubProvider{}
+	handler := NewHandler(provider)
+	req := httptest.NewRequest(http.MethodPost, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out map[string]bool
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out["ok"] || provider.triggers.Load() != 1 {
+		t.Fatalf("expected compaction trigger, out=%+v triggers=%d", out, provider.triggers.Load())
+	}
+}
+
+func TestHandlerCompactUnavailableWithoutProvider(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/compact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerCompactRequiresPost(t *testing.T) {
+	handler := NewHandler(&compactionStubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/compact", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
