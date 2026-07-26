@@ -643,6 +643,47 @@ func TestWriteGatewayWait(t *testing.T) {
 	}
 }
 
+func TestWriteStatsIncludesWALStats(t *testing.T) {
+	var buf bytes.Buffer
+	writeStats(&buf, lsm.Stats{
+		WAL: lsm.WALStats{
+			SegmentID:            4,
+			SegmentCount:         3,
+			ArchivedSegmentCount: 2,
+			TotalBytes:           4096,
+			ActiveSegmentBytes:   1024,
+			ArchivedSegmentBytes: 3072,
+			MaxSegmentBytes:      8192,
+			BlockSize:            65536,
+			PendingBlockBytes:    12,
+			PendingBlockRecords:  1,
+			Sync:                 true,
+			Async:                true,
+			SegmentScanError:     "scan failed",
+		},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"wal_segment_id=4",
+		"wal_segments=3",
+		"wal_archived_segments=2",
+		"wal_bytes=4096",
+		"wal_active_segment_bytes=1024",
+		"wal_archived_segment_bytes=3072",
+		"wal_max_segment_bytes=8192",
+		"wal_block_size=65536",
+		"wal_pending_block_bytes=12",
+		"wal_pending_block_records=1",
+		"wal_sync=true",
+		"wal_async=true",
+		"wal_segment_scan_error=\"scan failed\"",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+}
+
 func TestWriteKVStatusPrintsCommittedSeq(t *testing.T) {
 	var buf bytes.Buffer
 	writeKVStatus(&buf, lsm.WriteRequestStatus{

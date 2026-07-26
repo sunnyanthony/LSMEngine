@@ -45,6 +45,18 @@ func TestStatsSnapshot(t *testing.T) {
 	if stats.Closing || stats.Closed {
 		t.Fatalf("expected open state, got closing=%v closed=%v", stats.Closing, stats.Closed)
 	}
+	if stats.WAL.SegmentID == 0 || stats.WAL.SegmentCount == 0 {
+		t.Fatalf("expected wal segment stats, got %+v", stats.WAL)
+	}
+	if stats.WAL.TotalBytes == 0 || stats.WAL.ActiveSegmentBytes == 0 {
+		t.Fatalf("expected wal byte stats, got %+v", stats.WAL)
+	}
+	if stats.WAL.BlockSize == 0 {
+		t.Fatalf("expected wal block size, got %+v", stats.WAL)
+	}
+	if stats.WAL.Closed {
+		t.Fatalf("expected open wal stats, got %+v", stats.WAL)
+	}
 }
 
 func TestStatsSSTableLevelsAndCompactionPressure(t *testing.T) {
