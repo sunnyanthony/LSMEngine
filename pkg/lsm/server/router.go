@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lsmengine/pkg/lsm"
@@ -51,6 +52,7 @@ type Gateway struct {
 	mu       sync.RWMutex
 	routes   cachedRoutes
 	endpoint endpointPolicy
+	routing  gatewayRoutingCounters
 }
 
 // GatewayClusterStatus summarizes backend node status as seen through a gateway.
@@ -62,6 +64,7 @@ type GatewayClusterStatus struct {
 	ReadMode            string                     `json:"read_mode"`
 	WriteLeader         string                     `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string                     `json:"write_leader_endpoint,omitempty"`
+	Routing             GatewayRoutingStats        `json:"routing"`
 	Nodes               []GatewayClusterNodeStatus `json:"nodes"`
 }
 
@@ -92,6 +95,25 @@ type endpointPolicy struct {
 	mu            sync.Mutex
 	failedUntil   map[string]time.Time
 	nextReadStart int
+}
+
+type gatewayRoutingCounters struct {
+	writeAttempts        atomic.Uint64
+	writeRetries         atomic.Uint64
+	writeFailures        atomic.Uint64
+	routeRefreshes       atomic.Uint64
+	routeRefreshFailures atomic.Uint64
+	routeHintUpdates     atomic.Uint64
+}
+
+// GatewayRoutingStats describes process-local gateway routing activity.
+type GatewayRoutingStats struct {
+	WriteAttempts        uint64 `json:"write_attempts"`
+	WriteRetries         uint64 `json:"write_retries"`
+	WriteFailures        uint64 `json:"write_failures"`
+	RouteRefreshes       uint64 `json:"route_refreshes"`
+	RouteRefreshFailures uint64 `json:"route_refresh_failures"`
+	RouteHintUpdates     uint64 `json:"route_hint_updates"`
 }
 
 // WriteRequestError describes a failed write response from a node endpoint.
@@ -205,6 +227,7 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 	result := GatewayClusterStatus{
 		NodeCount: len(nodeIDs),
 		ReadMode:  string(g.readMode),
+		Routing:   g.RoutingStats(),
 		Nodes:     make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
 	}
 	var lastErr error
@@ -254,6 +277,21 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 	return result, nil
 }
 
+// RoutingStats returns process-local gateway routing counters.
+func (g *Gateway) RoutingStats() GatewayRoutingStats {
+	if g == nil {
+		return GatewayRoutingStats{}
+	}
+	return GatewayRoutingStats{
+		WriteAttempts:        g.routing.writeAttempts.Load(),
+		WriteRetries:         g.routing.writeRetries.Load(),
+		WriteFailures:        g.routing.writeFailures.Load(),
+		RouteRefreshes:       g.routing.routeRefreshes.Load(),
+		RouteRefreshFailures: g.routing.routeRefreshFailures.Load(),
+		RouteHintUpdates:     g.routing.routeHintUpdates.Load(),
+	}
+}
+
 func sortedUniqueNodeEndpointIDs(endpoints map[string]string) []string {
 	nodeIDs := sortedNodeEndpointIDs(endpoints)
 	unique := make([]string, 0, len(nodeIDs))
@@ -277,22 +315,27 @@ func (g *Gateway) writeWithRetry(
 	consistency lsm.WriteConsistency,
 ) (lsm.WriteRequestStatus, error) {
 	for attempt := 1; attempt <= g.maxAttempts; attempt++ {
+		g.routing.writeAttempts.Add(1)
 		status, err := g.writeOnce(ctx, operation, key, value, consistency)
 		if err == nil {
 			return status, nil
 		}
 		var reqErr *WriteRequestError
 		if !errors.As(err, &reqErr) || !reqErr.Response.Retryable || attempt == g.maxAttempts {
+			g.routing.writeFailures.Add(1)
 			return lsm.WriteRequestStatus{}, err
 		}
 		if retryErr := g.prepareWriteRetry(ctx, key, reqErr.Response.Route); retryErr != nil {
+			g.routing.writeFailures.Add(1)
 			return lsm.WriteRequestStatus{}, err
 		}
+		g.routing.writeRetries.Add(1)
 		if g.retryBackoff > 0 {
 			timer := time.NewTimer(g.retryBackoff)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				g.routing.writeFailures.Add(1)
 				return lsm.WriteRequestStatus{}, ctx.Err()
 			case <-timer.C:
 			}
@@ -330,6 +373,7 @@ func (g *Gateway) applyRouteHint(key []byte, hint *writeRouteHint) bool {
 		if hint.Revision > g.routes.revision {
 			g.routes.revision = hint.Revision
 		}
+		g.routing.routeHintUpdates.Add(1)
 		return true
 	}
 	return false
@@ -675,7 +719,15 @@ func routeContainsKey(shard cachedRouteShard, key []byte) bool {
 	return true
 }
 
-func (g *Gateway) refreshRoutes(ctx context.Context) error {
+func (g *Gateway) refreshRoutes(ctx context.Context) (err error) {
+	if g != nil {
+		g.routing.routeRefreshes.Add(1)
+		defer func() {
+			if err != nil {
+				g.routing.routeRefreshFailures.Add(1)
+			}
+		}()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.bootstrapURL+"/cluster/routes", nil)
 	if err != nil {
 		return err

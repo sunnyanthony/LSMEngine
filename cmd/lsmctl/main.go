@@ -2015,6 +2015,7 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 		status.WriteLeaderEndpoint,
 		status.Reason,
 	)
+	writeGatewayRoutingStats(w, status.Routing)
 	writeGatewayStatusNodes(w, status.Nodes)
 }
 
@@ -2031,7 +2032,21 @@ func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
 		result.WriteLeader,
 		result.WriteLeaderEndpoint,
 	)
+	writeGatewayRoutingStats(w, result.Status.Routing)
 	writeGatewayStatusNodes(w, result.Status.Nodes)
+}
+
+func writeGatewayRoutingStats(w io.Writer, stats server.GatewayRoutingStats) {
+	fmt.Fprintf(
+		w,
+		"routing_write_attempts=%d routing_write_retries=%d routing_write_failures=%d routing_route_refreshes=%d routing_route_refresh_failures=%d routing_route_hint_updates=%d\n",
+		stats.WriteAttempts,
+		stats.WriteRetries,
+		stats.WriteFailures,
+		stats.RouteRefreshes,
+		stats.RouteRefreshFailures,
+		stats.RouteHintUpdates,
+	)
 }
 
 func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatus) {

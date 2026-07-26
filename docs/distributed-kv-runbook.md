@@ -96,6 +96,11 @@ The useful fields are:
   can currently be proposed;
 - `commit_log_runtime.health`: `ready` on the leader, `follower` on healthy
   followers, and `no_leader` or `unavailable` during election or quorum loss.
+- `lsmctl gateway-status` `routing_*` fields: process-local gateway routing
+  counters. Rising `routing_write_retries` with successful writes usually means
+  route hints or refreshes are masking stale metadata. Rising
+  `routing_write_failures` or `routing_route_refresh_failures` means the gateway
+  is no longer hiding the backend or metadata failure.
 - `Stats.WAL.SegmentCount`, `Stats.WAL.TotalBytes`, and related
   `lsmctl stats` `wal_*` fields: local WAL segment pressure for one node. Use
   them with SSTable and compaction stats to understand whether a node is
