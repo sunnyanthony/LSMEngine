@@ -5,12 +5,41 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lsmengine/pkg/lsm/types"
 
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
+
+func TestStateSnapshotRejectsUnsupportedControlVersion(t *testing.T) {
+	for _, version := range []int{-1, currentControlStateVersion + 1} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			store, err := New(Options{DataDir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			snapshot := lsmStateSnapshot{
+				Version: lsmStateSnapshotVersion,
+				Seq:     1, CommitLogAppliedIndex: 1,
+				Control: &controlPlaneState{Version: version},
+				Entries: []types.Entry{{Key: []byte("injected"), Value: []byte("value"), Seq: 1}},
+			}
+			payload, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.applyRaftStateSnapshot(1, payload); err == nil || !strings.Contains(err.Error(), "control state version") {
+				t.Fatalf("expected version rejection, got %v", err)
+			}
+			if _, ok := store.Get([]byte("injected")); ok || store.Stats().Seq != 0 {
+				t.Fatal("rejected snapshot mutated local data")
+			}
+		})
+	}
+}
 
 func TestStateSnapshotRestoresVisibleDataAndControlToEmptyEngine(t *testing.T) {
 	opts := func(dir string) Options {

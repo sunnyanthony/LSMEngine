@@ -127,7 +127,10 @@ type controlPlane struct {
 	appliedIndexObserver func(uint64)
 }
 
-const maxAppliedControlOps = 256
+const (
+	currentControlStateVersion = 1
+	maxAppliedControlOps       = 256
+)
 
 var errControlNoop = errors.New("control noop")
 
@@ -1039,12 +1042,25 @@ func (c *controlPlane) loadState() (*controlPlaneState, error) {
 		return nil, err
 	}
 	if state.Version == 0 {
-		state.Version = 1
+		state.Version = currentControlStateVersion
+	}
+	if err := validateControlStateVersion(state.Version); err != nil {
+		return nil, err
 	}
 	if err := validateControlPlaneState(&state); err != nil {
 		return nil, err
 	}
 	return &state, nil
+}
+
+func validateControlStateVersion(version int) error {
+	if version < 0 {
+		return fmt.Errorf("invalid control state version %d", version)
+	}
+	if version > currentControlStateVersion {
+		return fmt.Errorf("unsupported control state version %d (max supported %d)", version, currentControlStateVersion)
+	}
+	return nil
 }
 
 func validateControlPlaneState(state *controlPlaneState) error {
@@ -1100,7 +1116,7 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 		shards = append(shards, shard)
 	}
 	return controlPlaneState{
-		Version:               1,
+		Version:               currentControlStateVersion,
 		NodeID:                c.nodeID,
 		ClusterID:             c.clusterID,
 		StorageMode:           c.storageMode,
@@ -1115,6 +1131,9 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 }
 
 func (c *controlPlane) applyState(state controlPlaneState) error {
+	if err := validateControlStateVersion(state.Version); err != nil {
+		return err
+	}
 	c.draining = state.Draining
 	c.revision = state.Revision
 	c.commitLogAppliedIndex = state.CommitLogAppliedIndex

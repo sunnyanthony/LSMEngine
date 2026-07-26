@@ -217,6 +217,11 @@ func (l *LSM) resetToStateSnapshot(snapshot lsmStateSnapshot) error {
 }
 
 func validateLSMStateSnapshot(snapshot lsmStateSnapshot) error {
+	if snapshot.Control != nil {
+		if err := validateControlStateVersion(snapshot.Control.Version); err != nil {
+			return err
+		}
+	}
 	for _, entry := range snapshot.Entries {
 		if entry.Tombstone {
 			return fmt.Errorf("state snapshot contains tombstone entry")
