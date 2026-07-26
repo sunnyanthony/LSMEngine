@@ -22,6 +22,44 @@ type testNodeEndpointResolver struct {
 	endpoints map[string]string
 }
 
+func TestGatewayFreshestWithoutGateRejectsUnknownLag(t *testing.T) {
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a", ReadBalancePolicy: GatewayReadBalanceFreshest,
+		NodeEndpoints: map[string]string{"node-a": "http://node-a"},
+		HTTPClient:    newInMemoryHTTPClient(map[string]http.Handler{"node-a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{}`) })}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := gateway.readTargets(context.Background(), map[string]string{"node-a": "http://node-a"}, true)
+	if err == nil || len(targets) != 0 {
+		t.Fatalf("unknown lag accepted: %v %v", targets, err)
+	}
+}
+
+func TestGatewayStatusReadTargetsStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		cancel()
+		fmt.Fprint(w, `{"commit_log_runtime":{"apply_lag":0}}`)
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a", ReadBalancePolicy: GatewayReadBalanceFreshest,
+		NodeEndpoints: map[string]string{"node-a": "http://node-a", "node-b": "http://node-b"},
+		HTTPClient:    newInMemoryHTTPClient(map[string]http.Handler{"node-a": backend, "node-b": backend}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := gateway.readTargets(ctx, map[string]string{"node-a": "http://node-a", "node-b": "http://node-b"}, true)
+	if !errors.Is(err, context.Canceled) || len(targets) != 0 || calls.Load() != 1 {
+		t.Fatalf("canceled discovery continued: %v %v calls=%d", targets, err, calls.Load())
+	}
+}
+
 func TestGatewayReadLagRequiresExplicitObservation(t *testing.T) {
 	for _, payload := range []string{`{}`, `{"commit_log_runtime":{}}`, `{"commit_log_runtime":{"apply_lag":null}}`, `{"commit_log_runtime":{"apply_lag":0}}`} {
 		t.Run(payload, func(t *testing.T) {

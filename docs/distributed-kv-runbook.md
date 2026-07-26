@@ -252,6 +252,11 @@ request-status tracker is node-local.
 Use `--read-balance-policy ordered` or `gateway_read_balance_policy: "ordered"`
 to keep sorted endpoint order while still placing recently failed endpoints last.
 The default policy is `round_robin`; neither policy changes leader-only reads.
+Use `--read-balance-policy freshest` or `gateway_read_balance_policy: "freshest"`
+to probe status and sort KV read targets by lowest explicitly reported apply lag.
+Despite the name, this is not a comparison of globally newest data: a disconnected
+follower can report zero local lag while missing newer leader entries. Status
+sampling and reads are separate requests; this policy provides no read barrier.
 For `any` mode, `--max-read-apply-lag <n>` or
 `gateway_max_read_apply_lag: <n>` makes the gateway probe backend
 `/cluster/status` before `/kv/get` and `/kv/range`, then skip endpoints whose
