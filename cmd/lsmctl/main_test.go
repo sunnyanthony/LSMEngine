@@ -584,6 +584,7 @@ func TestWriteGatewayStatus(t *testing.T) {
 		NodeCount:           2,
 		ReachableNodes:      1,
 		ReadMode:            "leader",
+		ReadBalancePolicy:   "ordered",
 		WriteLeader:         "node-a",
 		WriteLeaderEndpoint: "http://127.0.0.1:8080",
 		Reason:              "partial_node_unavailable",
@@ -631,6 +632,7 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"node_count=2",
 		"reachable_nodes=1",
 		"read_mode=leader",
+		"read_balance_policy=ordered",
 		"write_leader=node-a",
 		"reason=partial_node_unavailable",
 		"routing_write_attempts=4",
@@ -666,7 +668,8 @@ func TestWriteGatewayWait(t *testing.T) {
 		WriteLeader:            "node-a",
 		WriteLeaderEndpoint:    "http://127.0.0.1:8080",
 		Status: server.GatewayClusterStatus{
-			ReadMode: "leader",
+			ReadMode:          "leader",
+			ReadBalancePolicy: "ordered",
 			Nodes: []server.GatewayClusterNodeStatus{
 				{
 					Node:     "node-a",
@@ -697,6 +700,7 @@ func TestWriteGatewayWait(t *testing.T) {
 		"required_reachable_nodes=3",
 		"require_write_leader=true",
 		"read_mode=leader",
+		"read_balance_policy=ordered",
 		"required_read_mode=leader",
 		"write_leader=node-a",
 		"node=node-a",

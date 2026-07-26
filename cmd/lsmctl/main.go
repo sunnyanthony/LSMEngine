@@ -205,6 +205,7 @@ func gatewayCmd(args []string) {
 	endpointDNSScheme := fs.String("endpoint-dns-scheme", "http", "URL scheme for DNS-discovered node endpoints")
 	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
 	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
+	readBalancePolicy := fs.String("read-balance-policy", "", "gateway read balance policy (round_robin|ordered)")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
 	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; 0 uses config/default")
@@ -253,6 +254,10 @@ func gatewayCmd(args []string) {
 	if gatewayReadMode == "" {
 		gatewayReadMode = cfg.GatewayReadMode
 	}
+	gatewayReadBalancePolicy := *readBalancePolicy
+	if gatewayReadBalancePolicy == "" {
+		gatewayReadBalancePolicy = cfg.GatewayReadBalancePolicy
+	}
 	gatewayMaxWriteAttempts := selectedGatewayMaxWriteAttempts(cfg, *maxWriteAttempts, maxWriteAttemptsSet)
 	gatewayWriteRetryBackoff := selectedGatewayWriteRetryBackoff(cfg, *writeRetryBackoff, writeRetryBackoffSet)
 	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
@@ -271,6 +276,7 @@ func gatewayCmd(args []string) {
 		BootstrapURL:            normalizeHTTPBaseURL(*bootstrapURL),
 		NodeEndpointResolver:    resolver,
 		ReadMode:                server.GatewayReadMode(gatewayReadMode),
+		ReadBalancePolicy:       server.GatewayReadBalancePolicy(gatewayReadBalancePolicy),
 		MaxWriteAttempts:        gatewayMaxWriteAttempts,
 		WriteRetryBackoff:       gatewayWriteRetryBackoff,
 		AlignWriteLeader:        true,
@@ -2097,11 +2103,12 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 	fmt.Fprintf(
 		w,
-		"ready=%v node_count=%d reachable_nodes=%d read_mode=%s write_leader=%s write_leader_endpoint=%s reason=%s\n",
+		"ready=%v node_count=%d reachable_nodes=%d read_mode=%s read_balance_policy=%s write_leader=%s write_leader_endpoint=%s reason=%s\n",
 		status.Ready,
 		status.NodeCount,
 		status.ReachableNodes,
 		status.ReadMode,
+		status.ReadBalancePolicy,
 		status.WriteLeader,
 		status.WriteLeaderEndpoint,
 		status.Reason,
@@ -2113,12 +2120,13 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
 	fmt.Fprintf(
 		w,
-		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
+		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s read_balance_policy=%s required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
 		result.Ready,
 		result.ReachableNodes,
 		result.RequiredReachableNodes,
 		result.RequireWriteLeader,
 		result.Status.ReadMode,
+		result.Status.ReadBalancePolicy,
 		result.RequiredReadMode,
 		result.WriteLeader,
 		result.WriteLeaderEndpoint,
