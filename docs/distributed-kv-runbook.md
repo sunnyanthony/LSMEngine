@@ -114,8 +114,9 @@ The useful fields are:
   `wal_max_segment_bytes` can bound active WAL segment size.
 - Server-mode `GET /metrics`: text scrape surface for the same node-local LSM,
   WAL, compaction, write-backpressure, and point-read counters exposed by
-  `Stats()`. Use it for per-node monitoring; it is not a cluster-wide durability
-  or replication health summary.
+  `Stats()`. It includes the configured compaction/backpressure/WAL thresholds
+  so alerts can compare pressure against policy. Use it for per-node monitoring;
+  it is not a cluster-wide durability or replication health summary.
   `wal_retain_archived_segments` can prune checkpointed archived WAL prefixes
   while retaining the configured number of newest archived segments; this is
   node-local storage cleanup, not a distributed replication health signal.
