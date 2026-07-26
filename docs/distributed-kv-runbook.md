@@ -119,8 +119,9 @@ The useful fields are:
   node-local storage cleanup, not a distributed replication health signal.
 - Server-mode `GET /metrics`: text scrape surface for the same node-local LSM,
   WAL, compaction, write-backpressure, and point-read counters exposed by
-  `Stats()`. Use it for per-node monitoring; it is not a cluster-wide durability
-  or replication health summary.
+  `Stats()`. It includes the configured compaction/backpressure/WAL thresholds
+  so alerts can compare pressure against policy. Use it for per-node monitoring;
+  it is not a cluster-wide durability or replication health summary.
 
 ## Manual KV Commands
 
