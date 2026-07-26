@@ -733,6 +733,14 @@ func TestWriteGatewayStatus(t *testing.T) {
 				Node:     "node-a",
 				Endpoint: "http://127.0.0.1:8080",
 				OK:       true,
+				Routing: server.GatewayBackendStats{
+					ReadAttempts:         2,
+					ReadSuccesses:        2,
+					WriteAttempts:        3,
+					WriteSuccesses:       3,
+					StatusProbeAttempts:  4,
+					StatusProbeSuccesses: 4,
+				},
 				Status: &lsm.ClusterStatus{
 					NodeID:     "node-a",
 					Revision:   5,
@@ -754,7 +762,13 @@ func TestWriteGatewayStatus(t *testing.T) {
 				Endpoint:      "http://127.0.0.1:8083",
 				Degraded:      true,
 				DegradedUntil: "2026-07-25T12:00:00Z",
-				Error:         "connection refused",
+				Routing: server.GatewayBackendStats{
+					ReadAttempts:        1,
+					ReadFailures:        1,
+					StatusProbeAttempts: 2,
+					StatusProbeFailures: 2,
+				},
+				Error: "connection refused",
 			},
 		},
 	})
@@ -782,10 +796,18 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"health=ready",
 		"applied_index=10",
 		"apply_lag=2",
+		"backend_read_attempts=2",
+		"backend_read_successes=2",
+		"backend_write_attempts=3",
+		"backend_write_successes=3",
+		"backend_status_probe_attempts=4",
+		"backend_status_probe_successes=4",
 		"node=node-d",
 		"ok=false",
 		"degraded=true",
 		"degraded_until=2026-07-25T12:00:00Z",
+		"backend_read_failures=1",
+		"backend_status_probe_failures=2",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)

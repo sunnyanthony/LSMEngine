@@ -100,7 +100,10 @@ The useful fields are:
   counters. Rising `routing_write_retries` with successful writes usually means
   route hints or refreshes are masking stale metadata. Rising
   `routing_write_failures` or `routing_route_refresh_failures` means the gateway
-  is no longer hiding the backend or metadata failure.
+  is no longer hiding the backend or metadata failure. Each backend line also
+  includes process-local `backend_*` counters for read, write, and status-probe
+  attempts/successes/failures so operators can identify which endpoint is
+  unstable before adding richer weighting or external supervision.
   Tune bounded write retry behavior with `lsmctl gateway --max-write-attempts`,
   `lsmctl gateway --write-retry-backoff`, or the matching
   `gateway_max_write_attempts` / `gateway_write_retry_backoff` config keys.
@@ -262,7 +265,10 @@ includes `read_mode`, `read_balance_policy`, `max_read_apply_lag`, per-backend
 configured and when gateway routing is temporarily avoiding an endpoint. The
 status routing block also includes process-local `read_attempts`, `read_fallbacks`, and
 `read_failures` counters so operators can see whether fallback is doing useful
-work or masking backend instability.
+work or masking backend instability. Per-backend status lines and metrics expose
+process-local read/write/status-probe attempts, successes, and failures for the
+same reason; these counters are diagnostic hints, not durable cluster-wide
+history.
 `/gateway/metrics` exposes the same gateway readiness, backend health, apply
 lag, and routing counters in Prometheus text format for scraping. It is still
 process-local gateway telemetry, not a durable cluster-wide metrics store.

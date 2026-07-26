@@ -149,6 +149,14 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 	if stats.RouteRefreshes != 1 || stats.RouteRefreshFailures != 0 || stats.RouteHintUpdates != 1 {
 		t.Fatalf("unexpected route stats: %+v", stats)
 	}
+	nodeAStats := gateway.endpointRoutingStats("http://node-a")
+	if nodeAStats.WriteAttempts != 1 || nodeAStats.WriteFailures != 1 || nodeAStats.WriteSuccesses != 0 {
+		t.Fatalf("unexpected node-a write stats: %+v", nodeAStats)
+	}
+	nodeBStats := gateway.endpointRoutingStats("http://node-b")
+	if nodeBStats.WriteAttempts != 1 || nodeBStats.WriteFailures != 0 || nodeBStats.WriteSuccesses != 1 {
+		t.Fatalf("unexpected node-b write stats: %+v", nodeBStats)
+	}
 }
 
 func TestGatewayPutReturnsWriteRequestError(t *testing.T) {

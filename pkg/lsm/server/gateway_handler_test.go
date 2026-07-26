@@ -152,6 +152,14 @@ func TestGatewayHandlerGetFallsBackAcrossEndpoints(t *testing.T) {
 	if stats.ReadAttempts != 2 || stats.ReadFallbacks != 1 || stats.ReadFailures != 0 {
 		t.Fatalf("unexpected read routing stats after fallback success: %+v", stats)
 	}
+	nodeAStats := gateway.endpointRoutingStats("http://node-a")
+	if nodeAStats.ReadAttempts != 1 || nodeAStats.ReadFailures != 1 || nodeAStats.ReadSuccesses != 0 {
+		t.Fatalf("unexpected node-a read stats: %+v", nodeAStats)
+	}
+	nodeBStats := gateway.endpointRoutingStats("http://node-b")
+	if nodeBStats.ReadAttempts != 1 || nodeBStats.ReadFailures != 0 || nodeBStats.ReadSuccesses != 1 {
+		t.Fatalf("unexpected node-b read stats: %+v", nodeBStats)
+	}
 }
 
 func TestGatewayHandlerGetRecordsReadFailureStats(t *testing.T) {
@@ -913,6 +921,9 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 		if node.Degraded || node.DegradedUntil != "" {
 			t.Fatalf("successful status probe should clear degraded state: %+v", node)
 		}
+		if node.Routing.StatusProbeAttempts != 1 || node.Routing.StatusProbeSuccesses != 1 || node.Routing.StatusProbeFailures != 0 {
+			t.Fatalf("expected one successful status probe in backend stats: %+v", node)
+		}
 	}
 }
 
@@ -976,6 +987,9 @@ func TestGatewayHandlerMetricsExportsStatusAndRouting(t *testing.T) {
 		`lsm_gateway_backend_up{node="node-a"} 1`,
 		`lsm_gateway_backend_write_available{node="node-a"} 1`,
 		`lsm_gateway_backend_apply_lag{node="node-a"} 2`,
+		`lsm_gateway_backend_status_probe_attempts_total{node="node-a"} 1`,
+		`lsm_gateway_backend_status_probe_successes_total{node="node-a"} 1`,
+		`lsm_gateway_backend_status_probe_failures_total{node="node-a"} 0`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected metrics to contain %q, got:\n%s", want, out)
