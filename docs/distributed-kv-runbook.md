@@ -222,7 +222,10 @@ Gateway reads default to `--read-mode any`, which uses best-effort endpoint
 fallback and `--read-balance-policy round_robin` healthy-endpoint rotation. Use
 `--read-balance-policy ordered` or `gateway_read_balance_policy: "ordered"` when
 the gateway should keep sorted endpoint order while still deferring recently
-failed endpoints behind healthy ones. The Compose and kind gateway examples use
+failed endpoints behind healthy ones. Use `--read-balance-policy freshest` or
+`gateway_read_balance_policy: "freshest"` when any-mode KV reads should first
+probe backend `/cluster/status` and prefer the reachable backend with the lowest
+reported `commit_log_runtime.apply_lag`. The Compose and kind gateway examples use
 `--read-mode leader`, which sends `/kv/get` and `/kv/range` only to the current
 commit-log write leader and returns unavailable when no leader can be
 identified. This avoids stale follower reads for clients that want to prefer the

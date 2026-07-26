@@ -739,6 +739,138 @@ func TestGatewayHandlerGetFailsWhenAllReadBackendsLag(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerGetFreshestReadBalancePrefersLowestApplyLag(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:       "follower",
+					AppliedIndex: 5,
+					ApplyLag:     5,
+				},
+			})
+		case "/kv/get":
+			nodeAReads.Add(1)
+			writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 5})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:       "follower",
+					AppliedIndex: 9,
+					ApplyLag:     1,
+				},
+			})
+		case "/kv/get":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 9})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		ReadBalancePolicy: GatewayReadBalanceFreshest,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected freshest backend read first, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
+func TestGatewayHandlerRangeFreshestReadBalancePrefersLowestApplyLag(t *testing.T) {
+	var nodeAReads atomic.Int32
+	var nodeBReads atomic.Int32
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:   "follower",
+					ApplyLag: 5,
+				},
+			})
+		case "/kv/range":
+			nodeAReads.Add(1)
+			writeJSON(w, http.StatusOK, rangeResponse{
+				Entries: []rangeEntryResponse{{KeyBase64: "YQ==", ValueBase64: "MQ==", Seq: 5}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:   "follower",
+					ApplyLag: 1,
+				},
+			})
+		case "/kv/range":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, rangeResponse{
+				Entries: []rangeEntryResponse{{KeyBase64: "Yg==", ValueBase64: "Mg==", Seq: 9}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		ReadBalancePolicy: GatewayReadBalanceFreshest,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/range?start_key_base64=YQ==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected freshest backend range read first, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+}
+
 func TestGatewayHandlerGetDefersRecentlyFailedEndpoint(t *testing.T) {
 	var nodeAReads atomic.Int32
 	var nodeBReads atomic.Int32
