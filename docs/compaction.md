@@ -77,6 +77,8 @@ control plane decoupled from IO.
   `POST /compact` or `lsmctl compact --addr <url>`. This is a scheduling trigger,
   not a forced rewrite: the configured planner still decides whether current
   table metadata satisfies compaction policy.
+- `CompactionCheckInterval` / `compaction_check_interval` can also wake the same
+  runtime periodically for long-running nodes. `0` disables periodic checks.
 - `Stats()` and `/stats` report L0 table count/bytes and whether the configured
   L0 threshold has been reached. This is currently a pressure signal for
   operators and tests, not a complete debt scheduler.

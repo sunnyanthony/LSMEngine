@@ -84,6 +84,7 @@ type Stats struct {
 	L0TableCount              int
 	L0SizeBytes               uint64
 	CompactionL0Threshold     int
+	CompactionCheckIntervalMS int64
 	CompactionPending         bool
 	PointReads                uint64
 	PointReadMemtableHits     uint64
@@ -143,6 +144,7 @@ func (l *LSM) Stats() Stats {
 		out.applySSTableStats(l.tables.Snapshot())
 	}
 	out.CompactionL0Threshold = l.compactionL0Threshold
+	out.CompactionCheckIntervalMS = l.compactionCheckInterval.Milliseconds()
 	out.CompactionPending = out.CompactionEnabled &&
 		out.CompactionL0Threshold > 0 &&
 		out.L0TableCount >= out.CompactionL0Threshold

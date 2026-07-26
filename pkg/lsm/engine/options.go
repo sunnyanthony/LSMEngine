@@ -46,6 +46,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.CompactionBackpressureL0Threshold < 0 {
 		return opts, fmt.Errorf("compaction backpressure l0 threshold must be non-negative")
 	}
+	if opts.CompactionCheckInterval < 0 {
+		return opts, fmt.Errorf("compaction check interval must be non-negative")
+	}
 	if opts.BusBuffer == 0 {
 		opts.BusBuffer = 16
 	}

@@ -115,7 +115,8 @@ The useful fields are:
 - Server-mode `GET /metrics`: text scrape surface for the same node-local LSM,
   WAL, compaction, write-backpressure, and point-read counters exposed by
   `Stats()`. It includes the configured compaction/backpressure/WAL thresholds
-  so alerts can compare pressure against policy. Use it for per-node monitoring;
+  and periodic compaction check interval so alerts can compare pressure against
+  policy. Use it for per-node monitoring;
   it is not a cluster-wide durability or replication health summary.
   `wal_retain_archived_segments` can prune checkpointed archived WAL prefixes
   while retaining the configured number of newest archived segments; this is
@@ -124,6 +125,9 @@ The useful fields are:
   compaction runtime. This is useful after inspecting L0/table pressure, but it
   does not bypass the planner's configured policy and is not a cluster-wide
   rebalance or repair operation.
+- `compaction_check_interval` can perform the same node-local wakeup
+  periodically for long-running nodes. Keep it disabled with `0` when flush and
+  manual triggers are enough.
 
 ## Manual KV Commands
 

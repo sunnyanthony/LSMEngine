@@ -3,6 +3,7 @@ package engine
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNormalizeOptionsDefaults(t *testing.T) {
@@ -57,6 +58,12 @@ func TestNormalizeOptionsRejectsNegativeBackpressureThresholds(t *testing.T) {
 		CompactionBackpressureL0Threshold: -1,
 	}); err == nil {
 		t.Fatalf("expected error for negative compaction backpressure threshold")
+	}
+	if _, err := normalizeOptions(Options{
+		DataDir:                 t.TempDir(),
+		CompactionCheckInterval: -time.Second,
+	}); err == nil {
+		t.Fatalf("expected error for negative compaction check interval")
 	}
 }
 
