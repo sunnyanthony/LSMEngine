@@ -53,6 +53,11 @@ write_consistency_default: "accepted"
 # gateway_max_write_attempts: 2
 # gateway_write_retry_backoff: "0s"
 # gateway_endpoint_failure_cooldown: "5s"
+# gateway_endpoint_file: "/etc/lsm/node-endpoints.yaml"
+# gateway_endpoint_dns_name: "lsm-cluster.lsm-cluster.svc.cluster.local"
+# gateway_endpoint_dns_service: "http"
+# gateway_endpoint_dns_proto: "tcp"
+# gateway_endpoint_dns_scheme: "http"
 # Optional local storage tuning. Backpressure thresholds are disabled when 0.
 # memtable_limit: 1048576
 # wal_max_segment_bytes: 67108864

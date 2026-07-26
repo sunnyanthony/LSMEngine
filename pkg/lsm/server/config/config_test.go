@@ -49,6 +49,11 @@ gateway_read_mode: "leader"
 gateway_max_write_attempts: 4
 gateway_write_retry_backoff: "25ms"
 gateway_endpoint_failure_cooldown: "750ms"
+gateway_endpoint_file: "/var/lib/lsm/gateway-endpoints.yaml"
+gateway_endpoint_dns_name: "lsm-cluster.lsm-cluster.svc.cluster.local"
+gateway_endpoint_dns_service: "http"
+gateway_endpoint_dns_proto: "tcp"
+gateway_endpoint_dns_scheme: "http"
 memtable_limit: 2048
 wal_max_segment_bytes: 4096
 wal_retain_archived_segments: 2
@@ -127,6 +132,21 @@ io_async_max_in_flight: 8
 	}
 	if cfg.GatewayEndpointFailureCooldown != 750*time.Millisecond {
 		t.Fatalf("expected gateway endpoint failure cooldown, got %v", cfg.GatewayEndpointFailureCooldown)
+	}
+	if cfg.GatewayEndpointFile != "/var/lib/lsm/gateway-endpoints.yaml" {
+		t.Fatalf("expected gateway endpoint file, got %q", cfg.GatewayEndpointFile)
+	}
+	if cfg.GatewayEndpointDNSName != "lsm-cluster.lsm-cluster.svc.cluster.local" {
+		t.Fatalf("expected gateway endpoint dns name, got %q", cfg.GatewayEndpointDNSName)
+	}
+	if cfg.GatewayEndpointDNSService != "http" {
+		t.Fatalf("expected gateway endpoint dns service, got %q", cfg.GatewayEndpointDNSService)
+	}
+	if cfg.GatewayEndpointDNSProto != "tcp" {
+		t.Fatalf("expected gateway endpoint dns proto, got %q", cfg.GatewayEndpointDNSProto)
+	}
+	if cfg.GatewayEndpointDNSScheme != "http" {
+		t.Fatalf("expected gateway endpoint dns scheme, got %q", cfg.GatewayEndpointDNSScheme)
 	}
 	if cfg.MemtableLimit != 2048 {
 		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)
