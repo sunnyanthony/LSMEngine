@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -638,58 +639,70 @@ func TestGatewayCurrentWriteLeaderDefersRecentlyFailedEndpoint(t *testing.T) {
 }
 
 func TestGatewayStopsAfterMaxWriteAttempts(t *testing.T) {
-	var writes atomic.Int32
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/cluster/routes":
-			writeJSON(w, http.StatusOK, routingResponse{
-				Revision: 1,
-				Shards: []routingShard{
-					{
-						ID:             "users",
-						StartKeyBase64: "YQ==",
-						EndKeyBase64:   "eg==",
-						Leader:         "node-a",
-					},
+	for _, limit := range []int{0, 1, 3} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			want := limit
+			if want == 0 {
+				want = 2
+			}
+			var writes atomic.Int32
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/cluster/routes":
+					writeJSON(w, http.StatusOK, routingResponse{
+						Revision: 1,
+						Shards: []routingShard{
+							{
+								ID:             "users",
+								StartKeyBase64: "YQ==",
+								EndKeyBase64:   "eg==",
+								Leader:         "node-a",
+							},
+						},
+					})
+				case "/kv/put":
+					writes.Add(1)
+					writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
+						Error:     "commit log unavailable",
+						Code:      "commit_log_unavailable",
+						Retryable: true,
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			})
+
+			gateway, err := NewGateway(GatewayOptions{
+				BootstrapURL: "http://node-a",
+				NodeEndpoints: map[string]string{
+					"node-a": "http://node-a",
 				},
+				HTTPClient:       newInMemoryHTTPClient(map[string]http.Handler{"node-a": handler}),
+				MaxWriteAttempts: limit,
 			})
-		case "/kv/put":
-			writes.Add(1)
-			writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
-				Error:     "commit log unavailable",
-				Code:      "commit_log_unavailable",
-				Retryable: true,
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	})
+			if err != nil {
+				t.Fatalf("new gateway: %v", err)
+			}
 
-	gateway, err := NewGateway(GatewayOptions{
-		BootstrapURL: "http://node-a",
-		NodeEndpoints: map[string]string{
-			"node-a": "http://node-a",
-		},
-		HTTPClient:       newInMemoryHTTPClient(map[string]http.Handler{"node-a": handler}),
-		MaxWriteAttempts: 3,
-	})
-	if err != nil {
-		t.Fatalf("new gateway: %v", err)
-	}
-
-	_, err = gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	reqErr, ok := err.(*WriteRequestError)
-	if !ok {
-		t.Fatalf("expected WriteRequestError, got %T", err)
-	}
-	if reqErr.Response.Code != "commit_log_unavailable" {
-		t.Fatalf("expected commit_log_unavailable, got %s", reqErr.Response.Code)
-	}
-	if writes.Load() != 3 {
-		t.Fatalf("expected 3 bounded attempts, got %d", writes.Load())
+			_, err = gateway.Put(context.Background(), []byte("c"), []byte("1"), lsm.WriteConsistencyLocalCommitted)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			reqErr, ok := err.(*WriteRequestError)
+			if !ok {
+				t.Fatalf("expected WriteRequestError, got %T", err)
+			}
+			if reqErr.Response.Code != "commit_log_unavailable" {
+				t.Fatalf("expected commit_log_unavailable, got %s", reqErr.Response.Code)
+			}
+			if writes.Load() != int32(want) {
+				t.Fatalf("expected %d bounded attempts, got %d", want, writes.Load())
+			}
+			stats := gateway.RoutingStats()
+			if stats.WriteAttempts != uint64(want) || stats.WriteRetries != uint64(want-1) || stats.WriteFailures != 1 {
+				t.Fatalf("unexpected exhausted retry stats: %+v", stats)
+			}
+		})
 	}
 }
 
@@ -788,6 +801,20 @@ func TestGatewayEndpointHealthExpiry(t *testing.T) {
 				t.Fatalf("routing order disagrees with reported health: %v", ids)
 			}
 		})
+	}
+}
+
+func TestGatewayRejectsNegativeWriteRetryBackoff(t *testing.T) {
+	_, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		NodeEndpoints:     map[string]string{"node-a": "http://node-a"},
+		WriteRetryBackoff: -time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "write retry backoff must be non-negative") {
+		t.Fatalf("expected write retry backoff error, got %v", err)
 	}
 }
 

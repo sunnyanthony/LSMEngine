@@ -160,6 +160,9 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	if maxAttempts == 0 {
 		maxAttempts = 2
 	}
+	if opts.WriteRetryBackoff < 0 {
+		return nil, fmt.Errorf("write retry backoff must be non-negative")
+	}
 	readMode := opts.ReadMode
 	if readMode == "" {
 		readMode = GatewayReadModeAny
