@@ -144,6 +144,9 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `gateway_max_write_attempts` maps to `lsmctl gateway --max-write-attempts` and bounds retryable route-aware write forwarding. `0` uses the gateway default.
   - `gateway_write_retry_backoff` maps to `lsmctl gateway --write-retry-backoff` and controls the delay between retryable write attempts. `0` keeps retries immediate.
   - `gateway_endpoint_failure_cooldown` maps to `lsmctl gateway --endpoint-failure-cooldown` and controls how long recent transport failures or 5xx backend responses are deprioritized behind healthy endpoints. `0` uses the gateway default.
+  - `gateway_endpoint_file` maps to `lsmctl gateway --endpoint-file` and points at a reloaded YAML/JSON node-name to backend URL map.
+  - `gateway_endpoint_dns_name`, `gateway_endpoint_dns_service`, `gateway_endpoint_dns_proto`, and `gateway_endpoint_dns_scheme` map to the `--endpoint-dns-*` flags for DNS SRV backend discovery.
+  - `gateway_endpoint_file` and `gateway_endpoint_dns_name` are mutually exclusive. Explicit gateway CLI flags override config, including DNS service/proto/scheme values that otherwise have CLI defaults.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.
 - Keep the app server thin; let the proxy handle most ingress concerns.
 - End-to-end example (Envoy + kind): `examples/k8s-envoy/`.
