@@ -66,6 +66,7 @@ write_consistency_default: "accepted"
 # wal_retain_archived_segments: 2
 # flush_queue_size: 4
 # compaction_l0_threshold: 4
+# compaction_check_interval: "30s"
 # flush_backpressure_queue_threshold: 0
 # compaction_backpressure_l0_threshold: 0
 # io_backend: "async"

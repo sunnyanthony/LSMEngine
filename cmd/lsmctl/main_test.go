@@ -896,6 +896,7 @@ func TestWriteGatewayWait(t *testing.T) {
 func TestWriteStatsIncludesWALStats(t *testing.T) {
 	var buf bytes.Buffer
 	writeStats(&buf, lsm.Stats{
+		CompactionCheckIntervalMS: 2500,
 		WAL: lsm.WALStats{
 			SegmentID:              4,
 			SegmentCount:           3,
@@ -917,6 +918,7 @@ func TestWriteStatsIncludesWALStats(t *testing.T) {
 	})
 	out := buf.String()
 	for _, want := range []string{
+		"compaction_check_interval_ms=2500",
 		"wal_segment_id=4",
 		"wal_segments=3",
 		"wal_archived_segments=2",

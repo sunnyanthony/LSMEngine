@@ -150,6 +150,7 @@ func serveCmd(args []string) {
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,
+		CompactionCheckInterval:           cfg.CompactionCheckInterval,
 		CompactionBackpressureL0Threshold: cfg.CompactionBackpressureL0Threshold,
 		IOBackend:                         *ioBackend,
 		IOBackendStrict:                   *ioBackendStrict,
@@ -504,6 +505,7 @@ func writeStats(w io.Writer, stats lsm.Stats) {
 	fmt.Fprintf(w, "l0_sstables=%d\n", stats.L0TableCount)
 	fmt.Fprintf(w, "l0_bytes=%d\n", stats.L0SizeBytes)
 	fmt.Fprintf(w, "compaction_l0_threshold=%d\n", stats.CompactionL0Threshold)
+	fmt.Fprintf(w, "compaction_check_interval_ms=%d\n", stats.CompactionCheckIntervalMS)
 	fmt.Fprintf(w, "compaction_pending=%v\n", stats.CompactionPending)
 	for _, level := range stats.SSTableLevels {
 		fmt.Fprintf(w, "level=%d sstables=%d bytes=%d\n", level.Level, level.TableCount, level.SizeBytes)

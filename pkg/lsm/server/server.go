@@ -221,6 +221,8 @@ func writeServerMetrics(w io.Writer, stats lsm.Stats) {
 	writeMetricGauge(w, "lsm_engine_l0_bytes", float64(stats.L0SizeBytes))
 	writeMetricHelp(w, "lsm_engine_compaction_l0_threshold", "Configured L0 SSTable count threshold that marks compaction pending.")
 	writeMetricGauge(w, "lsm_engine_compaction_l0_threshold", float64(stats.CompactionL0Threshold))
+	writeMetricHelp(w, "lsm_engine_compaction_check_interval_seconds", "Configured periodic compaction runtime wake interval in seconds.")
+	writeMetricGauge(w, "lsm_engine_compaction_check_interval_seconds", float64(stats.CompactionCheckIntervalMS)/1000)
 	writeMetricHelp(w, "lsm_engine_compaction_pending", "Whether L0 has reached the configured compaction threshold.")
 	writeMetricGauge(w, "lsm_engine_compaction_pending", boolMetric(stats.CompactionPending))
 
