@@ -435,6 +435,8 @@ func waitGatewayCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	addr := fs.String("addr", "", "gateway HTTP address")
 	minReachable := fs.Int("min-reachable", 0, "minimum reachable backend nodes required; 0 requires all nodes reported by the gateway")
+	minReadReady := fs.Int("min-read-ready", 0, "minimum read-ready backend nodes within --max-read-apply-lag; 0 requires one when max lag is enabled")
+	maxReadApplyLag := fs.Int64("max-read-apply-lag", -1, "maximum backend apply lag for read-ready nodes; -1 disables the gate")
 	requireWriteLeader := fs.Bool("write-leader", true, "require a backend write leader")
 	readMode := fs.String("read-mode", "", "required gateway read mode; empty disables the gate")
 	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
@@ -447,8 +449,18 @@ func waitGatewayCmd(args []string) {
 	if *addr == "" {
 		*addr = cfg.Addr
 	}
+	var maxReadApplyLagOpt *uint64
+	if *maxReadApplyLag < -1 {
+		log.Fatal("max-read-apply-lag must be -1 or non-negative")
+	}
+	if *maxReadApplyLag >= 0 {
+		value := uint64(*maxReadApplyLag)
+		maxReadApplyLagOpt = &value
+	}
 	result, err := waitGatewayStatus(*addr, waitGatewayOptions{
 		RequiredReachableNodes: *minReachable,
+		RequiredReadReadyNodes: *minReadReady,
+		MaxReadApplyLag:        maxReadApplyLagOpt,
 		RequireWriteLeader:     *requireWriteLeader,
 		RequiredReadMode:       *readMode,
 		Timeout:                *timeout,
@@ -749,6 +761,9 @@ type gatewayWaitResult struct {
 	Ready                  bool                        `json:"ready"`
 	ReachableNodes         int                         `json:"reachable_nodes"`
 	RequiredReachableNodes int                         `json:"required_reachable_nodes"`
+	ReadReadyNodes         int                         `json:"read_ready_nodes,omitempty"`
+	RequiredReadReadyNodes int                         `json:"required_read_ready_nodes,omitempty"`
+	MaxReadApplyLag        *uint64                     `json:"max_read_apply_lag,omitempty"`
 	RequireWriteLeader     bool                        `json:"require_write_leader"`
 	RequiredReadMode       string                      `json:"required_read_mode,omitempty"`
 	WriteLeader            string                      `json:"write_leader,omitempty"`
@@ -758,6 +773,8 @@ type gatewayWaitResult struct {
 
 type waitGatewayOptions struct {
 	RequiredReachableNodes int
+	RequiredReadReadyNodes int
+	MaxReadApplyLag        *uint64
 	RequireWriteLeader     bool
 	RequiredReadMode       string
 	Timeout                time.Duration
@@ -2004,6 +2021,12 @@ func waitGatewayStatus(addr string, opts waitGatewayOptions) (gatewayWaitResult,
 	if opts.RequiredReachableNodes < 0 {
 		return gatewayWaitResult{}, fmt.Errorf("min-reachable must be non-negative")
 	}
+	if opts.RequiredReadReadyNodes < 0 {
+		return gatewayWaitResult{}, fmt.Errorf("min-read-ready must be non-negative")
+	}
+	if opts.RequiredReadReadyNodes > 0 && opts.MaxReadApplyLag == nil {
+		return gatewayWaitResult{}, fmt.Errorf("min-read-ready requires max-read-apply-lag")
+	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 60 * time.Second
 	}
@@ -2042,6 +2065,15 @@ func waitGatewayStatus(addr string, opts waitGatewayOptions) (gatewayWaitResult,
 			if opts.RequiredReadMode != "" {
 				message = fmt.Sprintf("%s read_mode=%s required_read_mode=%s", message, last.Status.ReadMode, opts.RequiredReadMode)
 			}
+			if opts.MaxReadApplyLag != nil {
+				message = fmt.Sprintf(
+					"%s read_ready_nodes=%d/%d max_read_apply_lag=%d",
+					message,
+					last.ReadReadyNodes,
+					last.RequiredReadReadyNodes,
+					*opts.MaxReadApplyLag,
+				)
+			}
 			return last, errors.New(message)
 		}
 		time.Sleep(opts.Interval)
@@ -2062,6 +2094,8 @@ func evaluateGatewayWait(status server.GatewayClusterStatus, opts waitGatewayOpt
 	result := gatewayWaitResult{
 		ReachableNodes:         status.ReachableNodes,
 		RequiredReachableNodes: requiredReachable,
+		RequiredReadReadyNodes: opts.RequiredReadReadyNodes,
+		MaxReadApplyLag:        opts.MaxReadApplyLag,
 		RequireWriteLeader:     opts.RequireWriteLeader,
 		RequiredReadMode:       opts.RequiredReadMode,
 		WriteLeader:            status.WriteLeader,
@@ -2075,7 +2109,32 @@ func evaluateGatewayWait(status server.GatewayClusterStatus, opts waitGatewayOpt
 	if opts.RequiredReadMode != "" {
 		result.Ready = result.Ready && status.ReadMode == opts.RequiredReadMode
 	}
+	if opts.MaxReadApplyLag != nil {
+		requiredReadReady := opts.RequiredReadReadyNodes
+		if requiredReadReady == 0 {
+			requiredReadReady = 1
+		}
+		result.RequiredReadReadyNodes = requiredReadReady
+		result.ReadReadyNodes = gatewayReadReadyNodes(status.Nodes, *opts.MaxReadApplyLag)
+		result.Ready = result.Ready && result.ReadReadyNodes >= requiredReadReady
+	}
 	return result
+}
+
+func gatewayReadReadyNodes(nodes []server.GatewayClusterNodeStatus, maxApplyLag uint64) int {
+	count := 0
+	for _, node := range nodes {
+		if !node.OK || node.Status == nil {
+			continue
+		}
+		if !commitLogRuntimeReadReady(node.Status.CommitLogRuntime.Health) {
+			continue
+		}
+		if node.Status.CommitLogRuntime.ApplyLag <= maxApplyLag {
+			count++
+		}
+	}
+	return count
 }
 
 func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterWaitResult, error) {
@@ -2234,12 +2293,19 @@ func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
 	if result.Status.MaxReadApplyLag != nil {
 		maxReadApplyLag = int64(*result.Status.MaxReadApplyLag)
 	}
+	waitMaxReadApplyLag := int64(-1)
+	if result.MaxReadApplyLag != nil {
+		waitMaxReadApplyLag = int64(*result.MaxReadApplyLag)
+	}
 	fmt.Fprintf(
 		w,
-		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s read_balance_policy=%s max_read_apply_lag=%d required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
+		"ready=%v reachable_nodes=%d required_reachable_nodes=%d read_ready_nodes=%d required_read_ready_nodes=%d wait_max_read_apply_lag=%d require_write_leader=%v read_mode=%s read_balance_policy=%s max_read_apply_lag=%d required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
 		result.Ready,
 		result.ReachableNodes,
 		result.RequiredReachableNodes,
+		result.ReadReadyNodes,
+		result.RequiredReadReadyNodes,
+		waitMaxReadApplyLag,
 		result.RequireWriteLeader,
 		result.Status.ReadMode,
 		result.Status.ReadBalancePolicy,
@@ -2893,7 +2959,11 @@ func clusterNodeReplacementHealthy(node clusterStatusNodeResult) bool {
 	if node.Error != "" || node.Status == nil {
 		return false
 	}
-	health := strings.TrimSpace(node.Status.CommitLogRuntime.Health)
+	return commitLogRuntimeReadReady(node.Status.CommitLogRuntime.Health)
+}
+
+func commitLogRuntimeReadReady(health string) bool {
+	health = strings.TrimSpace(health)
 	return health == "ready" || health == "follower"
 }
 

@@ -668,6 +668,152 @@ func TestWaitGatewayStatusReady(t *testing.T) {
 	}
 }
 
+func TestWaitGatewayStatusReadReadyGate(t *testing.T) {
+	maxLag := uint64(2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(server.GatewayClusterStatus{
+			Ready:          true,
+			NodeCount:      2,
+			ReachableNodes: 2,
+			ReadMode:       "any",
+			Nodes: []server.GatewayClusterNodeStatus{
+				{
+					Node: "node-a",
+					OK:   true,
+					Status: &lsm.ClusterStatus{
+						CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+							Health:   "follower",
+							ApplyLag: 5,
+						},
+					},
+				},
+				{
+					Node: "node-b",
+					OK:   true,
+					Status: &lsm.ClusterStatus{
+						CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+							Health:   "follower",
+							ApplyLag: 1,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := waitGatewayStatus(srv.URL, waitGatewayOptions{
+		RequiredReachableNodes: 2,
+		RequireWriteLeader:     false,
+		MaxReadApplyLag:        &maxLag,
+		Timeout:                time.Second,
+		Interval:               time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("wait gateway status: %v", err)
+	}
+	if !got.Ready || got.ReadReadyNodes != 1 || got.RequiredReadReadyNodes != 1 {
+		t.Fatalf("unexpected read-ready wait result: %+v", got)
+	}
+}
+
+func TestEvaluateGatewayWaitReadReadyRequiresConfiguredCount(t *testing.T) {
+	maxLag := uint64(2)
+	got := evaluateGatewayWait(server.GatewayClusterStatus{
+		Ready:          true,
+		NodeCount:      2,
+		ReachableNodes: 2,
+		Nodes: []server.GatewayClusterNodeStatus{
+			{
+				Node: "node-a",
+				OK:   true,
+				Status: &lsm.ClusterStatus{
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:   "ready",
+						ApplyLag: 1,
+					},
+				},
+			},
+			{
+				Node: "node-b",
+				OK:   true,
+				Status: &lsm.ClusterStatus{
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:   "follower",
+						ApplyLag: 3,
+					},
+				},
+			},
+		},
+	}, waitGatewayOptions{
+		RequiredReachableNodes: 2,
+		RequiredReadReadyNodes: 2,
+		MaxReadApplyLag:        &maxLag,
+		RequireWriteLeader:     false,
+	})
+	if got.Ready {
+		t.Fatalf("expected read-ready gate to keep gateway not ready: %+v", got)
+	}
+	if got.ReadReadyNodes != 1 || got.RequiredReadReadyNodes != 2 {
+		t.Fatalf("unexpected read-ready counts: %+v", got)
+	}
+}
+
+func TestEvaluateGatewayWaitReadReadyRequiresHealthyRuntime(t *testing.T) {
+	maxLag := uint64(2)
+	got := evaluateGatewayWait(server.GatewayClusterStatus{
+		Ready:          true,
+		NodeCount:      3,
+		ReachableNodes: 3,
+		Nodes: []server.GatewayClusterNodeStatus{
+			{
+				Node: "node-a",
+				OK:   true,
+				Status: &lsm.ClusterStatus{
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:   "ready",
+						ApplyLag: 1,
+					},
+				},
+			},
+			{
+				Node: "node-b",
+				OK:   true,
+				Status: &lsm.ClusterStatus{
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:   "follower",
+						ApplyLag: 2,
+					},
+				},
+			},
+			{
+				Node: "node-c",
+				OK:   true,
+				Status: &lsm.ClusterStatus{
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:   "starting",
+						ApplyLag: 0,
+					},
+				},
+			},
+		},
+	}, waitGatewayOptions{
+		RequiredReachableNodes: 3,
+		RequiredReadReadyNodes: 3,
+		MaxReadApplyLag:        &maxLag,
+		RequireWriteLeader:     false,
+	})
+	if got.Ready {
+		t.Fatalf("expected unhealthy runtime to keep gateway not read-ready: %+v", got)
+	}
+	if got.ReadReadyNodes != 2 || got.RequiredReadReadyNodes != 3 {
+		t.Fatalf("unexpected read-ready counts: %+v", got)
+	}
+}
+
 func TestWaitGatewayStatusPollsUntilReady(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -711,6 +857,19 @@ func TestWaitGatewayStatusRejectsInvalidMinReachable(t *testing.T) {
 		RequiredReachableNodes: -1,
 	}); err == nil {
 		t.Fatalf("expected invalid min-reachable error")
+	}
+}
+
+func TestWaitGatewayStatusRejectsInvalidReadReadyOptions(t *testing.T) {
+	if _, err := waitGatewayStatus("http://127.0.0.1:8090", waitGatewayOptions{
+		RequiredReadReadyNodes: -1,
+	}); err == nil {
+		t.Fatalf("expected invalid min-read-ready error")
+	}
+	if _, err := waitGatewayStatus("http://127.0.0.1:8090", waitGatewayOptions{
+		RequiredReadReadyNodes: 1,
+	}); err == nil {
+		t.Fatalf("expected min-read-ready without max lag error")
 	}
 }
 
@@ -878,6 +1037,9 @@ func TestWriteGatewayWait(t *testing.T) {
 		"ready=true",
 		"reachable_nodes=3",
 		"required_reachable_nodes=3",
+		"read_ready_nodes=0",
+		"required_read_ready_nodes=0",
+		"wait_max_read_apply_lag=-1",
 		"require_write_leader=true",
 		"read_mode=leader",
 		"read_balance_policy=ordered",

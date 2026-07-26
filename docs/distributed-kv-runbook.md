@@ -239,6 +239,20 @@ reported `commit_log_runtime.apply_lag` is above the configured bound. `-1`
 disables this gate. This is a freshness guard for obviously lagged followers,
 not a linearizable read protocol.
 
+Smoke tests and operator rollouts can add the same freshness bound to gateway
+readiness:
+
+```bash
+go run ./cmd/lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode any --max-read-apply-lag 2 --min-read-ready 2
+```
+
+`--max-read-apply-lag` makes `wait-gateway` count reachable backends whose latest
+reported `commit_log_runtime.health` is `ready` or `follower` and whose
+`commit_log_runtime.apply_lag` is within the bound. `--min-read-ready` sets the
+required count; when the max lag gate is enabled and `--min-read-ready` is
+omitted or `0`, the wait requires at least one read-ready backend. This is an
+operator/status gate only and does not change gateway read routing.
+
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
 window, while successful probes clear that state. Tune the window with
