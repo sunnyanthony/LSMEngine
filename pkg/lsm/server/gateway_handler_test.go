@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -725,6 +726,103 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	for _, node := range out.Nodes {
 		if node.Degraded || node.DegradedUntil != "" {
 			t.Fatalf("successful status probe should clear degraded state: %+v", node)
+		}
+	}
+}
+
+func TestGatewayHandlerMetricsExportsStatusAndRouting(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:         "ready",
+				Leader:         true,
+				LeaderKnown:    true,
+				WriteAvailable: true,
+				Index:          12,
+				AppliedIndex:   10,
+				ApplyLag:       2,
+			},
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	gateway.routing.writeAttempts.Add(3)
+	gateway.routing.readAttempts.Add(5)
+	gateway.routing.readFallbacks.Add(2)
+
+	req := httptest.NewRequest(http.MethodGet, "/gateway/metrics", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("expected text metrics content type, got %q", got)
+	}
+	out := rec.Body.String()
+	for _, want := range []string{
+		"# TYPE lsm_gateway_ready gauge",
+		"lsm_gateway_ready 1",
+		"lsm_gateway_node_count 1",
+		"lsm_gateway_reachable_nodes 1",
+		"lsm_gateway_write_leader_known 1",
+		"lsm_gateway_routing_write_attempts_total 3",
+		"lsm_gateway_routing_read_attempts_total 5",
+		"lsm_gateway_routing_read_fallbacks_total 2",
+		`lsm_gateway_backend_up{node="node-a"} 1`,
+		`lsm_gateway_backend_write_available{node="node-a"} 1`,
+		`lsm_gateway_backend_apply_lag{node="node-a"} 2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected metrics to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestGatewayHandlerMetricsUnavailableStillEmitsReadyMetric(t *testing.T) {
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": http.NotFoundHandler(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/gateway/metrics", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	for _, want := range []string{
+		"lsm_gateway_ready 0",
+		"lsm_gateway_reachable_nodes 0",
+		`lsm_gateway_backend_up{node="node-a"} 0`,
+		`lsm_gateway_backend_degraded{node="node-a"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected metrics to contain %q, got:\n%s", want, out)
 		}
 	}
 }

@@ -25,6 +25,7 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/readyz", handler.handleReady)
 	mux.HandleFunc("/gateway/status", handler.handleGatewayStatus)
+	mux.HandleFunc("/gateway/metrics", handler.handleGatewayMetrics)
 	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/range", handler.handleRange)
 	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
@@ -94,6 +95,104 @@ func (h *gatewayHandler) handleGatewayStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (h *gatewayHandler) handleGatewayMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := h.gateway.ClusterStatus(r.Context())
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	writeGatewayMetrics(w, status)
+}
+
+func writeGatewayMetrics(w io.Writer, status GatewayClusterStatus) {
+	writeMetricHelp(w, "lsm_gateway_ready", "Whether this gateway currently sees a usable backend view.")
+	writeMetricGauge(w, "lsm_gateway_ready", boolMetric(status.Ready))
+	writeMetricHelp(w, "lsm_gateway_node_count", "Backend node count known to this gateway.")
+	writeMetricGauge(w, "lsm_gateway_node_count", float64(status.NodeCount))
+	writeMetricHelp(w, "lsm_gateway_reachable_nodes", "Backend nodes reachable during the latest gateway status sample.")
+	writeMetricGauge(w, "lsm_gateway_reachable_nodes", float64(status.ReachableNodes))
+	writeMetricHelp(w, "lsm_gateway_write_leader_known", "Whether the latest gateway status sample found a backend write leader.")
+	writeMetricGauge(w, "lsm_gateway_write_leader_known", boolMetric(strings.TrimSpace(status.WriteLeader) != ""))
+
+	writeMetricHelp(w, "lsm_gateway_routing_write_attempts_total", "Process-local gateway write backend attempts.")
+	writeMetricCounter(w, "lsm_gateway_routing_write_attempts_total", status.Routing.WriteAttempts)
+	writeMetricHelp(w, "lsm_gateway_routing_write_retries_total", "Process-local gateway retryable write attempts.")
+	writeMetricCounter(w, "lsm_gateway_routing_write_retries_total", status.Routing.WriteRetries)
+	writeMetricHelp(w, "lsm_gateway_routing_write_failures_total", "Process-local gateway writes that exhausted routing attempts.")
+	writeMetricCounter(w, "lsm_gateway_routing_write_failures_total", status.Routing.WriteFailures)
+	writeMetricHelp(w, "lsm_gateway_routing_read_attempts_total", "Process-local gateway read backend attempts.")
+	writeMetricCounter(w, "lsm_gateway_routing_read_attempts_total", status.Routing.ReadAttempts)
+	writeMetricHelp(w, "lsm_gateway_routing_read_fallbacks_total", "Process-local gateway read attempts against a second-or-later backend target.")
+	writeMetricCounter(w, "lsm_gateway_routing_read_fallbacks_total", status.Routing.ReadFallbacks)
+	writeMetricHelp(w, "lsm_gateway_routing_read_failures_total", "Process-local gateway read requests that exhausted all backend targets.")
+	writeMetricCounter(w, "lsm_gateway_routing_read_failures_total", status.Routing.ReadFailures)
+	writeMetricHelp(w, "lsm_gateway_routing_route_refreshes_total", "Process-local gateway route refresh attempts.")
+	writeMetricCounter(w, "lsm_gateway_routing_route_refreshes_total", status.Routing.RouteRefreshes)
+	writeMetricHelp(w, "lsm_gateway_routing_route_refresh_failures_total", "Process-local gateway route refresh failures.")
+	writeMetricCounter(w, "lsm_gateway_routing_route_refresh_failures_total", status.Routing.RouteRefreshFailures)
+	writeMetricHelp(w, "lsm_gateway_routing_route_hint_updates_total", "Process-local gateway route hint updates applied from write errors.")
+	writeMetricCounter(w, "lsm_gateway_routing_route_hint_updates_total", status.Routing.RouteHintUpdates)
+
+	writeMetricHelp(w, "lsm_gateway_backend_up", "Whether a backend node was reachable during the latest gateway status sample.")
+	writeMetricType(w, "lsm_gateway_backend_up", "gauge")
+	writeMetricHelp(w, "lsm_gateway_backend_degraded", "Whether a backend endpoint is temporarily deferred behind healthy endpoints.")
+	writeMetricType(w, "lsm_gateway_backend_degraded", "gauge")
+	writeMetricHelp(w, "lsm_gateway_backend_write_available", "Whether a backend reports commit-log writes are available.")
+	writeMetricType(w, "lsm_gateway_backend_write_available", "gauge")
+	writeMetricHelp(w, "lsm_gateway_backend_apply_lag", "Backend-reported commit-log apply lag.")
+	writeMetricType(w, "lsm_gateway_backend_apply_lag", "gauge")
+	for _, node := range status.Nodes {
+		labels := `node="` + metricLabelValue(node.Node) + `"`
+		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_up", labels, boolMetric(node.OK))
+		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_degraded", labels, boolMetric(node.Degraded))
+		writeAvailable := false
+		applyLag := uint64(0)
+		if node.Status != nil {
+			writeAvailable = node.Status.CommitLogRuntime.WriteAvailable
+			applyLag = node.Status.CommitLogRuntime.ApplyLag
+		}
+		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_write_available", labels, boolMetric(writeAvailable))
+		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_apply_lag", labels, float64(applyLag))
+	}
+}
+
+func writeMetricHelp(w io.Writer, name string, help string) {
+	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+}
+
+func writeMetricType(w io.Writer, name string, metricType string) {
+	fmt.Fprintf(w, "# TYPE %s %s\n", name, metricType)
+}
+
+func writeMetricGauge(w io.Writer, name string, value float64) {
+	writeMetricType(w, name, "gauge")
+	fmt.Fprintf(w, "%s %g\n", name, value)
+}
+
+func writeMetricGaugeWithLabels(w io.Writer, name string, labels string, value float64) {
+	fmt.Fprintf(w, "%s{%s} %g\n", name, labels, value)
+}
+
+func writeMetricCounter(w io.Writer, name string, value uint64) {
+	writeMetricType(w, name, "counter")
+	fmt.Fprintf(w, "%s %d\n", name, value)
+}
+
+func boolMetric(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func metricLabelValue(value string) string {
+	return strings.NewReplacer(`\`, `\\`, "\n", `\n`, `"`, `\"`).Replace(value)
 }
 
 func (h *gatewayHandler) handleGet(w http.ResponseWriter, r *http.Request) {
