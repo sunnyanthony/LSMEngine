@@ -117,6 +117,10 @@ The useful fields are:
   `wal_retain_archived_segments` can prune checkpointed archived WAL prefixes
   while retaining the configured number of newest archived segments; this is
   node-local storage cleanup, not a distributed replication health signal.
+- Server-mode `GET /metrics`: text scrape surface for the same node-local LSM,
+  WAL, compaction, write-backpressure, and point-read counters exposed by
+  `Stats()`. Use it for per-node monitoring; it is not a cluster-wide durability
+  or replication health summary.
 
 ## Manual KV Commands
 
