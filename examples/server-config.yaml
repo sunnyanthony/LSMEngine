@@ -52,6 +52,8 @@ write_consistency_default: "accepted"
 # gateway_read_mode: "any"
 # Valid values: "round_robin" (default) or "ordered".
 # gateway_read_balance_policy: "round_robin"
+# Optional freshness gate for any-mode `/kv/get` and `/kv/range`; -1 disables.
+# gateway_max_read_apply_lag: -1
 # gateway_max_write_attempts: 2
 # gateway_write_retry_backoff: "0s"
 # gateway_endpoint_failure_cooldown: "5s"

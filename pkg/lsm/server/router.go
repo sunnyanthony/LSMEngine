@@ -41,6 +41,7 @@ type GatewayOptions struct {
 	HTTPClient              *http.Client
 	ReadMode                GatewayReadMode
 	ReadBalancePolicy       GatewayReadBalancePolicy
+	MaxReadApplyLag         *uint64
 	MaxWriteAttempts        int
 	WriteRetryBackoff       time.Duration
 	AlignWriteLeader        bool
@@ -54,6 +55,7 @@ type Gateway struct {
 	client                  *http.Client
 	readMode                GatewayReadMode
 	readBalancePolicy       GatewayReadBalancePolicy
+	maxReadApplyLag         *uint64
 	maxAttempts             int
 	retryBackoff            time.Duration
 	alignWriteLeader        bool
@@ -73,6 +75,7 @@ type GatewayClusterStatus struct {
 	ReachableNodes      int                        `json:"reachable_nodes"`
 	ReadMode            string                     `json:"read_mode"`
 	ReadBalancePolicy   string                     `json:"read_balance_policy"`
+	MaxReadApplyLag     *uint64                    `json:"max_read_apply_lag,omitempty"`
 	WriteLeader         string                     `json:"write_leader,omitempty"`
 	WriteLeaderEndpoint string                     `json:"write_leader_endpoint,omitempty"`
 	Routing             GatewayRoutingStats        `json:"routing"`
@@ -211,6 +214,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		client:                  client,
 		readMode:                readMode,
 		readBalancePolicy:       readBalancePolicy,
+		maxReadApplyLag:         cloneUint64Ptr(opts.MaxReadApplyLag),
 		maxAttempts:             maxAttempts,
 		retryBackoff:            opts.WriteRetryBackoff,
 		alignWriteLeader:        opts.AlignWriteLeader,
@@ -258,6 +262,7 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 		NodeCount:         len(nodeIDs),
 		ReadMode:          string(g.readMode),
 		ReadBalancePolicy: string(g.readBalancePolicy),
+		MaxReadApplyLag:   cloneUint64Ptr(g.maxReadApplyLag),
 		Routing:           g.RoutingStats(),
 		Nodes:             make([]GatewayClusterNodeStatus, 0, len(nodeIDs)),
 	}
@@ -550,11 +555,11 @@ type gatewayReadTarget struct {
 	endpoint string
 }
 
-func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, leaderOnly bool) ([]gatewayReadTarget, error) {
+func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, kvRead bool) ([]gatewayReadTarget, error) {
 	if g == nil {
 		return nil, fmt.Errorf("gateway unavailable")
 	}
-	if leaderOnly && g.readMode == GatewayReadModeLeader {
+	if kvRead && g.readMode == GatewayReadModeLeader {
 		nodeID, endpoint, err := g.currentWriteLeader(ctx, endpoints)
 		if err != nil {
 			return nil, err
@@ -563,14 +568,42 @@ func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, 
 	}
 	nodeIDs := g.readNodeEndpointIDs(endpoints)
 	out := make([]gatewayReadTarget, 0, len(nodeIDs))
+	var lastErr error
 	for _, nodeID := range nodeIDs {
 		endpoint, ok := endpoints[nodeID]
 		if !ok {
 			continue
 		}
+		if kvRead && g.maxReadApplyLag != nil {
+			status, err := g.backendStatus(ctx, endpoint)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if status.CommitLogRuntime.ApplyLag > *g.maxReadApplyLag {
+				lastErr = fmt.Errorf("node %q apply lag %d exceeds max read apply lag %d", nodeID, status.CommitLogRuntime.ApplyLag, *g.maxReadApplyLag)
+				continue
+			}
+			if strings.TrimSpace(status.NodeID) != "" {
+				nodeID = status.NodeID
+			}
+		}
 		out = append(out, gatewayReadTarget{nodeID: nodeID, endpoint: endpoint})
 	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
 	return out, nil
+}
+
+func (g *Gateway) backendStatus(ctx context.Context, endpoint string) (lsm.ClusterStatus, error) {
+	var status lsm.ClusterStatus
+	if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+		g.markEndpointFailure(endpoint)
+		return lsm.ClusterStatus{}, err
+	}
+	g.markEndpointSuccess(endpoint)
+	return status, nil
 }
 
 func (g *Gateway) nodeEndpointIDs(endpoints map[string]string, rotateHealthy bool) []string {
@@ -643,6 +676,14 @@ func (g *Gateway) endpointHealth(endpoint string) (bool, string) {
 		return false, ""
 	}
 	return true, until.UTC().Format(time.RFC3339Nano)
+}
+
+func cloneUint64Ptr(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	return &out
 }
 
 func (g *Gateway) alignShardLeader(ctx context.Context, endpoint string, key []byte, target string) error {

@@ -131,6 +131,8 @@ func writeGatewayMetrics(w io.Writer, status GatewayClusterStatus) {
 	writeMetricGauge(w, "lsm_gateway_reachable_nodes", float64(status.ReachableNodes))
 	writeMetricHelp(w, "lsm_gateway_write_leader_known", "Whether the latest gateway status sample found a backend write leader.")
 	writeMetricGauge(w, "lsm_gateway_write_leader_known", boolMetric(strings.TrimSpace(status.WriteLeader) != ""))
+	writeMetricHelp(w, "lsm_gateway_max_read_apply_lag", "Configured maximum backend apply lag for any-mode KV reads; -1 means disabled.")
+	writeMetricGauge(w, "lsm_gateway_max_read_apply_lag", maxReadApplyLagMetric(status.MaxReadApplyLag))
 
 	writeMetricHelp(w, "lsm_gateway_routing_write_attempts_total", "Process-local gateway write backend attempts.")
 	writeMetricCounter(w, "lsm_gateway_routing_write_attempts_total", status.Routing.WriteAttempts)
@@ -201,6 +203,13 @@ func boolMetric(value bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+func maxReadApplyLagMetric(value *uint64) float64 {
+	if value == nil {
+		return -1
+	}
+	return float64(*value)
 }
 
 func metricLabelValue(value string) string {

@@ -541,6 +541,204 @@ func TestGatewayRejectsInvalidReadBalancePolicy(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerGetSkipsLaggedReadBackend(t *testing.T) {
+	var nodeAStatusReads atomic.Int32
+	var nodeAReads atomic.Int32
+	var nodeBStatusReads atomic.Int32
+	var nodeBReads atomic.Int32
+	maxLag := uint64(2)
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			nodeAStatusReads.Add(1)
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:       "follower",
+					AppliedIndex: 5,
+					ApplyLag:     5,
+				},
+			})
+		case "/kv/get":
+			nodeAReads.Add(1)
+			http.Error(w, "lagged follower should not be read", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			nodeBStatusReads.Add(1)
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:       "follower",
+					AppliedIndex: 9,
+					ApplyLag:     1,
+				},
+			})
+		case "/kv/get":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, getResponse{Found: true, Seq: 9})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		MaxReadApplyLag:   &maxLag,
+		ReadBalancePolicy: GatewayReadBalanceOrdered,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAStatusReads.Load() != 1 || nodeBStatusReads.Load() != 1 {
+		t.Fatalf("expected status probe for both nodes, node-a=%d node-b=%d", nodeAStatusReads.Load(), nodeBStatusReads.Load())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected only fresh backend read, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+	stats := gateway.RoutingStats()
+	if stats.ReadAttempts != 1 || stats.ReadFallbacks != 0 || stats.ReadFailures != 0 {
+		t.Fatalf("expected only one routed read attempt after lag filtering, got %+v", stats)
+	}
+}
+
+func TestGatewayHandlerRangeSkipsLaggedReadBackend(t *testing.T) {
+	var nodeAStatusReads atomic.Int32
+	var nodeAReads atomic.Int32
+	var nodeBStatusReads atomic.Int32
+	var nodeBReads atomic.Int32
+	maxLag := uint64(2)
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			nodeAStatusReads.Add(1)
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:   "follower",
+					ApplyLag: 5,
+				},
+			})
+		case "/kv/range":
+			nodeAReads.Add(1)
+			http.Error(w, "lagged follower should not be read", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			nodeBStatusReads.Add(1)
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:   "follower",
+					ApplyLag: 1,
+				},
+			})
+		case "/kv/range":
+			nodeBReads.Add(1)
+			writeJSON(w, http.StatusOK, rangeResponse{
+				Entries: []rangeEntryResponse{{KeyBase64: "Yw==", ValueBase64: "MQ==", Seq: 9}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		MaxReadApplyLag:   &maxLag,
+		ReadBalancePolicy: GatewayReadBalanceOrdered,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/range?start_key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeAStatusReads.Load() != 1 || nodeBStatusReads.Load() != 1 {
+		t.Fatalf("expected status probe for both nodes, node-a=%d node-b=%d", nodeAStatusReads.Load(), nodeBStatusReads.Load())
+	}
+	if nodeAReads.Load() != 0 || nodeBReads.Load() != 1 {
+		t.Fatalf("expected only fresh backend range read, node-a=%d node-b=%d", nodeAReads.Load(), nodeBReads.Load())
+	}
+	stats := gateway.RoutingStats()
+	if stats.ReadAttempts != 1 || stats.ReadFallbacks != 0 || stats.ReadFailures != 0 {
+		t.Fatalf("expected only one routed range attempt after lag filtering, got %+v", stats)
+	}
+}
+
+func TestGatewayHandlerGetFailsWhenAllReadBackendsLag(t *testing.T) {
+	maxLag := uint64(2)
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:   "follower",
+					ApplyLag: 5,
+				},
+			})
+		case "/kv/get":
+			http.Error(w, "lagged follower should not be read", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:    "http://node-a",
+		MaxReadApplyLag: &maxLag,
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if stats := gateway.RoutingStats(); stats.ReadFailures != 1 {
+		t.Fatalf("expected one read failure, got %+v", stats)
+	}
+}
+
 func TestGatewayHandlerGetDefersRecentlyFailedEndpoint(t *testing.T) {
 	var nodeAReads atomic.Int32
 	var nodeBReads atomic.Int32
@@ -786,6 +984,7 @@ func TestGatewayHandlerReadyUnavailableWhenNil(t *testing.T) {
 }
 
 func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
+	maxLag := uint64(3)
 	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cluster/status" {
 			http.NotFound(w, r)
@@ -816,7 +1015,8 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 		})
 	})
 	gateway, err := NewGateway(GatewayOptions{
-		BootstrapURL: "http://node-a",
+		BootstrapURL:    "http://node-a",
+		MaxReadApplyLag: &maxLag,
 		NodeEndpoints: map[string]string{
 			"node-a": "http://node-a",
 			"node-b": "http://node-b",
@@ -849,6 +1049,9 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	if out.ReadBalancePolicy != string(GatewayReadBalanceRoundRobin) {
 		t.Fatalf("unexpected read balance policy: %+v", out)
 	}
+	if out.MaxReadApplyLag == nil || *out.MaxReadApplyLag != 3 {
+		t.Fatalf("unexpected max read apply lag: %+v", out.MaxReadApplyLag)
+	}
 	if out.WriteLeader != "node-b" || out.WriteLeaderEndpoint != "http://node-b" {
 		t.Fatalf("unexpected write leader: %+v", out)
 	}
@@ -866,6 +1069,7 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 }
 
 func TestGatewayHandlerMetricsExportsStatusAndRouting(t *testing.T) {
+	maxLag := uint64(3)
 	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cluster/status" {
 			http.NotFound(w, r)
@@ -885,7 +1089,8 @@ func TestGatewayHandlerMetricsExportsStatusAndRouting(t *testing.T) {
 		})
 	})
 	gateway, err := NewGateway(GatewayOptions{
-		BootstrapURL: "http://node-a",
+		BootstrapURL:    "http://node-a",
+		MaxReadApplyLag: &maxLag,
 		NodeEndpoints: map[string]string{
 			"node-a": "http://node-a",
 		},
@@ -916,6 +1121,7 @@ func TestGatewayHandlerMetricsExportsStatusAndRouting(t *testing.T) {
 		"lsm_gateway_node_count 1",
 		"lsm_gateway_reachable_nodes 1",
 		"lsm_gateway_write_leader_known 1",
+		"lsm_gateway_max_read_apply_lag 3",
 		"lsm_gateway_routing_write_attempts_total 3",
 		"lsm_gateway_routing_read_attempts_total 5",
 		"lsm_gateway_routing_read_fallbacks_total 2",
