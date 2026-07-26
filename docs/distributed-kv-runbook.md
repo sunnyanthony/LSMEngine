@@ -100,6 +100,9 @@ The useful fields are:
   `lsmctl stats` `wal_*` fields: local WAL segment pressure for one node. Use
   them with SSTable and compaction stats to understand whether a node is
   accumulating write-ahead log data faster than flush/compaction can keep up.
+  `wal_checkpoint_seq` and `wal_checkpoint_lag` show how far the local manifest
+  WAL checkpoint trails the latest committed local sequence; high checkpoint
+  lag means archived WAL may not yet be safe to prune.
   `wal_max_segment_bytes` can bound active WAL segment size.
   `wal_retain_archived_segments` can prune checkpointed archived WAL prefixes
   while retaining the configured number of newest archived segments; this is

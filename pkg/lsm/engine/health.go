@@ -49,20 +49,23 @@ type WriteBackpressureStats struct {
 
 // WALStats describes WAL segment pressure and write-path configuration state.
 type WALStats struct {
-	SegmentID            uint64
-	SegmentCount         int
-	ArchivedSegmentCount int
-	ActiveSegmentBytes   uint64
-	ArchivedSegmentBytes uint64
-	TotalBytes           uint64
-	MaxSegmentBytes      uint64
-	BlockSize            uint32
-	PendingBlockBytes    int
-	PendingBlockRecords  int
-	Sync                 bool
-	Async                bool
-	Closed               bool
-	SegmentScanError     string
+	SegmentID              uint64
+	SegmentCount           int
+	ArchivedSegmentCount   int
+	ActiveSegmentBytes     uint64
+	ArchivedSegmentBytes   uint64
+	TotalBytes             uint64
+	CheckpointSeq          uint64
+	CheckpointLag          uint64
+	MaxSegmentBytes        uint64
+	RetainArchivedSegments int
+	BlockSize              uint32
+	PendingBlockBytes      int
+	PendingBlockRecords    int
+	Sync                   bool
+	Async                  bool
+	Closed                 bool
+	SegmentScanError       string
 }
 
 // Stats describes a point-in-time view of engine activity.
@@ -244,20 +247,25 @@ func (s *Stats) applyWALStats(l *LSM) {
 	}
 	stats := l.wal.Stats()
 	s.WAL = WALStats{
-		SegmentID:            stats.SegmentID,
-		SegmentCount:         stats.SegmentCount,
-		ArchivedSegmentCount: stats.ArchivedSegmentCount,
-		ActiveSegmentBytes:   stats.ActiveSegmentBytes,
-		ArchivedSegmentBytes: stats.ArchivedSegmentBytes,
-		TotalBytes:           stats.TotalBytes,
-		MaxSegmentBytes:      stats.MaxSegmentBytes,
-		BlockSize:            stats.BlockSize,
-		PendingBlockBytes:    stats.PendingBlockBytes,
-		PendingBlockRecords:  stats.PendingBlockRecords,
-		Sync:                 stats.Sync,
-		Async:                stats.Async,
-		Closed:               stats.Closed,
-		SegmentScanError:     stats.SegmentScanError,
+		SegmentID:              stats.SegmentID,
+		SegmentCount:           stats.SegmentCount,
+		ArchivedSegmentCount:   stats.ArchivedSegmentCount,
+		ActiveSegmentBytes:     stats.ActiveSegmentBytes,
+		ArchivedSegmentBytes:   stats.ArchivedSegmentBytes,
+		TotalBytes:             stats.TotalBytes,
+		CheckpointSeq:          atomic.LoadUint64(&l.lastFlush),
+		MaxSegmentBytes:        stats.MaxSegmentBytes,
+		RetainArchivedSegments: l.walRetainArchivedSegments,
+		BlockSize:              stats.BlockSize,
+		PendingBlockBytes:      stats.PendingBlockBytes,
+		PendingBlockRecords:    stats.PendingBlockRecords,
+		Sync:                   stats.Sync,
+		Async:                  stats.Async,
+		Closed:                 stats.Closed,
+		SegmentScanError:       stats.SegmentScanError,
+	}
+	if s.Seq > s.WAL.CheckpointSeq {
+		s.WAL.CheckpointLag = s.Seq - s.WAL.CheckpointSeq
 	}
 }
 
