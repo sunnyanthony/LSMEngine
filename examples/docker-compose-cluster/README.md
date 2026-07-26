@@ -59,13 +59,14 @@ leader, loads node endpoints from the mounted `peer-urls.yaml`, and runs with
 commit-log write leader. That mode returns unavailable if no leader is visible
 and is not a raft ReadIndex or lease-read implementation. The smoke also
 verifies gateway `/readyz` reports backend write readiness, the Compose
-healthcheck
-marks the gateway container healthy from that readiness check,
-`lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode leader`
+healthcheck marks the gateway container healthy from that readiness check, and
+`lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode leader --max-read-apply-lag 2 --min-read-ready 1`
 waits until `/gateway/status` reports all three backend nodes, leader read mode,
-and the current write leader, then checks accepted write-status lookup through
-the same gateway endpoint. It also exercises range scans and `async-delete`
-through gateway.
+the current write leader, and at least one read-ready backend within the default
+apply-lag bound. Override that smoke gate with `LSM_GATEWAY_READ_READY_MIN` and
+`LSM_GATEWAY_READ_READY_MAX_LAG` when testing slower environments. The smoke then
+checks accepted write-status lookup through the same gateway endpoint. It also
+exercises range scans and `async-delete` through gateway.
 
 ## Rolling restart smoke
 

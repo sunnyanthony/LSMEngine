@@ -8,6 +8,8 @@ KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
 GATEWAY_ADDR="${LSM_GATEWAY_ADDR:-127.0.0.1:8090}"
 GATEWAY_URL="http://$GATEWAY_ADDR"
+GATEWAY_READ_READY_MIN="${LSM_GATEWAY_READ_READY_MIN:-1}"
+GATEWAY_READ_READY_MAX_LAG="${LSM_GATEWAY_READ_READY_MAX_LAG:-2}"
 
 compose() {
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -82,7 +84,13 @@ wait_for_gateway_container_health() {
 }
 
 wait_for_gateway_status() {
-  if ! lsmctl wait-gateway --addr "$GATEWAY_URL" --timeout 60s --min-reachable 3 --read-mode leader >/dev/null; then
+  if ! lsmctl wait-gateway \
+    --addr "$GATEWAY_URL" \
+    --timeout 60s \
+    --min-reachable 3 \
+    --read-mode leader \
+    --max-read-apply-lag "$GATEWAY_READ_READY_MAX_LAG" \
+    --min-read-ready "$GATEWAY_READ_READY_MIN" >/dev/null; then
     echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
     lsmctl gateway-status --addr "$GATEWAY_URL" >&2 || true
     compose --profile gateway ps >&2 || true
