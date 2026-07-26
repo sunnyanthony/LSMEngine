@@ -83,6 +83,7 @@ func (l *LSM) flushMemtableForReplay(table memtable.Table) error {
 	if err := l.tableEditor().Apply(add, nil, t.Seq); err != nil {
 		return err
 	}
+	l.updateLastFlush(t.Seq)
 	l.retireMemtable(table)
 	return nil
 }

@@ -67,6 +67,9 @@ func TestRetentionPreservesRecoveryAfterManifestFailure(t *testing.T) {
 		}
 		store.flushSvc.onFlushTable(table, frozen[index])
 		fs.fail.Store(false)
+		if stats := store.Stats(); stats.WAL.CheckpointSeq != 0 || stats.WAL.CheckpointLag != 3 {
+			t.Fatalf("failed checkpoint changed durable prefix stats: %+v", stats.WAL)
+		}
 		if _, err := store.manifest.Load(); !errors.Is(err, errRetentionManifestSync) {
 			t.Fatalf("manifest failure was not latched: %v", err)
 		}

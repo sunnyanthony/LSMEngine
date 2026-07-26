@@ -37,6 +37,10 @@ func TestFlushCompletionPreservesUnflushedPrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []uint64{0, 1, 3}[step]
+		stats := store.Stats()
+		if stats.WAL.CheckpointSeq != want || stats.WAL.CheckpointLag != 3-want {
+			t.Fatalf("completion %d: incorrect durable prefix stats: %+v", index, stats.WAL)
+		}
 		if m.WALSeq != want {
 			t.Fatalf("completion %d advanced checkpoint to %d, want %d", index, m.WALSeq, want)
 		}
