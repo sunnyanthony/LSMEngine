@@ -112,6 +112,9 @@ type gatewayRoutingCounters struct {
 	writeAttempts        atomic.Uint64
 	writeRetries         atomic.Uint64
 	writeFailures        atomic.Uint64
+	readAttempts         atomic.Uint64
+	readFallbacks        atomic.Uint64
+	readFailures         atomic.Uint64
 	routeRefreshes       atomic.Uint64
 	routeRefreshFailures atomic.Uint64
 	routeHintUpdates     atomic.Uint64
@@ -122,6 +125,9 @@ type GatewayRoutingStats struct {
 	WriteAttempts        uint64 `json:"write_attempts"`
 	WriteRetries         uint64 `json:"write_retries"`
 	WriteFailures        uint64 `json:"write_failures"`
+	ReadAttempts         uint64 `json:"read_attempts"`
+	ReadFallbacks        uint64 `json:"read_fallbacks"`
+	ReadFailures         uint64 `json:"read_failures"`
 	RouteRefreshes       uint64 `json:"route_refreshes"`
 	RouteRefreshFailures uint64 `json:"route_refresh_failures"`
 	RouteHintUpdates     uint64 `json:"route_hint_updates"`
@@ -308,6 +314,9 @@ func (g *Gateway) RoutingStats() GatewayRoutingStats {
 		WriteAttempts:        g.routing.writeAttempts.Load(),
 		WriteRetries:         g.routing.writeRetries.Load(),
 		WriteFailures:        g.routing.writeFailures.Load(),
+		ReadAttempts:         g.routing.readAttempts.Load(),
+		ReadFallbacks:        g.routing.readFallbacks.Load(),
+		ReadFailures:         g.routing.readFailures.Load(),
 		RouteRefreshes:       g.routing.routeRefreshes.Load(),
 		RouteRefreshFailures: g.routing.routeRefreshFailures.Load(),
 		RouteHintUpdates:     g.routing.routeHintUpdates.Load(),

@@ -234,7 +234,11 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var lastErr error
-	for _, target := range targets {
+	for i, target := range targets {
+		h.gateway.routing.readAttempts.Add(1)
+		if i > 0 {
+			h.gateway.routing.readFallbacks.Add(1)
+		}
 		nodeID := target.nodeID
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
@@ -266,6 +270,7 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no node endpoints available")
 	}
+	h.gateway.routing.readFailures.Add(1)
 	writeJSON(w, http.StatusServiceUnavailable, writeErrorResponse{
 		Error:     lastErr.Error(),
 		Code:      "gateway_unavailable",

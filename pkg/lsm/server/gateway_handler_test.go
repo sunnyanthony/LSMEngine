@@ -147,6 +147,44 @@ func TestGatewayHandlerGetFallsBackAcrossEndpoints(t *testing.T) {
 	if !out.Found || out.Seq != 7 {
 		t.Fatalf("unexpected get response: %+v", out)
 	}
+	stats := gateway.RoutingStats()
+	if stats.ReadAttempts != 2 || stats.ReadFallbacks != 1 || stats.ReadFailures != 0 {
+		t.Fatalf("unexpected read routing stats after fallback success: %+v", stats)
+	}
+}
+
+func TestGatewayHandlerGetRecordsReadFailureStats(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "node-a unavailable", http.StatusServiceUnavailable)
+	})
+	handlerB := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "node-b unavailable", http.StatusBadGateway)
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+			"node-b": handlerB,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/kv/get?key_base64=Yw==", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	stats := gateway.RoutingStats()
+	if stats.ReadAttempts != 2 || stats.ReadFallbacks != 1 || stats.ReadFailures != 1 {
+		t.Fatalf("unexpected read routing stats after failure: %+v", stats)
+	}
 }
 
 func TestGatewayHandlerGetRotatesHealthyEndpoints(t *testing.T) {
