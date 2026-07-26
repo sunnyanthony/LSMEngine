@@ -115,6 +115,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose WAL segment/byte counters, WAL checkpoint lag counters, write-backpressure state/reject counts, process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
 - `GET /metrics` exposes node-local LSM/WAL/compaction/backpressure/read stats. `lsm_engine_wal_segment_scan_error` is 1 when WAL counts/bytes are partial; do not treat that sample as a complete disk-usage measurement. WAL checkpoint lag is sequence distance, not a pending-record count or quorum durability signal.
 - `/metrics` also exposes compaction, backpressure, and WAL configuration thresholds. Evaluate pressure ratios only with a positive denominator. WAL segment bytes are a post-block rotation threshold, not a hard file-size cap; zero disables rotation. Zero archived retention disables automatic pruning, not retention of all but zero files.
+- Stats and metrics also expose the configured periodic compaction check interval; zero disables periodic checks, without disabling flush-triggered compaction.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - WAL bytes include segment/framing overhead and exclude the pending block buffer;
   pending block records are not the async request queue depth. These numbers do
@@ -152,6 +153,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `wal_retain_archived_segments` enables conservative archived WAL cleanup when greater than zero. Cleanup only removes a contiguous archived prefix whose entries are covered by the manifest WAL checkpoint, writes a local pruned marker so restart can distinguish intentional prefix pruning from missing segments, and keeps at least the configured number of newest archived segments.
   - `flush_backpressure_queue_threshold` rejects new local writes before commit when the immutable flush backlog reaches the configured depth.
   - `compaction_l0_threshold` enables background L0 compaction.
+  - `compaction_check_interval` periodically wakes the node-local compaction runtime when non-zero. The planner still decides whether any table rewrite should run.
   - `compaction_backpressure_l0_threshold` rejects new local writes that would force another flush while L0 table count is already at or above the configured threshold.
   - These thresholds are node-local safeguards; they do not replace commit-log quorum semantics or create a distributed admission controller.
 - Gateway read config:

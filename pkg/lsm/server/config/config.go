@@ -43,6 +43,7 @@ type Config struct {
 	FlushQueueSize                    int             `yaml:"flush_queue_size"`
 	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
 	CompactionL0Threshold             int             `yaml:"compaction_l0_threshold"`
+	CompactionCheckInterval           time.Duration   `yaml:"compaction_check_interval"`
 	CompactionBackpressureL0Threshold int             `yaml:"compaction_backpressure_l0_threshold"`
 	IOBackend                         string          `yaml:"io_backend"`
 	IOBackendStrict                   bool            `yaml:"io_backend_strict"`

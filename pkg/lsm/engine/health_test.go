@@ -44,6 +44,9 @@ func TestStatsSnapshot(t *testing.T) {
 	if !stats.CompactionEnabled {
 		t.Fatalf("expected compaction enabled")
 	}
+	if stats.CompactionCheckIntervalMS != 0 {
+		t.Fatalf("expected compaction check interval default 0, got %d", stats.CompactionCheckIntervalMS)
+	}
 	if stats.Closing || stats.Closed {
 		t.Fatalf("expected open state, got closing=%v closed=%v", stats.Closing, stats.Closed)
 	}
@@ -411,6 +414,38 @@ func TestTriggerCompactionRejectsClosedEngine(t *testing.T) {
 	}
 	if err := store.TriggerCompaction(); !errors.Is(err, errs.ErrClosed) {
 		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestCompactionCheckIntervalTriggersRuntime(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                 t.TempDir(),
+		CompactionL0Threshold:   10,
+		CompactionCheckInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	before := store.Stats().CompactionRuntime.Triggers
+	waitForStats(t, func() bool {
+		stats := store.Stats()
+		return stats.CompactionCheckIntervalMS == 5 &&
+			stats.CompactionRuntime.Triggers >= before+2 &&
+			stats.CompactionRuntime.Runs > 0
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	afterClose := store.Stats().CompactionRuntime.Triggers
+	time.Sleep(20 * time.Millisecond)
+	if got := store.Stats().CompactionRuntime.Triggers; got != afterClose {
+		t.Fatalf("periodic trigger continued after Close: %d -> %d", afterClose, got)
 	}
 }
 

@@ -61,6 +61,7 @@ wal_retain_archived_segments: 2
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
+compaction_check_interval: "30s"
 compaction_backpressure_l0_threshold: 12
 io_backend: "async"
 io_backend_strict: true
@@ -169,6 +170,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.CompactionL0Threshold != 4 {
 		t.Fatalf("expected compaction l0 threshold, got %d", cfg.CompactionL0Threshold)
+	}
+	if cfg.CompactionCheckInterval != 30*time.Second {
+		t.Fatalf("expected compaction check interval, got %v", cfg.CompactionCheckInterval)
 	}
 	if cfg.CompactionBackpressureL0Threshold != 12 {
 		t.Fatalf("expected compaction backpressure l0 threshold, got %d", cfg.CompactionBackpressureL0Threshold)
