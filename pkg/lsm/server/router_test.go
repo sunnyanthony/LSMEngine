@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -630,6 +631,20 @@ func TestGatewayStopsAfterMaxWriteAttempts(t *testing.T) {
 	}
 	if writes.Load() != 3 {
 		t.Fatalf("expected 3 bounded attempts, got %d", writes.Load())
+	}
+}
+
+func TestGatewayRejectsNegativeWriteRetryBackoff(t *testing.T) {
+	_, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		NodeEndpoints:     map[string]string{"node-a": "http://node-a"},
+		WriteRetryBackoff: -time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "write retry backoff must be non-negative") {
+		t.Fatalf("expected write retry backoff error, got %v", err)
 	}
 }
 
