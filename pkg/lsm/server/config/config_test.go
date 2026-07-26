@@ -48,6 +48,7 @@ write_consistency_default: "accepted"
 gateway_read_mode: "leader"
 memtable_limit: 2048
 wal_max_segment_bytes: 4096
+wal_retain_archived_segments: 2
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
@@ -120,6 +121,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.WALMaxSegmentBytes != 4096 {
 		t.Fatalf("expected wal max segment bytes, got %d", cfg.WALMaxSegmentBytes)
+	}
+	if cfg.WALRetainArchivedSegments != 2 {
+		t.Fatalf("expected wal retain archived segments, got %d", cfg.WALRetainArchivedSegments)
 	}
 	if cfg.FlushQueueSize != 8 {
 		t.Fatalf("expected flush queue size, got %d", cfg.FlushQueueSize)

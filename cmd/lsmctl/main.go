@@ -144,6 +144,7 @@ func serveCmd(args []string) {
 		ShardMap:                          toShardMap(cfg.Shards),
 		MemtableLimit:                     cfg.MemtableLimit,
 		WALMaxSegmentBytes:                cfg.WALMaxSegmentBytes,
+		WALRetainArchivedSegments:         cfg.WALRetainArchivedSegments,
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,

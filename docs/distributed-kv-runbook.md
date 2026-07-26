@@ -103,6 +103,9 @@ The useful fields are:
   `wal_max_segment_bytes` rotates the active WAL segment after flushed bytes
   reach the configured threshold, but archived segment retention remains a
   separate policy decision.
+  `wal_retain_archived_segments` can prune checkpointed archived WAL prefixes
+  while retaining the configured number of newest archived segments; this is
+  node-local storage cleanup, not a distributed replication health signal.
 
 ## Manual KV Commands
 

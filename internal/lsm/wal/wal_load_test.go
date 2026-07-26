@@ -320,6 +320,110 @@ func TestWALRotationWithMissingSegment(t *testing.T) {
 	}
 }
 
+func TestWALRetentionPrunesCheckpointedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal.log")
+	w, err := NewWAL(Options{Path: path, Sync: true, BlockSize: 64, MaxSegment: 128})
+	if err != nil {
+		t.Fatalf("new wal: %v", err)
+	}
+	const total = 60
+	for i := 0; i < total; i++ {
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)})
+	}
+	segs, _, err := segment.ListSegments(path)
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	if len(segs) < 3 {
+		t.Fatalf("expected >= 3 archived segments, got %d", len(segs))
+	}
+
+	stats, err := w.PruneArchivedSegments(total, 1)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if stats.RemovedSegments == 0 {
+		t.Fatalf("expected archived segments to be pruned, got %+v", stats)
+	}
+	if stats.RetainedSegments != 1 {
+		t.Fatalf("expected one archived segment retained, got %+v", stats)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	segs, missing, err := segment.ListSegments(path)
+	if err != nil {
+		t.Fatalf("list segments after prune: %v", err)
+	}
+	if missing {
+		t.Fatalf("expected pruned prefix marker to avoid missing segment")
+	}
+	if len(segs) != 1 {
+		t.Fatalf("expected one retained archived segment, got %d", len(segs))
+	}
+
+	wal := OpenReplay(path, false)
+	count := 0
+	if err := wal.Replay(func(e types.Entry) error {
+		count++
+		return nil
+	}); err != nil {
+		t.Fatalf("replay after prune: %v", err)
+	}
+	if count == 0 || count >= total {
+		t.Fatalf("expected replay to start after pruned prefix, got %d entries", count)
+	}
+}
+
+func TestWALRetentionKeepsSegmentPastCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal.log")
+	w, err := NewWAL(Options{Path: path, Sync: true, BlockSize: 64, MaxSegment: 128})
+	if err != nil {
+		t.Fatalf("new wal: %v", err)
+	}
+	defer func() {
+		if err := w.Close(); err != nil {
+			t.Fatalf("close wal: %v", err)
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		appendOwnedLoad(t, w, types.Entry{Key: []byte("k"), Value: []byte{byte(i)}, Seq: uint64(i + 1)})
+	}
+	segs, _, err := segment.ListSegments(path)
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	if len(segs) == 0 {
+		t.Fatalf("expected archived segments")
+	}
+	_, firstMaxSeq, err := w.scanArchivedSegment(w.fs, segs[0])
+	if err != nil {
+		t.Fatalf("scan first segment: %v", err)
+	}
+	if firstMaxSeq <= 1 {
+		t.Fatalf("expected first segment max seq > 1, got %d", firstMaxSeq)
+	}
+
+	stats, err := w.PruneArchivedSegments(firstMaxSeq-1, 0)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if stats.RemovedSegments != 0 {
+		t.Fatalf("expected no segments removed before checkpoint covers first segment, got %+v", stats)
+	}
+	after, _, err := segment.ListSegments(path)
+	if err != nil {
+		t.Fatalf("list segments after prune: %v", err)
+	}
+	if len(after) != len(segs) {
+		t.Fatalf("expected segment count unchanged, before=%d after=%d", len(segs), len(after))
+	}
+}
+
 func appendOwnedLoad(t *testing.T, w *WAL, entry types.Entry) {
 	t.Helper()
 	entry = copyEntryLoad(entry)
