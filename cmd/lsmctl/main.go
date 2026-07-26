@@ -213,9 +213,16 @@ func gatewayCmd(args []string) {
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
+	var maxWriteAttemptsSet bool
+	var writeRetryBackoffSet bool
 	var endpointFailureCooldownSet bool
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "endpoint-failure-cooldown" {
+		switch f.Name {
+		case "max-write-attempts":
+			maxWriteAttemptsSet = true
+		case "write-retry-backoff":
+			writeRetryBackoffSet = true
+		case "endpoint-failure-cooldown":
 			endpointFailureCooldownSet = true
 		}
 	})
@@ -235,6 +242,8 @@ func gatewayCmd(args []string) {
 	if gatewayReadMode == "" {
 		gatewayReadMode = cfg.GatewayReadMode
 	}
+	gatewayMaxWriteAttempts := selectedGatewayMaxWriteAttempts(cfg, *maxWriteAttempts, maxWriteAttemptsSet)
+	gatewayWriteRetryBackoff := selectedGatewayWriteRetryBackoff(cfg, *writeRetryBackoff, writeRetryBackoffSet)
 	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
 	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscoveryOptions{
 		EndpointFile:  *endpointFile,
@@ -250,8 +259,8 @@ func gatewayCmd(args []string) {
 		BootstrapURL:            normalizeHTTPBaseURL(*bootstrapURL),
 		NodeEndpointResolver:    resolver,
 		ReadMode:                server.GatewayReadMode(gatewayReadMode),
-		MaxWriteAttempts:        *maxWriteAttempts,
-		WriteRetryBackoff:       *writeRetryBackoff,
+		MaxWriteAttempts:        gatewayMaxWriteAttempts,
+		WriteRetryBackoff:       gatewayWriteRetryBackoff,
 		AlignWriteLeader:        true,
 		EndpointFailureCooldown: gatewayEndpointFailureCooldown,
 	})
@@ -293,6 +302,24 @@ func selectedGatewayEndpointFailureCooldown(
 		return flagValue
 	}
 	return cfg.GatewayEndpointFailureCooldown
+}
+
+func selectedGatewayMaxWriteAttempts(cfg serverconfig.Config, flagValue int, flagSet bool) int {
+	if flagSet {
+		return flagValue
+	}
+	return cfg.GatewayMaxWriteAttempts
+}
+
+func selectedGatewayWriteRetryBackoff(
+	cfg serverconfig.Config,
+	flagValue time.Duration,
+	flagSet bool,
+) time.Duration {
+	if flagSet {
+		return flagValue
+	}
+	return cfg.GatewayWriteRetryBackoff
 }
 
 func gatewayStatusCmd(args []string) {

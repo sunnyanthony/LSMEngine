@@ -268,6 +268,32 @@ func TestSelectedGatewayEndpointFailureCooldownUsesFlag(t *testing.T) {
 	}
 }
 
+func TestSelectedGatewayRetryPolicyUsesConfig(t *testing.T) {
+	cfg := serverconfig.Config{
+		GatewayMaxWriteAttempts:  4,
+		GatewayWriteRetryBackoff: 25 * time.Millisecond,
+	}
+	if got := selectedGatewayMaxWriteAttempts(cfg, 2, false); got != 4 {
+		t.Fatalf("expected config max attempts, got %d", got)
+	}
+	if got := selectedGatewayWriteRetryBackoff(cfg, 10*time.Millisecond, false); got != 25*time.Millisecond {
+		t.Fatalf("expected config retry backoff, got %v", got)
+	}
+}
+
+func TestSelectedGatewayRetryPolicyUsesFlags(t *testing.T) {
+	cfg := serverconfig.Config{
+		GatewayMaxWriteAttempts:  4,
+		GatewayWriteRetryBackoff: 25 * time.Millisecond,
+	}
+	if got := selectedGatewayMaxWriteAttempts(cfg, 2, true); got != 2 {
+		t.Fatalf("expected flag max attempts, got %d", got)
+	}
+	if got := selectedGatewayWriteRetryBackoff(cfg, 10*time.Millisecond, true); got != 10*time.Millisecond {
+		t.Fatalf("expected flag retry backoff, got %v", got)
+	}
+}
+
 func TestGatewayNodeEndpointResolverUsesDNSSRV(t *testing.T) {
 	resolver, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{
 		DNSSRVName: "lsm-cluster.lsm-cluster.svc.cluster.local",

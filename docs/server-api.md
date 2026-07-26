@@ -141,6 +141,8 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `gateway_read_mode` is optional and maps to `lsmctl gateway --read-mode`.
   - `any` is the default and keeps best-effort healthy-endpoint read fallback.
   - `leader` sends `/kv/get` and `/kv/range` only to the current commit-log write leader; it returns unavailable instead of falling back when no leader can be identified.
+  - `gateway_max_write_attempts` maps to `lsmctl gateway --max-write-attempts` and bounds retryable route-aware write forwarding. `0` uses the gateway default.
+  - `gateway_write_retry_backoff` maps to `lsmctl gateway --write-retry-backoff` and controls the delay between retryable write attempts. `0` keeps retries immediate.
   - `gateway_endpoint_failure_cooldown` maps to `lsmctl gateway --endpoint-failure-cooldown` and controls how long recent transport failures or 5xx backend responses are deprioritized behind healthy endpoints. `0` uses the gateway default.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.
 - Keep the app server thin; let the proxy handle most ingress concerns.

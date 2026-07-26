@@ -101,6 +101,9 @@ The useful fields are:
   route hints or refreshes are masking stale metadata. Rising
   `routing_write_failures` or `routing_route_refresh_failures` means the gateway
   is no longer hiding the backend or metadata failure.
+  Tune bounded write retry behavior with `lsmctl gateway --max-write-attempts`,
+  `lsmctl gateway --write-retry-backoff`, or the matching
+  `gateway_max_write_attempts` / `gateway_write_retry_backoff` config keys.
 - `Stats.WAL.SegmentCount`, `Stats.WAL.TotalBytes`, and related
   `lsmctl stats` `wal_*` fields: local WAL segment pressure for one node. Use
   them with SSTable and compaction stats to understand whether a node is

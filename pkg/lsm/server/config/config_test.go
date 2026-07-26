@@ -46,6 +46,8 @@ read_timeout: "2s"
 write_timeout: "3s"
 write_consistency_default: "accepted"
 gateway_read_mode: "leader"
+gateway_max_write_attempts: 4
+gateway_write_retry_backoff: "25ms"
 gateway_endpoint_failure_cooldown: "750ms"
 memtable_limit: 2048
 wal_max_segment_bytes: 4096
@@ -116,6 +118,12 @@ io_async_max_in_flight: 8
 	}
 	if cfg.GatewayReadMode != "leader" {
 		t.Fatalf("expected gateway read mode, got %q", cfg.GatewayReadMode)
+	}
+	if cfg.GatewayMaxWriteAttempts != 4 {
+		t.Fatalf("expected gateway max write attempts, got %d", cfg.GatewayMaxWriteAttempts)
+	}
+	if cfg.GatewayWriteRetryBackoff != 25*time.Millisecond {
+		t.Fatalf("expected gateway write retry backoff, got %v", cfg.GatewayWriteRetryBackoff)
 	}
 	if cfg.GatewayEndpointFailureCooldown != 750*time.Millisecond {
 		t.Fatalf("expected gateway endpoint failure cooldown, got %v", cfg.GatewayEndpointFailureCooldown)
