@@ -200,7 +200,7 @@ TODO (later discussion):
 
 ## Configuration knobs
 - Memtable: `MemtableKind` (`map`, `skiplist`, `sharded-skiplist`), `MemtableConcurrency`, `MemtableShards`, `MemtableArenaBlockSize`.
-- WAL: `WALBlockSize`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
+- WAL: `WALBlockSize`, `WALMaxSegmentBytes`, `WALMaxRecord`, `WALAsync`, `WALQueueDepth`, `WALBatchMax`.
 - Replay: `WALAutoRepair`, `WALMissingSegmentPolicy`, `ReplayBatchSize`.
 - Cleanup: `TrashDir`, `TrashMaxBytes`, `TrashMaxFiles`.
 - IO: `IOFS` for custom filesystem/IO backends (e.g., io_uring on Linux),

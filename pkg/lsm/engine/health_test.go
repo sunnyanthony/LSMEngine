@@ -131,6 +131,39 @@ func TestStatsIncludesFlushedSSTables(t *testing.T) {
 	}
 }
 
+func TestStatsWALSegmentRotation(t *testing.T) {
+	store, err := New(Options{
+		DataDir:            t.TempDir(),
+		WALBlockSize:       64,
+		WALMaxSegmentBytes: 128,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	for i := 0; i < 4; i++ {
+		if err := store.Put([]byte{byte('a' + i)}, []byte("value")); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+
+	stats := store.Stats()
+	if stats.WAL.MaxSegmentBytes != 128 {
+		t.Fatalf("expected configured wal max segment bytes, got %+v", stats.WAL)
+	}
+	if stats.WAL.ArchivedSegmentCount == 0 || stats.WAL.SegmentCount != stats.WAL.ArchivedSegmentCount+1 {
+		t.Fatalf("expected rotated WAL segments, got %+v", stats.WAL)
+	}
+	if stats.WAL.ArchivedSegmentBytes == 0 || stats.WAL.TotalBytes != stats.WAL.ActiveSegmentBytes+stats.WAL.ArchivedSegmentBytes {
+		t.Fatalf("expected WAL byte accounting across segments, got %+v", stats.WAL)
+	}
+}
+
 func TestStatsPointReadMetrics(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
 	if err != nil {
