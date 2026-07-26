@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ type GatewayReadBalancePolicy string
 const (
 	GatewayReadBalanceRoundRobin GatewayReadBalancePolicy = "round_robin"
 	GatewayReadBalanceOrdered    GatewayReadBalancePolicy = "ordered"
+	GatewayReadBalanceFreshest   GatewayReadBalancePolicy = "freshest"
 )
 
 // GatewayOptions configures route-aware write forwarding.
@@ -194,7 +196,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		readBalancePolicy = GatewayReadBalanceRoundRobin
 	}
 	switch readBalancePolicy {
-	case GatewayReadBalanceRoundRobin, GatewayReadBalanceOrdered:
+	case GatewayReadBalanceRoundRobin, GatewayReadBalanceOrdered, GatewayReadBalanceFreshest:
 	default:
 		return nil, fmt.Errorf("invalid gateway read balance policy %q", readBalancePolicy)
 	}
@@ -552,6 +554,12 @@ type gatewayReadTarget struct {
 	endpoint string
 }
 
+type gatewayReadStatusTarget struct {
+	gatewayReadTarget
+	applyLag uint64
+	order    int
+}
+
 func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, kvRead bool) ([]gatewayReadTarget, error) {
 	if g == nil {
 		return nil, fmt.Errorf("gateway unavailable")
@@ -564,31 +572,61 @@ func (g *Gateway) readTargets(ctx context.Context, endpoints map[string]string, 
 		return []gatewayReadTarget{{nodeID: nodeID, endpoint: endpoint}}, nil
 	}
 	nodeIDs := g.readNodeEndpointIDs(endpoints)
+	if kvRead && (g.maxReadApplyLag != nil || g.readBalancePolicy == GatewayReadBalanceFreshest) {
+		return g.statusFilteredReadTargets(ctx, endpoints, nodeIDs)
+	}
 	out := make([]gatewayReadTarget, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		endpoint, ok := endpoints[nodeID]
+		if !ok {
+			continue
+		}
+		out = append(out, gatewayReadTarget{nodeID: nodeID, endpoint: endpoint})
+	}
+	return out, nil
+}
+
+func (g *Gateway) statusFilteredReadTargets(ctx context.Context, endpoints map[string]string, nodeIDs []string) ([]gatewayReadTarget, error) {
+	candidates := make([]gatewayReadStatusTarget, 0, len(nodeIDs))
 	var lastErr error
 	for _, nodeID := range nodeIDs {
 		endpoint, ok := endpoints[nodeID]
 		if !ok {
 			continue
 		}
-		if kvRead && g.maxReadApplyLag != nil {
-			status, err := g.backendStatus(ctx, endpoint)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if status.CommitLogRuntime.ApplyLag > *g.maxReadApplyLag {
-				lastErr = fmt.Errorf("node %q apply lag %d exceeds max read apply lag %d", nodeID, status.CommitLogRuntime.ApplyLag, *g.maxReadApplyLag)
-				continue
-			}
-			if strings.TrimSpace(status.NodeID) != "" {
-				nodeID = status.NodeID
-			}
+		status, err := g.backendStatus(ctx, endpoint)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		out = append(out, gatewayReadTarget{nodeID: nodeID, endpoint: endpoint})
+		applyLag := status.CommitLogRuntime.ApplyLag
+		if g.maxReadApplyLag != nil && applyLag > *g.maxReadApplyLag {
+			lastErr = fmt.Errorf("node %q apply lag %d exceeds max read apply lag %d", nodeID, applyLag, *g.maxReadApplyLag)
+			continue
+		}
+		if strings.TrimSpace(status.NodeID) != "" {
+			nodeID = status.NodeID
+		}
+		candidates = append(candidates, gatewayReadStatusTarget{
+			gatewayReadTarget: gatewayReadTarget{nodeID: nodeID, endpoint: endpoint},
+			applyLag:          applyLag,
+			order:             len(candidates),
+		})
 	}
-	if len(out) == 0 && lastErr != nil {
+	if len(candidates) == 0 && lastErr != nil {
 		return nil, lastErr
+	}
+	if g.readBalancePolicy == GatewayReadBalanceFreshest {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].applyLag != candidates[j].applyLag {
+				return candidates[i].applyLag < candidates[j].applyLag
+			}
+			return candidates[i].order < candidates[j].order
+		})
+	}
+	out := make([]gatewayReadTarget, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.gatewayReadTarget)
 	}
 	return out, nil
 }
