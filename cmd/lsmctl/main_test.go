@@ -611,12 +611,14 @@ func TestWaitGatewayStatusRejectsInvalidReadMode(t *testing.T) {
 
 func TestWriteGatewayStatus(t *testing.T) {
 	var buf bytes.Buffer
+	maxLag := uint64(3)
 	writeGatewayStatus(&buf, server.GatewayClusterStatus{
 		Ready:               true,
 		NodeCount:           2,
 		ReachableNodes:      1,
 		ReadMode:            "leader",
 		ReadBalancePolicy:   "ordered",
+		MaxReadApplyLag:     &maxLag,
 		WriteLeader:         "node-a",
 		WriteLeaderEndpoint: "http://127.0.0.1:8080",
 		Reason:              "partial_node_unavailable",
@@ -668,6 +670,7 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"reachable_nodes=1",
 		"read_mode=leader",
 		"read_balance_policy=ordered",
+		"max_read_apply_lag=3",
 		"write_leader=node-a",
 		"reason=partial_node_unavailable",
 		"routing_write_attempts=4",
@@ -739,6 +742,7 @@ func TestWriteGatewayWait(t *testing.T) {
 		"require_write_leader=true",
 		"read_mode=leader",
 		"read_balance_policy=ordered",
+		"max_read_apply_lag=-1",
 		"required_read_mode=leader",
 		"write_leader=node-a",
 		"node=node-a",
@@ -748,6 +752,41 @@ func TestWriteGatewayWait(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
 		}
+	}
+}
+
+func TestSelectedGatewayMaxReadApplyLag(t *testing.T) {
+	configValue := int64(2)
+	got, err := selectedGatewayMaxReadApplyLag(serverconfig.Config{GatewayMaxReadApplyLag: &configValue}, -1, false)
+	if err != nil {
+		t.Fatalf("select config max read apply lag: %v", err)
+	}
+	if got == nil || *got != 2 {
+		t.Fatalf("expected config max read apply lag 2, got %v", got)
+	}
+	got, err = selectedGatewayMaxReadApplyLag(serverconfig.Config{GatewayMaxReadApplyLag: &configValue}, 4, true)
+	if err != nil {
+		t.Fatalf("select flag max read apply lag: %v", err)
+	}
+	if got == nil || *got != 4 {
+		t.Fatalf("expected flag max read apply lag 4, got %v", got)
+	}
+	got, err = selectedGatewayMaxReadApplyLag(serverconfig.Config{GatewayMaxReadApplyLag: &configValue}, -1, true)
+	if err != nil {
+		t.Fatalf("select disabled max read apply lag: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected disabled max read apply lag, got %v", *got)
+	}
+	if _, err := selectedGatewayMaxReadApplyLag(serverconfig.Config{}, -2, true); err == nil {
+		t.Fatalf("expected invalid max read apply lag error")
+	}
+	got, err = selectedGatewayMaxReadApplyLag(serverconfig.Config{}, -1, false)
+	if err != nil {
+		t.Fatalf("select unset max read apply lag: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected unset config to disable max read apply lag, got %v", *got)
 	}
 }
 

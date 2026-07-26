@@ -29,6 +29,7 @@ type Config struct {
 	WriteConsistencyDefault           string          `yaml:"write_consistency_default"`
 	GatewayReadMode                   string          `yaml:"gateway_read_mode"`
 	GatewayReadBalancePolicy          string          `yaml:"gateway_read_balance_policy"`
+	GatewayMaxReadApplyLag            *int64          `yaml:"gateway_max_read_apply_lag"`
 	GatewayMaxWriteAttempts           int             `yaml:"gateway_max_write_attempts"`
 	GatewayWriteRetryBackoff          time.Duration   `yaml:"gateway_write_retry_backoff"`
 	GatewayEndpointFailureCooldown    time.Duration   `yaml:"gateway_endpoint_failure_cooldown"`

@@ -209,6 +209,7 @@ func gatewayCmd(args []string) {
 	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
 	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
 	readBalancePolicy := fs.String("read-balance-policy", "", "gateway read balance policy (round_robin|ordered)")
+	maxReadApplyLag := fs.Int64("max-read-apply-lag", -1, "maximum backend apply lag for any-mode KV reads; -1 disables")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
 	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; 0 uses config/default")
@@ -218,6 +219,7 @@ func gatewayCmd(args []string) {
 		log.Fatal(err)
 	}
 	var maxWriteAttemptsSet bool
+	var maxReadApplyLagSet bool
 	var writeRetryBackoffSet bool
 	var endpointFailureCooldownSet bool
 	var discoveryFlagState gatewayEndpointDiscoveryFlagState
@@ -235,6 +237,8 @@ func gatewayCmd(args []string) {
 			discoveryFlagState.DNSScheme = true
 		case "max-write-attempts":
 			maxWriteAttemptsSet = true
+		case "max-read-apply-lag":
+			maxReadApplyLagSet = true
 		case "write-retry-backoff":
 			writeRetryBackoffSet = true
 		case "endpoint-failure-cooldown":
@@ -262,6 +266,10 @@ func gatewayCmd(args []string) {
 		gatewayReadBalancePolicy = cfg.GatewayReadBalancePolicy
 	}
 	gatewayMaxWriteAttempts := selectedGatewayMaxWriteAttempts(cfg, *maxWriteAttempts, maxWriteAttemptsSet)
+	gatewayMaxReadApplyLag, err := selectedGatewayMaxReadApplyLag(cfg, *maxReadApplyLag, maxReadApplyLagSet)
+	if err != nil {
+		log.Fatalf("gateway read apply lag: %v", err)
+	}
 	gatewayWriteRetryBackoff := selectedGatewayWriteRetryBackoff(cfg, *writeRetryBackoff, writeRetryBackoffSet)
 	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
 	gatewayEndpointDiscovery := selectedGatewayEndpointDiscoveryOptions(cfg, gatewayEndpointDiscoveryOptions{
@@ -280,6 +288,7 @@ func gatewayCmd(args []string) {
 		NodeEndpointResolver:    resolver,
 		ReadMode:                server.GatewayReadMode(gatewayReadMode),
 		ReadBalancePolicy:       server.GatewayReadBalancePolicy(gatewayReadBalancePolicy),
+		MaxReadApplyLag:         gatewayMaxReadApplyLag,
 		MaxWriteAttempts:        gatewayMaxWriteAttempts,
 		WriteRetryBackoff:       gatewayWriteRetryBackoff,
 		AlignWriteLeader:        true,
@@ -330,6 +339,24 @@ func selectedGatewayMaxWriteAttempts(cfg serverconfig.Config, flagValue int, fla
 		return flagValue
 	}
 	return cfg.GatewayMaxWriteAttempts
+}
+
+func selectedGatewayMaxReadApplyLag(cfg serverconfig.Config, flagValue int64, flagSet bool) (*uint64, error) {
+	if !flagSet && cfg.GatewayMaxReadApplyLag == nil {
+		return nil, nil
+	}
+	value := flagValue
+	if !flagSet {
+		value = *cfg.GatewayMaxReadApplyLag
+	}
+	if value < -1 {
+		return nil, fmt.Errorf("max read apply lag must be -1 or non-negative")
+	}
+	if value == -1 {
+		return nil, nil
+	}
+	out := uint64(value)
+	return &out, nil
 }
 
 func selectedGatewayWriteRetryBackoff(
@@ -2143,14 +2170,19 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 }
 
 func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
+	maxReadApplyLag := int64(-1)
+	if status.MaxReadApplyLag != nil {
+		maxReadApplyLag = int64(*status.MaxReadApplyLag)
+	}
 	fmt.Fprintf(
 		w,
-		"ready=%v node_count=%d reachable_nodes=%d read_mode=%s read_balance_policy=%s write_leader=%s write_leader_endpoint=%s reason=%s\n",
+		"ready=%v node_count=%d reachable_nodes=%d read_mode=%s read_balance_policy=%s max_read_apply_lag=%d write_leader=%s write_leader_endpoint=%s reason=%s\n",
 		status.Ready,
 		status.NodeCount,
 		status.ReachableNodes,
 		status.ReadMode,
 		status.ReadBalancePolicy,
+		maxReadApplyLag,
 		status.WriteLeader,
 		status.WriteLeaderEndpoint,
 		status.Reason,
@@ -2160,15 +2192,20 @@ func writeGatewayStatus(w io.Writer, status server.GatewayClusterStatus) {
 }
 
 func writeGatewayWait(w io.Writer, result gatewayWaitResult) {
+	maxReadApplyLag := int64(-1)
+	if result.Status.MaxReadApplyLag != nil {
+		maxReadApplyLag = int64(*result.Status.MaxReadApplyLag)
+	}
 	fmt.Fprintf(
 		w,
-		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s read_balance_policy=%s required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
+		"ready=%v reachable_nodes=%d required_reachable_nodes=%d require_write_leader=%v read_mode=%s read_balance_policy=%s max_read_apply_lag=%d required_read_mode=%s write_leader=%s write_leader_endpoint=%s\n",
 		result.Ready,
 		result.ReachableNodes,
 		result.RequiredReachableNodes,
 		result.RequireWriteLeader,
 		result.Status.ReadMode,
 		result.Status.ReadBalancePolicy,
+		maxReadApplyLag,
 		result.RequiredReadMode,
 		result.WriteLeader,
 		result.WriteLeaderEndpoint,
