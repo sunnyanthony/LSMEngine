@@ -33,10 +33,14 @@ discovery behind the LSM-owned node endpoint resolver contract. It uses gateway
 `read_mode=leader`, so `/kv/get` and `/kv/range` proxy to the current commit-log
 write leader. Leader read mode is a routing policy, not a raft ReadIndex or
 lease-read implementation. The smoke uses `wait-gateway --min-reachable 3`
-with `--read-mode leader` before client traffic, then waits for all pods to
-apply the committed write/delete sequence with `wait-cluster --min-applied-index`
-before reading followers, so it checks catch-up instead of only endpoint
-reachability. The manifests use short in-cluster DNS names such as
+with `--read-mode leader` and the gateway read-ready apply-lag gate before
+client traffic. `LSM_GATEWAY_READ_READY_MIN` and
+`LSM_GATEWAY_READ_READY_MAX_LAG` override the default smoke readiness bound. The
+script skips only that smoke read-ready gate when
+`LSM_GATEWAY_READ_READY_MAX_LAG=-1`. It then waits for all pods to apply the
+committed write/delete sequence with `wait-cluster --min-applied-index` before
+reading followers, so it checks catch-up instead of only endpoint reachability.
+The manifests use short in-cluster DNS names such as
 `lsm-cluster-0.lsm-cluster` instead of assuming a specific cluster DNS suffix.
 
 ## Persistent restart smoke
