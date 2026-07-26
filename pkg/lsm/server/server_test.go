@@ -24,6 +24,7 @@ func (stubProvider) Stats() lsm.Stats {
 	return lsm.Stats{
 		MemtableBytes:      1,
 		MemtableEntries:    2,
+		FlushQueueDepth:    1,
 		FlushQueueCapacity: 4,
 		SSTableCount:       3,
 		SSTableBytes:       64,
@@ -31,13 +32,32 @@ func (stubProvider) Stats() lsm.Stats {
 			{Level: 0, TableCount: 2, SizeBytes: 40},
 			{Level: 1, TableCount: 1, SizeBytes: 24},
 		},
+		L0TableCount:              2,
+		L0SizeBytes:               40,
+		CompactionPending:         true,
 		PointReads:                5,
+		PointReadMemtableHits:     1,
 		PointReadSSTableHits:      2,
+		PointReadMisses:           2,
 		PointReadSSTableProbes:    7,
 		PointReadMaxSSTableProbes: 4,
 		SSTableFlow:               lsm.SSTableFlowStats{CacheHit: 3, CacheMiss: 4},
-		CompactionRuntime:         lsm.CompactionRuntimeStats{Triggers: 1, Runs: 2, Steps: 3, SuccessfulSteps: 2},
-		WriteBackpressure:         lsm.WriteBackpressureStats{Active: true, Reason: "l0_compaction_pressure", Rejects: 2},
+		CompactionRuntime: lsm.CompactionRuntimeStats{
+			Triggers:          1,
+			CoalescedTriggers: 1,
+			Runs:              2,
+			Steps:             3,
+			SuccessfulSteps:   2,
+			Running:           true,
+		},
+		WriteBackpressure: lsm.WriteBackpressureStats{Active: true, Reason: "l0_compaction_pressure", Rejects: 2},
+		WAL: lsm.WALStats{
+			SegmentCount:         3,
+			ArchivedSegmentCount: 2,
+			TotalBytes:           512,
+			CheckpointLag:        9,
+			PendingBlockRecords:  2,
+		},
 	}
 }
 
@@ -614,6 +634,62 @@ func TestHandlerStats(t *testing.T) {
 	}
 	if !stats.WriteBackpressure.Active || stats.WriteBackpressure.Rejects != 2 {
 		t.Fatalf("unexpected write backpressure stats: %+v", stats.WriteBackpressure)
+	}
+}
+
+func TestHandlerMetrics(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("expected text metrics content type, got %q", got)
+	}
+	out := rec.Body.String()
+	for _, want := range []string{
+		"# TYPE lsm_engine_memtable_bytes gauge",
+		"lsm_engine_memtable_bytes 1",
+		"lsm_engine_flush_queue_depth 1",
+		"lsm_engine_sstable_count 3",
+		"lsm_engine_l0_sstable_count 2",
+		"lsm_engine_compaction_pending 1",
+		`lsm_engine_sstable_level_count{level="0"} 2`,
+		`lsm_engine_sstable_level_bytes{level="1"} 24`,
+		"lsm_engine_point_reads_total 5",
+		"lsm_engine_point_read_memtable_hits_total 1",
+		"lsm_engine_point_read_sstable_hits_total 2",
+		"lsm_engine_point_read_misses_total 2",
+		"lsm_engine_point_read_max_sstable_probes 4",
+		"lsm_engine_sstable_flow_cache_hits_total 3",
+		"lsm_engine_sstable_flow_cache_misses_total 4",
+		"lsm_engine_compaction_triggers_total 1",
+		"lsm_engine_compaction_coalesced_triggers_total 1",
+		"lsm_engine_compaction_successful_steps_total 2",
+		"lsm_engine_compaction_running 1",
+		"lsm_engine_write_backpressure_active 1",
+		"lsm_engine_write_backpressure_rejects_total 2",
+		`lsm_engine_write_backpressure_reason{reason="l0_compaction_pressure"} 1`,
+		"lsm_engine_wal_segments 3",
+		"lsm_engine_wal_archived_segments 2",
+		"lsm_engine_wal_bytes 512",
+		"lsm_engine_wal_checkpoint_lag 9",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected metrics to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandlerMetricsRequiresGet(t *testing.T) {
+	handler := NewHandler(stubProvider{})
+	req := httptest.NewRequest(http.MethodPost, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

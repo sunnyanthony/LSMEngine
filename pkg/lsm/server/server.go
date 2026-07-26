@@ -76,6 +76,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/stats", handler.handleStats)
+	mux.HandleFunc("/metrics", handler.handleMetrics)
 	mux.HandleFunc("/cluster/status", handler.handleClusterStatus)
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
@@ -166,6 +167,116 @@ func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.provider.Stats())
+}
+
+func (h *handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	if h.provider == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeServerMetrics(w, lsm.Stats{})
+		return
+	}
+	writeServerMetrics(w, h.provider.Stats())
+}
+
+func writeServerMetrics(w io.Writer, stats lsm.Stats) {
+	writeMetricHelp(w, "lsm_engine_memtable_bytes", "Current mutable memtable bytes.")
+	writeMetricGauge(w, "lsm_engine_memtable_bytes", float64(stats.MemtableBytes))
+	writeMetricHelp(w, "lsm_engine_memtable_entries", "Current mutable memtable entries.")
+	writeMetricGauge(w, "lsm_engine_memtable_entries", float64(stats.MemtableEntries))
+	writeMetricHelp(w, "lsm_engine_immutable_memtables", "Immutable memtables queued or being flushed.")
+	writeMetricGauge(w, "lsm_engine_immutable_memtables", float64(stats.ImmutableCount))
+	writeMetricHelp(w, "lsm_engine_flush_queue_depth", "Current flush queue depth.")
+	writeMetricGauge(w, "lsm_engine_flush_queue_depth", float64(stats.FlushQueueDepth))
+	writeMetricHelp(w, "lsm_engine_flush_queue_capacity", "Configured flush queue capacity.")
+	writeMetricGauge(w, "lsm_engine_flush_queue_capacity", float64(stats.FlushQueueCapacity))
+	writeMetricHelp(w, "lsm_engine_sstable_count", "Current SSTable count.")
+	writeMetricGauge(w, "lsm_engine_sstable_count", float64(stats.SSTableCount))
+	writeMetricHelp(w, "lsm_engine_sstable_bytes", "Current SSTable bytes.")
+	writeMetricGauge(w, "lsm_engine_sstable_bytes", float64(stats.SSTableBytes))
+	writeMetricHelp(w, "lsm_engine_l0_sstable_count", "Current level-0 SSTable count.")
+	writeMetricGauge(w, "lsm_engine_l0_sstable_count", float64(stats.L0TableCount))
+	writeMetricHelp(w, "lsm_engine_l0_bytes", "Current level-0 SSTable bytes.")
+	writeMetricGauge(w, "lsm_engine_l0_bytes", float64(stats.L0SizeBytes))
+	writeMetricHelp(w, "lsm_engine_compaction_pending", "Whether L0 has reached the configured compaction threshold.")
+	writeMetricGauge(w, "lsm_engine_compaction_pending", boolMetric(stats.CompactionPending))
+
+	writeMetricHelp(w, "lsm_engine_sstable_level_count", "Current SSTable count by level.")
+	writeMetricType(w, "lsm_engine_sstable_level_count", "gauge")
+	writeMetricHelp(w, "lsm_engine_sstable_level_bytes", "Current SSTable bytes by level.")
+	writeMetricType(w, "lsm_engine_sstable_level_bytes", "gauge")
+	for _, level := range stats.SSTableLevels {
+		labels := fmt.Sprintf(`level="%d"`, level.Level)
+		writeMetricGaugeWithLabels(w, "lsm_engine_sstable_level_count", labels, float64(level.TableCount))
+		writeMetricGaugeWithLabels(w, "lsm_engine_sstable_level_bytes", labels, float64(level.SizeBytes))
+	}
+
+	writeMetricHelp(w, "lsm_engine_point_reads_total", "Process-local point reads.")
+	writeMetricCounter(w, "lsm_engine_point_reads_total", stats.PointReads)
+	writeMetricHelp(w, "lsm_engine_point_read_memtable_hits_total", "Process-local point read memtable hits.")
+	writeMetricCounter(w, "lsm_engine_point_read_memtable_hits_total", stats.PointReadMemtableHits)
+	writeMetricHelp(w, "lsm_engine_point_read_immutable_hits_total", "Process-local point read immutable memtable hits.")
+	writeMetricCounter(w, "lsm_engine_point_read_immutable_hits_total", stats.PointReadImmutableHits)
+	writeMetricHelp(w, "lsm_engine_point_read_sstable_hits_total", "Process-local point read SSTable hits.")
+	writeMetricCounter(w, "lsm_engine_point_read_sstable_hits_total", stats.PointReadSSTableHits)
+	writeMetricHelp(w, "lsm_engine_point_read_misses_total", "Process-local point read misses.")
+	writeMetricCounter(w, "lsm_engine_point_read_misses_total", stats.PointReadMisses)
+	writeMetricHelp(w, "lsm_engine_point_read_sstable_probes_total", "Process-local SSTable probes during point reads.")
+	writeMetricCounter(w, "lsm_engine_point_read_sstable_probes_total", stats.PointReadSSTableProbes)
+	writeMetricHelp(w, "lsm_engine_point_read_max_sstable_probes", "Maximum SSTable probes observed in one point read.")
+	writeMetricGauge(w, "lsm_engine_point_read_max_sstable_probes", float64(stats.PointReadMaxSSTableProbes))
+	writeMetricHelp(w, "lsm_engine_sstable_flow_cache_hits_total", "Process-local SSTable block cache hits.")
+	writeMetricCounter(w, "lsm_engine_sstable_flow_cache_hits_total", stats.SSTableFlow.CacheHit)
+	writeMetricHelp(w, "lsm_engine_sstable_flow_cache_misses_total", "Process-local SSTable block cache misses.")
+	writeMetricCounter(w, "lsm_engine_sstable_flow_cache_misses_total", stats.SSTableFlow.CacheMiss)
+	writeMetricHelp(w, "lsm_engine_sstable_flow_filter_pass_total", "Process-local SSTable filter pass observations.")
+	writeMetricCounter(w, "lsm_engine_sstable_flow_filter_pass_total", stats.SSTableFlow.FilterPass)
+	writeMetricHelp(w, "lsm_engine_sstable_flow_filter_skip_total", "Process-local SSTable filter skip observations.")
+	writeMetricCounter(w, "lsm_engine_sstable_flow_filter_skip_total", stats.SSTableFlow.FilterSkip)
+	writeMetricHelp(w, "lsm_engine_sstable_flow_errors_total", "Process-local SSTable read-pipeline errors.")
+	writeMetricCounter(w, "lsm_engine_sstable_flow_errors_total", stats.SSTableFlow.Errors)
+
+	writeMetricHelp(w, "lsm_engine_compaction_triggers_total", "Process-local compaction triggers.")
+	writeMetricCounter(w, "lsm_engine_compaction_triggers_total", stats.CompactionRuntime.Triggers)
+	writeMetricHelp(w, "lsm_engine_compaction_coalesced_triggers_total", "Process-local compaction triggers coalesced while a run was already pending.")
+	writeMetricCounter(w, "lsm_engine_compaction_coalesced_triggers_total", stats.CompactionRuntime.CoalescedTriggers)
+	writeMetricHelp(w, "lsm_engine_compaction_runs_total", "Process-local compaction runs.")
+	writeMetricCounter(w, "lsm_engine_compaction_runs_total", stats.CompactionRuntime.Runs)
+	writeMetricHelp(w, "lsm_engine_compaction_steps_total", "Process-local compaction steps.")
+	writeMetricCounter(w, "lsm_engine_compaction_steps_total", stats.CompactionRuntime.Steps)
+	writeMetricHelp(w, "lsm_engine_compaction_successful_steps_total", "Process-local successful compaction steps.")
+	writeMetricCounter(w, "lsm_engine_compaction_successful_steps_total", stats.CompactionRuntime.SuccessfulSteps)
+	writeMetricHelp(w, "lsm_engine_compaction_errors_total", "Process-local compaction errors.")
+	writeMetricCounter(w, "lsm_engine_compaction_errors_total", stats.CompactionRuntime.Errors)
+	writeMetricHelp(w, "lsm_engine_compaction_running", "Whether a compaction worker is currently running.")
+	writeMetricGauge(w, "lsm_engine_compaction_running", boolMetric(stats.CompactionRuntime.Running))
+
+	writeMetricHelp(w, "lsm_engine_write_backpressure_active", "Whether local write admission backpressure is active.")
+	writeMetricGauge(w, "lsm_engine_write_backpressure_active", boolMetric(stats.WriteBackpressure.Active))
+	writeMetricHelp(w, "lsm_engine_write_backpressure_rejects_total", "Process-local local writes rejected by write admission backpressure.")
+	writeMetricCounter(w, "lsm_engine_write_backpressure_rejects_total", stats.WriteBackpressure.Rejects)
+	writeMetricHelp(w, "lsm_engine_write_backpressure_reason", "Current write backpressure reason as a labeled gauge.")
+	writeMetricType(w, "lsm_engine_write_backpressure_reason", "gauge")
+	if stats.WriteBackpressure.Reason != "" {
+		writeMetricGaugeWithLabels(w, "lsm_engine_write_backpressure_reason", `reason="`+metricLabelValue(stats.WriteBackpressure.Reason)+`"`, 1)
+	}
+
+	writeMetricHelp(w, "lsm_engine_wal_segments", "Current WAL segment count.")
+	writeMetricGauge(w, "lsm_engine_wal_segments", float64(stats.WAL.SegmentCount))
+	writeMetricHelp(w, "lsm_engine_wal_archived_segments", "Current archived WAL segment count.")
+	writeMetricGauge(w, "lsm_engine_wal_archived_segments", float64(stats.WAL.ArchivedSegmentCount))
+	writeMetricHelp(w, "lsm_engine_wal_bytes", "Current total WAL bytes.")
+	writeMetricGauge(w, "lsm_engine_wal_bytes", float64(stats.WAL.TotalBytes))
+	writeMetricHelp(w, "lsm_engine_wal_checkpoint_lag", "Current WAL checkpoint lag in sequence numbers.")
+	writeMetricGauge(w, "lsm_engine_wal_checkpoint_lag", float64(stats.WAL.CheckpointLag))
+	writeMetricHelp(w, "lsm_engine_wal_pending_block_records", "Current buffered WAL records not yet flushed as a block.")
+	writeMetricGauge(w, "lsm_engine_wal_pending_block_records", float64(stats.WAL.PendingBlockRecords))
+	writeMetricHelp(w, "lsm_engine_closed", "Whether the engine is closed.")
+	writeMetricGauge(w, "lsm_engine_closed", boolMetric(stats.Closed))
 }
 
 func (h *handler) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
