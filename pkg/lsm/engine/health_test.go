@@ -164,6 +164,59 @@ func TestStatsWALSegmentRotation(t *testing.T) {
 	}
 }
 
+func TestWALRetentionPrunesArchivedSegmentsAfterFlush(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(Options{
+		DataDir:                   dir,
+		MemtableLimit:             4,
+		FlushQueueSize:            64,
+		CompactionL0Threshold:     100,
+		WALBlockSize:              64,
+		WALMaxSegmentBytes:        128,
+		WALRetainArchivedSegments: 1,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	for i := 0; i < 20; i++ {
+		if err := store.Put([]byte{byte('a' + i)}, []byte("value")); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+
+	waitForStats(t, func() bool {
+		stats := store.Stats()
+		return stats.SSTableCount > 0 &&
+			stats.WAL.SegmentID > 1 &&
+			stats.WAL.ArchivedSegmentCount <= 1
+	})
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := New(Options{
+		DataDir:                   dir,
+		MemtableLimit:             4,
+		FlushQueueSize:            64,
+		CompactionL0Threshold:     100,
+		WALBlockSize:              64,
+		WALMaxSegmentBytes:        128,
+		WALRetainArchivedSegments: 1,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("close reopened: %v", err)
+		}
+	}()
+	if entry, ok := reopened.Get([]byte{'t'}); !ok || string(entry.Value) != "value" {
+		t.Fatalf("expected retained value after reopen, got %q ok=%v", entry.Value, ok)
+	}
+}
+
 func TestStatsPointReadMetrics(t *testing.T) {
 	store, err := New(Options{DataDir: t.TempDir()})
 	if err != nil {
