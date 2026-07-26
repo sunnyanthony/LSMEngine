@@ -52,6 +52,7 @@ write_consistency_default: "accepted"
 # gateway_read_mode: "any"
 # Optional local storage tuning. Backpressure thresholds are disabled when 0.
 # memtable_limit: 1048576
+# wal_max_segment_bytes: 67108864
 # flush_queue_size: 4
 # compaction_l0_threshold: 4
 # flush_backpressure_queue_threshold: 0

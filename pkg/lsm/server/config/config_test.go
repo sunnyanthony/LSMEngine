@@ -47,6 +47,7 @@ write_timeout: "3s"
 write_consistency_default: "accepted"
 gateway_read_mode: "leader"
 memtable_limit: 2048
+wal_max_segment_bytes: 4096
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
@@ -116,6 +117,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.MemtableLimit != 2048 {
 		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)
+	}
+	if cfg.WALMaxSegmentBytes != 4096 {
+		t.Fatalf("expected wal max segment bytes, got %d", cfg.WALMaxSegmentBytes)
 	}
 	if cfg.FlushQueueSize != 8 {
 		t.Fatalf("expected flush queue size, got %d", cfg.FlushQueueSize)

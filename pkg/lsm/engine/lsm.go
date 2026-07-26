@@ -45,6 +45,7 @@ type Options struct {
 	SSTablePolicyOverride             *sstableconfig.PolicySnapshot
 	ManifestCheckpointEvery           int
 	WALSync                           bool
+	WALMaxSegmentBytes                uint64
 	WALMaxRecord                      uint64
 	WALBlockSize                      uint32
 	WALAsync                          bool

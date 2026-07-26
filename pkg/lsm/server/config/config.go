@@ -29,6 +29,7 @@ type Config struct {
 	WriteConsistencyDefault           string          `yaml:"write_consistency_default"`
 	GatewayReadMode                   string          `yaml:"gateway_read_mode"`
 	MemtableLimit                     int             `yaml:"memtable_limit"`
+	WALMaxSegmentBytes                uint64          `yaml:"wal_max_segment_bytes"`
 	FlushQueueSize                    int             `yaml:"flush_queue_size"`
 	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
 	CompactionL0Threshold             int             `yaml:"compaction_l0_threshold"`
