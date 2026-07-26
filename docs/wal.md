@@ -34,6 +34,17 @@ Each WAL segment starts with a fixed header:
 
 If header CRC fails, the entire segment is skipped and a warning is emitted.
 
+## Segment retention marker
+Archived segment retention is node-local. When retention removes an archived
+prefix such as `wal.log.1` through `wal.log.N`, it writes `wal.log.pruned`
+containing the highest pruned segment ID. Segment discovery treats that marked
+prefix as intentional pruning while still reporting gaps after the first
+retained archived segment as `ErrMissingSegment`.
+
+Retention only removes a contiguous archived prefix after each segment has been
+fully scanned and every entry in that segment is covered by the manifest WAL
+checkpoint. The active `wal.log` is never removed by retention.
+
 ## Block framing
 Records are grouped into fixed-size blocks. The block size is configurable via options
 and stored in the segment header (default 64KB). Each block:

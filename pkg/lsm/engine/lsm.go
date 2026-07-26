@@ -46,6 +46,7 @@ type Options struct {
 	ManifestCheckpointEvery           int
 	WALSync                           bool
 	WALMaxSegmentBytes                uint64 // Rotate after a flushed block reaches this size; 0 disables rotation.
+	WALRetainArchivedSegments         int
 	WALMaxRecord                      uint64
 	WALBlockSize                      uint32
 	WALAsync                          bool
@@ -157,6 +158,7 @@ type LSM struct {
 	sstableOpts                       sstableconfig.Options
 	flowMetrics                       *sstableconfig.FlowMetrics
 	mtLimit                           int
+	walRetainArchivedSegments         int
 	autoRepair                        bool
 	ctx                               context.Context
 	cancel                            context.CancelFunc

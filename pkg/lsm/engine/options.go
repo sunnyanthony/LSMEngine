@@ -34,6 +34,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.WALMaxRecord == 0 {
 		opts.WALMaxRecord = uint64(opts.WALBlockSize)
 	}
+	if opts.WALRetainArchivedSegments < 0 {
+		return opts, fmt.Errorf("wal retain archived segments must be non-negative")
+	}
 	if opts.FlushQueueSize == 0 {
 		opts.FlushQueueSize = 4
 	}

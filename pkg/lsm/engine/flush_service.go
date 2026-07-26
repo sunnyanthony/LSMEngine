@@ -65,8 +65,12 @@ func (s *flushService) enqueueBlocking(entries []types.Entry) {
 func (s *flushService) onFlush(t sstable.SSTable) {
 	meta := tableedit.TableMetaFromSSTable(t, 0)
 	add := []tableset.Table{{Meta: meta, Handle: t}}
-	if err := s.editService().Apply(add, nil, t.Seq); err != nil && s.l.logger != nil {
-		s.l.logger.Printf("flush apply: %v", err)
+	if err := s.editService().Apply(add, nil, t.Seq); err != nil {
+		if s.l.logger != nil {
+			s.l.logger.Printf("flush apply: %v", err)
+		}
+	} else {
+		s.l.pruneArchivedWALSegments(t.Seq)
 	}
 	if s.l.compactionSvc != nil {
 		s.l.compactionSvc.Trigger()
@@ -80,4 +84,25 @@ func (s *flushService) editService() tableedit.Editor {
 		return nil
 	}
 	return s.l.tableEditor()
+}
+
+func (l *LSM) pruneArchivedWALSegments(checkpoint uint64) {
+	if l == nil || l.wal == nil || l.walRetainArchivedSegments <= 0 || checkpoint == 0 {
+		return
+	}
+	stats, err := l.wal.PruneArchivedSegments(checkpoint, l.walRetainArchivedSegments)
+	if err != nil {
+		if l.logger != nil {
+			l.logger.Printf("wal retention: %v", err)
+		}
+		return
+	}
+	if stats.RemovedSegments > 0 && l.logger != nil {
+		l.logger.Printf(
+			"wal retention: removed=%d retained=%d pruned_through=%d",
+			stats.RemovedSegments,
+			stats.RetainedSegments,
+			stats.PrunedThrough,
+		)
+	}
 }
