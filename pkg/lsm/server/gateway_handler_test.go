@@ -748,6 +748,9 @@ func TestGatewayHandlerStatusAggregatesBackendNodes(t *testing.T) {
 	if out.WriteLeader != "node-b" || out.WriteLeaderEndpoint != "http://node-b" {
 		t.Fatalf("unexpected write leader: %+v", out)
 	}
+	if out.Routing.RouteRefreshes != 0 || out.Routing.WriteAttempts != 0 {
+		t.Fatalf("expected idle routing stats in gateway status, got %+v", out.Routing)
+	}
 	if len(out.Nodes) != 2 || !out.Nodes[0].OK || !out.Nodes[1].OK {
 		t.Fatalf("expected two successful node statuses: %+v", out.Nodes)
 	}

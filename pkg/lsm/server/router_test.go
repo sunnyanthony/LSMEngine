@@ -142,6 +142,13 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 	if routeReads.Load() != 1 {
 		t.Fatalf("expected retry to use route hint without refreshing routes, got %d route reads", routeReads.Load())
 	}
+	stats := gateway.RoutingStats()
+	if stats.WriteAttempts != 2 || stats.WriteRetries != 1 || stats.WriteFailures != 0 {
+		t.Fatalf("unexpected write retry stats: %+v", stats)
+	}
+	if stats.RouteRefreshes != 1 || stats.RouteRefreshFailures != 0 || stats.RouteHintUpdates != 1 {
+		t.Fatalf("unexpected route stats: %+v", stats)
+	}
 }
 
 func TestGatewayPutReturnsWriteRequestError(t *testing.T) {
@@ -194,6 +201,10 @@ func TestGatewayPutReturnsWriteRequestError(t *testing.T) {
 	}
 	if reqErr.Response.Code != "closed" {
 		t.Fatalf("expected closed code, got %s", reqErr.Response.Code)
+	}
+	stats := gateway.RoutingStats()
+	if stats.WriteAttempts != 1 || stats.WriteRetries != 0 || stats.WriteFailures != 1 {
+		t.Fatalf("unexpected write failure stats: %+v", stats)
 	}
 }
 

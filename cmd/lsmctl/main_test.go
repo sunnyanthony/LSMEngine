@@ -535,6 +535,14 @@ func TestWriteGatewayStatus(t *testing.T) {
 		WriteLeader:         "node-a",
 		WriteLeaderEndpoint: "http://127.0.0.1:8080",
 		Reason:              "partial_node_unavailable",
+		Routing: server.GatewayRoutingStats{
+			WriteAttempts:        4,
+			WriteRetries:         1,
+			WriteFailures:        2,
+			RouteRefreshes:       3,
+			RouteRefreshFailures: 1,
+			RouteHintUpdates:     1,
+		},
 		Nodes: []server.GatewayClusterNodeStatus{
 			{
 				Node:     "node-a",
@@ -573,6 +581,12 @@ func TestWriteGatewayStatus(t *testing.T) {
 		"read_mode=leader",
 		"write_leader=node-a",
 		"reason=partial_node_unavailable",
+		"routing_write_attempts=4",
+		"routing_write_retries=1",
+		"routing_write_failures=2",
+		"routing_route_refreshes=3",
+		"routing_route_refresh_failures=1",
+		"routing_route_hint_updates=1",
 		"node=node-a",
 		"ok=true",
 		"health=ready",
@@ -601,6 +615,11 @@ func TestWriteGatewayWait(t *testing.T) {
 		WriteLeaderEndpoint:    "http://127.0.0.1:8080",
 		Status: server.GatewayClusterStatus{
 			ReadMode: "leader",
+			Routing: server.GatewayRoutingStats{
+				WriteAttempts:  2,
+				WriteRetries:   1,
+				RouteRefreshes: 1,
+			},
 			Nodes: []server.GatewayClusterNodeStatus{
 				{
 					Node:     "node-a",
@@ -633,6 +652,9 @@ func TestWriteGatewayWait(t *testing.T) {
 		"read_mode=leader",
 		"required_read_mode=leader",
 		"write_leader=node-a",
+		"routing_write_attempts=2",
+		"routing_write_retries=1",
+		"routing_route_refreshes=1",
 		"node=node-a",
 		"ok=true",
 		"applied_index=13",
