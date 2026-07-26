@@ -125,7 +125,10 @@ type controlPlane struct {
 	consensus commitLogConsensus
 }
 
-const maxAppliedControlOps = 256
+const (
+	currentControlStateVersion = 1
+	maxAppliedControlOps       = 256
+)
 
 var errControlNoop = errors.New("control noop")
 
@@ -1029,7 +1032,13 @@ func (c *controlPlane) loadState() (*controlPlaneState, error) {
 		return nil, err
 	}
 	if state.Version == 0 {
-		state.Version = 1
+		state.Version = currentControlStateVersion
+	}
+	if state.Version < 0 {
+		return nil, fmt.Errorf("invalid control state version %d", state.Version)
+	}
+	if state.Version > currentControlStateVersion {
+		return nil, fmt.Errorf("unsupported control state version %d (max supported %d)", state.Version, currentControlStateVersion)
 	}
 	if err := validateControlPlaneState(&state); err != nil {
 		return nil, err
@@ -1090,7 +1099,7 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 		shards = append(shards, shard)
 	}
 	return controlPlaneState{
-		Version:               1,
+		Version:               currentControlStateVersion,
 		NodeID:                c.nodeID,
 		ClusterID:             c.clusterID,
 		StorageMode:           c.storageMode,

@@ -463,7 +463,8 @@ Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
 - process supervision and automatic replacement triggers;
-- mixed-version compatibility tests;
+- broader mixed-version compatibility tests beyond the current control-state
+  future-version fail-fast guard;
 - richer policy for raft/shard membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
 

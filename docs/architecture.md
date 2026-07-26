@@ -47,7 +47,7 @@ Goals:
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush). Optional write-admission thresholds can reject new local writes before commit when flush backlog or L0 compaction pressure is too high.
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
 - Distributed transport and membership: outbound HTTP peer transport, LSM-owned peer and node endpoint resolver contracts, reloaded peer URL file support, DNS SRV node endpoint discovery for gateways, inbound raft message hooks, provider-owned raft background ticking, follower committed-entry apply, shard replica add/remove metadata, segmented raft log persistence, raft snapshot persistence/apply plumbing, provider-owned raft log snapshot policy, LSM state snapshot payload export/restore/reset, manual raft ConfChange hooks, raft join-mode startup, join-peer URL wiring, three-node static/dynamic/restart smoke coverage, leader hints, bounded gateway retries, basic gateway endpoint health policy, and retryable commit-log availability errors are present, but richer service-registry integrations and fully automated orchestration remain deferred for later phases.
-- Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
+- Cluster-wide replicated control authority and full mixed-version test matrices are deferred to later commitlog / raft hardening work. Control-state persistence has a basic compatibility guard: unknown future `control_state.json` versions fail startup instead of being interpreted by older binaries.
 
 ## Boundary Audit (current focus)
 - `pkg/lsm/engine` is still broad; future work splits responsibilities without widening the public API.
@@ -190,7 +190,7 @@ TODO (later discussion):
 - `<data>/control_state.json`: control-plane state snapshot (shards/order/leaders/draining + node/cluster identity).
   - Persisted atomically via temp file + rename.
   - If file is missing: bootstrap from `ShardMap` (or default shard).
-  - If file is invalid or identity mismatches (`cluster_id`/`node_id`): startup fails fast.
+  - If file is invalid, identity mismatches (`cluster_id`/`node_id`), or declares a future unsupported version: startup fails fast.
   - If shard layout is invalid (overlap, bad bounds, open-ended shard not last): startup fails fast.
 - `<data>/raft/commitlog-<node-id>/hard_state.json`: builtin etcd-raft provider hard state.
 - `<data>/raft/commitlog-<node-id>/snapshot.json`: builtin etcd-raft provider snapshot metadata and payload.
