@@ -165,6 +165,9 @@ the LSM-owned `NodeEndpointResolver` contract. Static maps and a reloaded
 node-endpoint file resolver are available behind that layer for long-running
 gateways or supervisors. Gateways can also use DNS SRV discovery through
 `--endpoint-dns-name`, `--endpoint-dns-service`, and `--endpoint-dns-proto`.
+The same gateway endpoint discovery settings can live in server config as
+`gateway_endpoint_file` or `gateway_endpoint_dns_*`; explicit gateway CLI flags
+override config for one-off processes.
 The DNS SRV resolver keeps platform lookup behavior behind the same LSM-owned
 resolver layer instead of adding provider-specific lookups directly to gateway
 routing. Future service-registry discovery should plug into the same contract.
@@ -235,8 +238,10 @@ The smoke runs gateway as a Docker Compose service using the `gateway` profile
 and exposes it at `http://127.0.0.1:8090`, so the local client talks to one
 stable endpoint while raft peer traffic stays inside the Compose network. The
 Compose gateway mounts the same `peer-urls.yaml` endpoint file as the server
-containers and passes it to `lsmctl gateway --endpoint-file`, so the smoke also
-covers the file-backed node endpoint resolver used by long-running gateways. It
+containers and passes it to `lsmctl gateway --endpoint-file`; production-style
+gateway processes can put the same path in `gateway_endpoint_file` when they
+want endpoint discovery to come from config. The smoke also covers the
+file-backed node endpoint resolver used by long-running gateways. It
 also verifies `/readyz` reports backend write readiness and uses
 `lsmctl wait-gateway` to wait until `/gateway/status` sees all three backend
 nodes, leader read mode, and a write leader. The Compose gateway service

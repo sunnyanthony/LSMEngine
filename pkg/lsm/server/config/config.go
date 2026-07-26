@@ -31,6 +31,11 @@ type Config struct {
 	GatewayMaxWriteAttempts           int             `yaml:"gateway_max_write_attempts"`
 	GatewayWriteRetryBackoff          time.Duration   `yaml:"gateway_write_retry_backoff"`
 	GatewayEndpointFailureCooldown    time.Duration   `yaml:"gateway_endpoint_failure_cooldown"`
+	GatewayEndpointFile               string          `yaml:"gateway_endpoint_file"`
+	GatewayEndpointDNSName            string          `yaml:"gateway_endpoint_dns_name"`
+	GatewayEndpointDNSService         string          `yaml:"gateway_endpoint_dns_service"`
+	GatewayEndpointDNSProto           string          `yaml:"gateway_endpoint_dns_proto"`
+	GatewayEndpointDNSScheme          string          `yaml:"gateway_endpoint_dns_scheme"`
 	MemtableLimit                     int             `yaml:"memtable_limit"`
 	WALMaxSegmentBytes                uint64          `yaml:"wal_max_segment_bytes"`
 	WALRetainArchivedSegments         int             `yaml:"wal_retain_archived_segments"`

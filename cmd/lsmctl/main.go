@@ -216,8 +216,19 @@ func gatewayCmd(args []string) {
 	var maxWriteAttemptsSet bool
 	var writeRetryBackoffSet bool
 	var endpointFailureCooldownSet bool
+	var discoveryFlagState gatewayEndpointDiscoveryFlagState
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "endpoint-file":
+			discoveryFlagState.EndpointFile = true
+		case "endpoint-dns-name":
+			discoveryFlagState.DNSSRVName = true
+		case "endpoint-dns-service":
+			discoveryFlagState.DNSSRVService = true
+		case "endpoint-dns-proto":
+			discoveryFlagState.DNSSRVProto = true
+		case "endpoint-dns-scheme":
+			discoveryFlagState.DNSScheme = true
 		case "max-write-attempts":
 			maxWriteAttemptsSet = true
 		case "write-retry-backoff":
@@ -245,13 +256,14 @@ func gatewayCmd(args []string) {
 	gatewayMaxWriteAttempts := selectedGatewayMaxWriteAttempts(cfg, *maxWriteAttempts, maxWriteAttemptsSet)
 	gatewayWriteRetryBackoff := selectedGatewayWriteRetryBackoff(cfg, *writeRetryBackoff, writeRetryBackoffSet)
 	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
-	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscoveryOptions{
+	gatewayEndpointDiscovery := selectedGatewayEndpointDiscoveryOptions(cfg, gatewayEndpointDiscoveryOptions{
 		EndpointFile:  *endpointFile,
 		DNSSRVName:    *endpointDNSName,
 		DNSSRVService: *endpointDNSService,
 		DNSSRVProto:   *endpointDNSProto,
 		DNSScheme:     *endpointDNSScheme,
-	}, nodeEndpoints)
+	}, discoveryFlagState)
+	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscovery, nodeEndpoints)
 	if err != nil {
 		log.Fatalf("gateway endpoints: %v", err)
 	}
@@ -320,6 +332,38 @@ func selectedGatewayWriteRetryBackoff(
 		return flagValue
 	}
 	return cfg.GatewayWriteRetryBackoff
+}
+
+type gatewayEndpointDiscoveryFlagState struct {
+	EndpointFile  bool
+	DNSSRVName    bool
+	DNSSRVService bool
+	DNSSRVProto   bool
+	DNSScheme     bool
+}
+
+func selectedGatewayEndpointDiscoveryOptions(
+	cfg serverconfig.Config,
+	flagValue gatewayEndpointDiscoveryOptions,
+	flagSet gatewayEndpointDiscoveryFlagState,
+) gatewayEndpointDiscoveryOptions {
+	out := flagValue
+	if !flagSet.EndpointFile && !flagSet.DNSSRVName && out.EndpointFile == "" {
+		out.EndpointFile = cfg.GatewayEndpointFile
+	}
+	if !flagSet.DNSSRVName && !flagSet.EndpointFile && out.DNSSRVName == "" {
+		out.DNSSRVName = cfg.GatewayEndpointDNSName
+	}
+	if !flagSet.DNSSRVService && cfg.GatewayEndpointDNSService != "" {
+		out.DNSSRVService = cfg.GatewayEndpointDNSService
+	}
+	if !flagSet.DNSSRVProto && cfg.GatewayEndpointDNSProto != "" {
+		out.DNSSRVProto = cfg.GatewayEndpointDNSProto
+	}
+	if !flagSet.DNSScheme && cfg.GatewayEndpointDNSScheme != "" {
+		out.DNSScheme = cfg.GatewayEndpointDNSScheme
+	}
+	return out
 }
 
 func gatewayStatusCmd(args []string) {

@@ -316,6 +316,108 @@ func TestSelectedGatewayRetryPolicyAllowsExplicitZeroFlags(t *testing.T) {
 	}
 }
 
+func TestSelectedGatewayEndpointDiscoveryUsesConfig(t *testing.T) {
+	got := selectedGatewayEndpointDiscoveryOptions(serverconfig.Config{
+		GatewayEndpointFile:       "/var/lib/lsm/gateway-endpoints.yaml",
+		GatewayEndpointDNSName:    "lsm-cluster.lsm-cluster.svc.cluster.local",
+		GatewayEndpointDNSService: "grpc",
+		GatewayEndpointDNSProto:   "udp",
+		GatewayEndpointDNSScheme:  "https",
+	}, gatewayEndpointDiscoveryOptions{
+		DNSSRVService: "http",
+		DNSSRVProto:   "tcp",
+		DNSScheme:     "http",
+	}, gatewayEndpointDiscoveryFlagState{})
+
+	if got.EndpointFile != "/var/lib/lsm/gateway-endpoints.yaml" {
+		t.Fatalf("expected config endpoint file, got %+v", got)
+	}
+	if got.DNSSRVName != "lsm-cluster.lsm-cluster.svc.cluster.local" {
+		t.Fatalf("expected config dns name, got %+v", got)
+	}
+	if got.DNSSRVService != "grpc" {
+		t.Fatalf("expected config dns service, got %+v", got)
+	}
+	if got.DNSSRVProto != "udp" {
+		t.Fatalf("expected config dns proto, got %+v", got)
+	}
+	if got.DNSScheme != "https" {
+		t.Fatalf("expected config dns scheme, got %+v", got)
+	}
+}
+
+func TestSelectedGatewayEndpointDiscoveryUsesFlags(t *testing.T) {
+	got := selectedGatewayEndpointDiscoveryOptions(serverconfig.Config{
+		GatewayEndpointFile:       "/var/lib/lsm/config-endpoints.yaml",
+		GatewayEndpointDNSName:    "config.lsm-cluster.svc.cluster.local",
+		GatewayEndpointDNSService: "grpc",
+		GatewayEndpointDNSProto:   "udp",
+		GatewayEndpointDNSScheme:  "https",
+	}, gatewayEndpointDiscoveryOptions{
+		EndpointFile:  "/tmp/cli-endpoints.yaml",
+		DNSSRVName:    "cli.lsm-cluster.svc.cluster.local",
+		DNSSRVService: "http",
+		DNSSRVProto:   "tcp",
+		DNSScheme:     "http",
+	}, gatewayEndpointDiscoveryFlagState{
+		EndpointFile:  true,
+		DNSSRVName:    true,
+		DNSSRVService: true,
+		DNSSRVProto:   true,
+		DNSScheme:     true,
+	})
+
+	if got.EndpointFile != "/tmp/cli-endpoints.yaml" {
+		t.Fatalf("expected flag endpoint file, got %+v", got)
+	}
+	if got.DNSSRVName != "cli.lsm-cluster.svc.cluster.local" {
+		t.Fatalf("expected flag dns name, got %+v", got)
+	}
+	if got.DNSSRVService != "http" {
+		t.Fatalf("expected flag dns service, got %+v", got)
+	}
+	if got.DNSSRVProto != "tcp" {
+		t.Fatalf("expected flag dns proto, got %+v", got)
+	}
+	if got.DNSScheme != "http" {
+		t.Fatalf("expected flag dns scheme, got %+v", got)
+	}
+}
+
+func TestSelectedGatewayEndpointDiscoveryDNSNameFlagOverridesConfigFile(t *testing.T) {
+	got := selectedGatewayEndpointDiscoveryOptions(serverconfig.Config{
+		GatewayEndpointFile: "/var/lib/lsm/config-endpoints.yaml",
+	}, gatewayEndpointDiscoveryOptions{
+		DNSSRVName: "cli.lsm-cluster.svc.cluster.local",
+	}, gatewayEndpointDiscoveryFlagState{
+		DNSSRVName: true,
+	})
+
+	if got.EndpointFile != "" {
+		t.Fatalf("expected DNS name flag to suppress config endpoint file, got %+v", got)
+	}
+	if got.DNSSRVName != "cli.lsm-cluster.svc.cluster.local" {
+		t.Fatalf("expected flag dns name, got %+v", got)
+	}
+}
+
+func TestSelectedGatewayEndpointDiscoveryFileFlagOverridesConfigDNSName(t *testing.T) {
+	got := selectedGatewayEndpointDiscoveryOptions(serverconfig.Config{
+		GatewayEndpointDNSName: "config.lsm-cluster.svc.cluster.local",
+	}, gatewayEndpointDiscoveryOptions{
+		EndpointFile: "/tmp/cli-endpoints.yaml",
+	}, gatewayEndpointDiscoveryFlagState{
+		EndpointFile: true,
+	})
+
+	if got.DNSSRVName != "" {
+		t.Fatalf("expected endpoint file flag to suppress config dns name, got %+v", got)
+	}
+	if got.EndpointFile != "/tmp/cli-endpoints.yaml" {
+		t.Fatalf("expected flag endpoint file, got %+v", got)
+	}
+}
+
 func TestGatewayNodeEndpointResolverUsesDNSSRV(t *testing.T) {
 	resolver, err := gatewayNodeEndpointResolverFromConfig(serverconfig.Config{}, "http://bootstrap-a:8080", gatewayEndpointDiscoveryOptions{
 		DNSSRVName: "lsm-cluster.lsm-cluster.svc.cluster.local",
