@@ -235,17 +235,20 @@ them, and the read does not revalidate leadership with a quorum. Leader read
 failures and not-found results do not fall back to follower data.
 Accepted write status lookups keep best-effort endpoint fallback because the
 request-status tracker is node-local.
+Use `--read-balance-policy ordered` or `gateway_read_balance_policy: "ordered"`
+to keep sorted endpoint order while still placing recently failed endpoints last.
+The default policy is `round_robin`; neither policy changes leader-only reads.
 
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
 window, while successful probes clear that state. Tune the window with
 `lsmctl gateway --endpoint-failure-cooldown` or
 `gateway_endpoint_failure_cooldown` in server config; `0` uses the gateway
-default. Healthy read endpoints are
-rotated so a single stable gateway does not always send reads to the same
-backend in `any` mode. `/gateway/status` includes `read_mode`, per-backend
-`degraded`, and `degraded_until` fields so operators can see how reads are
-configured and when gateway routing is temporarily avoiding an endpoint.
+default. Healthy read endpoints rotate by default so a single stable gateway
+does not always send reads to the same backend in `any` mode. `/gateway/status`
+includes `read_mode`, `read_balance_policy`, per-backend `degraded`, and
+`degraded_until` fields so operators can see how reads are configured and when
+gateway routing is temporarily avoiding an endpoint.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. `lsmctl wait-gateway` polls that same view for
