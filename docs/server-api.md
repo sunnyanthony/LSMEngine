@@ -118,6 +118,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Control-plane persistence config:
   - `node_id`, `cluster_id`, `storage_mode`.
   - `control_state_path` (optional, defaults to `<data_dir>/control_state.json`).
+  - `control_state.json` is versioned. Missing legacy version fields are treated as v1, while future unsupported versions fail startup so older binaries do not silently interpret newer control metadata.
   - `raft.peers` (optional): static peer list used to bootstrap etcd-raft node IDs.
   - `raft.peer_urls` (optional): node-name to server URL map used by `lsmctl serve` to build the HTTP raft peer transport when `commitlog.provider=etcd-raft` and `raft.peers` has more than one node.
   - `raft.join_peer_urls` (optional): node-name to server URL map for future raft joiners. These URLs are added to the HTTP raft transport, but the node names are not part of the initial bootstrap voters.

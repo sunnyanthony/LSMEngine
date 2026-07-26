@@ -868,6 +868,47 @@ func TestControlPlaneRejectsCorruptStateFile(t *testing.T) {
 	}
 }
 
+func TestControlPlaneRejectsFutureStateVersion(t *testing.T) {
+	dataDir := t.TempDir()
+	statePath := filepath.Join(dataDir, "control_state.json")
+	payload := `{"version":2,"node_id":"node-a","cluster_id":"cluster-dev","order":["users"],"shards":[{"id":"users","leader":"node-a","replicas":[{"node_id":"node-a","role":"leader","healthy":true}]}]}`
+	if err := os.WriteFile(statePath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	_, err := New(Options{
+		DataDir:   dataDir,
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "unsupported control state version 2") {
+		t.Fatalf("expected unsupported version error, got %v", err)
+	}
+}
+
+func TestControlPlaneLoadsLegacyStateWithoutVersion(t *testing.T) {
+	dataDir := t.TempDir()
+	statePath := filepath.Join(dataDir, "control_state.json")
+	payload := `{"node_id":"node-a","cluster_id":"cluster-dev","order":["users"],"shards":[{"id":"users","leader":"node-a","replicas":[{"node_id":"node-a","role":"leader","healthy":true}]}]}`
+	if err := os.WriteFile(statePath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	store, err := New(Options{
+		DataDir:   dataDir,
+		NodeID:    "node-a",
+		ClusterID: "cluster-dev",
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+	if shards := store.Shards(); len(shards) != 1 || shards[0].ID != "users" {
+		t.Fatalf("expected legacy state shard, got %+v", shards)
+	}
+}
+
 func TestControlPlaneRejectsStateWithoutShards(t *testing.T) {
 	dataDir := t.TempDir()
 	statePath := filepath.Join(dataDir, "control_state.json")
