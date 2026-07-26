@@ -28,6 +28,7 @@ type Config struct {
 	WriteTimeout                      time.Duration   `yaml:"write_timeout"`
 	WriteConsistencyDefault           string          `yaml:"write_consistency_default"`
 	GatewayReadMode                   string          `yaml:"gateway_read_mode"`
+	GatewayEndpointFailureCooldown    time.Duration   `yaml:"gateway_endpoint_failure_cooldown"`
 	MemtableLimit                     int             `yaml:"memtable_limit"`
 	WALMaxSegmentBytes                uint64          `yaml:"wal_max_segment_bytes"`
 	WALRetainArchivedSegments         int             `yaml:"wal_retain_archived_segments"`

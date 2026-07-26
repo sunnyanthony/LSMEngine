@@ -207,11 +207,18 @@ func gatewayCmd(args []string) {
 	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
+	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; 0 uses config/default")
 	var nodeEndpoints nodeEndpointFlags
 	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
+	var endpointFailureCooldownSet bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "endpoint-failure-cooldown" {
+			endpointFailureCooldownSet = true
+		}
+	})
 
 	cfg := loadConfigOrExit(*configPath)
 	if *bootstrapURL == "" {
@@ -228,6 +235,7 @@ func gatewayCmd(args []string) {
 	if gatewayReadMode == "" {
 		gatewayReadMode = cfg.GatewayReadMode
 	}
+	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
 	resolver, err := gatewayNodeEndpointResolverFromConfig(cfg, *bootstrapURL, gatewayEndpointDiscoveryOptions{
 		EndpointFile:  *endpointFile,
 		DNSSRVName:    *endpointDNSName,
@@ -239,12 +247,13 @@ func gatewayCmd(args []string) {
 		log.Fatalf("gateway endpoints: %v", err)
 	}
 	gateway, err := server.NewGateway(server.GatewayOptions{
-		BootstrapURL:         normalizeHTTPBaseURL(*bootstrapURL),
-		NodeEndpointResolver: resolver,
-		ReadMode:             server.GatewayReadMode(gatewayReadMode),
-		MaxWriteAttempts:     *maxWriteAttempts,
-		WriteRetryBackoff:    *writeRetryBackoff,
-		AlignWriteLeader:     true,
+		BootstrapURL:            normalizeHTTPBaseURL(*bootstrapURL),
+		NodeEndpointResolver:    resolver,
+		ReadMode:                server.GatewayReadMode(gatewayReadMode),
+		MaxWriteAttempts:        *maxWriteAttempts,
+		WriteRetryBackoff:       *writeRetryBackoff,
+		AlignWriteLeader:        true,
+		EndpointFailureCooldown: gatewayEndpointFailureCooldown,
 	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
@@ -273,6 +282,17 @@ func gatewayCmd(args []string) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("gateway listen: %v", err)
 	}
+}
+
+func selectedGatewayEndpointFailureCooldown(
+	cfg serverconfig.Config,
+	flagValue time.Duration,
+	flagSet bool,
+) time.Duration {
+	if flagSet {
+		return flagValue
+	}
+	return cfg.GatewayEndpointFailureCooldown
 }
 
 func gatewayStatusCmd(args []string) {
