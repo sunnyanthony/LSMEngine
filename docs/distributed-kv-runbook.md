@@ -229,6 +229,9 @@ gateway routing is temporarily avoiding an endpoint. The status routing block
 also includes process-local `read_attempts`, `read_fallbacks`, and
 `read_failures` counters so operators can see whether fallback is doing useful
 work or masking backend instability.
+`/gateway/metrics` exposes the same gateway readiness, backend health, apply
+lag, and routing counters in Prometheus text format for scraping. It is still
+process-local gateway telemetry, not a durable cluster-wide metrics store.
 `/gateway/status` is the gateway's aggregated backend-node view, separate from a
 node server's local `/cluster/status`; `lsmctl gateway-status` prints that view
 from the single gateway endpoint. `lsmctl wait-gateway` polls that same view for
