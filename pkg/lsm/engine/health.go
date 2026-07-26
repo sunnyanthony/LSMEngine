@@ -47,6 +47,24 @@ type WriteBackpressureStats struct {
 	CompactionL0TableCount int
 }
 
+// WALStats describes WAL segment pressure and write-path configuration state.
+type WALStats struct {
+	SegmentID            uint64
+	SegmentCount         int
+	ArchivedSegmentCount int
+	ActiveSegmentBytes   uint64
+	ArchivedSegmentBytes uint64
+	TotalBytes           uint64
+	MaxSegmentBytes      uint64
+	BlockSize            uint32
+	PendingBlockBytes    int
+	PendingBlockRecords  int
+	Sync                 bool
+	Async                bool
+	Closed               bool
+	SegmentScanError     string
+}
+
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
 	MemtableBytes             int
@@ -74,6 +92,7 @@ type Stats struct {
 	SSTableFlow               SSTableFlowStats
 	CompactionRuntime         CompactionRuntimeStats
 	WriteBackpressure         WriteBackpressureStats
+	WAL                       WALStats
 	Seq                       uint64
 	Closing                   bool
 	Closed                    bool
@@ -127,6 +146,7 @@ func (l *LSM) Stats() Stats {
 	out.applyReadStats(l)
 	out.applyCompactionRuntimeStats(l)
 	out.applyWriteBackpressureStats(l)
+	out.applyWALStats(l)
 	return out
 }
 
@@ -215,6 +235,29 @@ func (s *Stats) applyReadStats(l *LSM) {
 		FilterPass: flow.FilterPass,
 		FilterSkip: flow.FilterSkip,
 		Errors:     flow.Errors,
+	}
+}
+
+func (s *Stats) applyWALStats(l *LSM) {
+	if s == nil || l == nil || l.wal == nil {
+		return
+	}
+	stats := l.wal.Stats()
+	s.WAL = WALStats{
+		SegmentID:            stats.SegmentID,
+		SegmentCount:         stats.SegmentCount,
+		ArchivedSegmentCount: stats.ArchivedSegmentCount,
+		ActiveSegmentBytes:   stats.ActiveSegmentBytes,
+		ArchivedSegmentBytes: stats.ArchivedSegmentBytes,
+		TotalBytes:           stats.TotalBytes,
+		MaxSegmentBytes:      stats.MaxSegmentBytes,
+		BlockSize:            stats.BlockSize,
+		PendingBlockBytes:    stats.PendingBlockBytes,
+		PendingBlockRecords:  stats.PendingBlockRecords,
+		Sync:                 stats.Sync,
+		Async:                stats.Async,
+		Closed:               stats.Closed,
+		SegmentScanError:     stats.SegmentScanError,
 	}
 }
 

@@ -108,8 +108,15 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `lsmctl replace-node --old-node node-a --new-node node-c ...` composes the manual replacement sequence for static clusters: preflight the endpoints, raft-add the replacement, add it to shards that contain the old node, drain the old node, remove the old shard replicas, and raft-remove the old node. Use `--dry-run` to print the preflighted plan without submitting membership mutations. `--allow-unavailable-old-node` lets replacement complete drain after shard leadership has moved when the old node endpoint remains unreachable. The replacement node must already be running and reachable; `examples/docker-compose-cluster/replace-node-smoke.sh` exercises this with join-mode node-d.
 - `lsmctl write-status --addr <url> --request-id <id>` reads an accepted write's lifecycle status from server mode or gateway mode; the request id can also be passed as a positional argument.
 - `lsmctl stats` and `lsmctl health` work against `--addr` or local `--data-dir`; `lsmctl health --ready --addr <url>` checks `/readyz` instead of `/healthz` for gateway/load-balancer readiness.
-- `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose write-backpressure state/reject counts, process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
+- `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose WAL segment/byte counters, write-backpressure state/reject counts, process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
+- WAL bytes include segment/framing overhead and exclude the pending block buffer;
+  pending block records are not the async request queue depth. These numbers do
+  not prove fsync or quorum durability. Active state is sampled before scanning
+  older files, excluding segments rotated after that sample. A `SegmentScanError`
+  marks partial archived counts/bytes; totals include only successfully measured
+  files. File sizes use the configured IO backend, but segment discovery still
+  uses the existing local-directory helper, not a virtual filesystem listing.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
 ## Config and deployment
