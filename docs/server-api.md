@@ -12,7 +12,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 ## Phase 1: gRPC/HTTP2
 
 ### Phase 1 tasks
-- Expose server-mode health + stats endpoints (`/healthz`, `/stats`) over HTTP.
+- Expose server-mode health + stats endpoints (`/healthz`, `/stats`, `/metrics`) over HTTP.
 - Expose M1 control-plane endpoints for fixed shard operations.
 - Provide a CLI that can run in server mode and perform point KV operations plus stats/health queries.
 - Document async webhook semantics and the `GetStatus` fallback.
@@ -111,6 +111,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `GET /gateway/status` and `lsmctl gateway-status` include process-local routing counters for gateway write attempts, retries, failures, read attempts, read fallbacks, read failures, route refreshes, route refresh failures, and route-hint updates. `GET /gateway/metrics` exposes the same process-local gateway readiness, backend health, apply lag, and routing counters as text metrics for scraping. These counters are diagnostic signals for the current gateway process, not durable metrics.
 - Gateway metrics return HTTP 503 when status collection fails. The diagnostic response retains process-local counters, but collectors may reject failed scrapes. Backend apply-lag samples are omitted when backend status is unavailable; absence is not zero lag. Use backend availability and scrape health alongside lag.
 - `/stats` and `lsmctl stats` include storage pressure fields: flush queue depth/capacity, total SSTable count/bytes, per-level SSTable count/bytes, L0 count/bytes, the configured L0 compaction threshold, and `compaction_pending`. `compaction_pending` means L0 has reached the configured threshold; it is an observability signal, not a guarantee that a background compaction is currently running. They also expose WAL segment/byte counters, WAL checkpoint lag counters, write-backpressure state/reject counts, process-local compaction runtime activity counters, cumulative point-read counters for memtable/immutable/SSTable hits, misses, total SSTable probes, max SSTable probes in one point read, and SSTable flow counters for cache/filter/error observations.
+- `GET /metrics` exposes node-local LSM/WAL/compaction/backpressure/read stats. `lsm_engine_wal_segment_scan_error` is 1 when WAL counts/bytes are partial; do not treat that sample as a complete disk-usage measurement. WAL checkpoint lag is sequence distance, not a pending-record count or quorum durability signal.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - WAL bytes include segment/framing overhead and exclude the pending block buffer;
   pending block records are not the async request queue depth. These numbers do
