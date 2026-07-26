@@ -86,13 +86,27 @@ type GatewayClusterStatus struct {
 
 // GatewayClusterNodeStatus is one backend node status sample.
 type GatewayClusterNodeStatus struct {
-	Node          string             `json:"node"`
-	Endpoint      string             `json:"endpoint"`
-	OK            bool               `json:"ok"`
-	Degraded      bool               `json:"degraded"`
-	DegradedUntil string             `json:"degraded_until,omitempty"`
-	Error         string             `json:"error,omitempty"`
-	Status        *lsm.ClusterStatus `json:"status,omitempty"`
+	Node          string              `json:"node"`
+	Endpoint      string              `json:"endpoint"`
+	OK            bool                `json:"ok"`
+	Degraded      bool                `json:"degraded"`
+	DegradedUntil string              `json:"degraded_until,omitempty"`
+	Routing       GatewayBackendStats `json:"routing"`
+	Error         string              `json:"error,omitempty"`
+	Status        *lsm.ClusterStatus  `json:"status,omitempty"`
+}
+
+// GatewayBackendStats describes process-local routing activity for one backend endpoint.
+type GatewayBackendStats struct {
+	ReadAttempts         uint64 `json:"read_attempts"`
+	ReadSuccesses        uint64 `json:"read_successes"`
+	ReadFailures         uint64 `json:"read_failures"`
+	WriteAttempts        uint64 `json:"write_attempts"`
+	WriteSuccesses       uint64 `json:"write_successes"`
+	WriteFailures        uint64 `json:"write_failures"`
+	StatusProbeAttempts  uint64 `json:"status_probe_attempts"`
+	StatusProbeSuccesses uint64 `json:"status_probe_successes"`
+	StatusProbeFailures  uint64 `json:"status_probe_failures"`
 }
 
 type cachedRoutes struct {
@@ -110,7 +124,20 @@ type cachedRouteShard struct {
 type endpointPolicy struct {
 	mu            sync.Mutex
 	failedUntil   map[string]time.Time
+	stats         map[string]*gatewayBackendCounters
 	nextReadStart int
+}
+
+type gatewayBackendCounters struct {
+	readAttempts         uint64
+	readSuccesses        uint64
+	readFailures         uint64
+	writeAttempts        uint64
+	writeSuccesses       uint64
+	writeFailures        uint64
+	statusProbeAttempts  uint64
+	statusProbeSuccesses uint64
+	statusProbeFailures  uint64
 }
 
 type gatewayRoutingCounters struct {
@@ -277,13 +304,17 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 		}
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			g.recordEndpointStatusProbe(endpoint, false)
 			g.markEndpointFailure(endpoint)
 			node.Degraded, node.DegradedUntil = g.endpointHealth(endpoint)
+			node.Routing = g.endpointRoutingStats(endpoint)
 			node.Error = err.Error()
 			lastErr = err
 		} else {
+			g.recordEndpointStatusProbe(endpoint, true)
 			g.markEndpointSuccess(endpoint)
 			node.Degraded, node.DegradedUntil = g.endpointHealth(endpoint)
+			node.Routing = g.endpointRoutingStats(endpoint)
 			node.OK = true
 			node.Status = &status
 			result.ReachableNodes++
@@ -492,6 +523,8 @@ func (g *Gateway) postWrite(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
+	writeSucceeded := err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted)
+	g.recordEndpointWriteAttempt(endpoint, writeSucceeded)
 	if err != nil {
 		g.markEndpointFailure(endpoint)
 		return lsm.WriteRequestStatus{}, err
@@ -530,10 +563,12 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 		endpoint := endpoints[nodeID]
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+			g.recordEndpointStatusProbe(endpoint, false)
 			g.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
 		}
+		g.recordEndpointStatusProbe(endpoint, true)
 		g.markEndpointSuccess(endpoint)
 		if status.CommitLogRuntime.Leader && status.CommitLogRuntime.WriteAvailable {
 			if strings.TrimSpace(status.NodeID) != "" {
@@ -637,9 +672,11 @@ func (g *Gateway) statusFilteredReadTargets(ctx context.Context, endpoints map[s
 func (g *Gateway) backendStatus(ctx context.Context, endpoint string) (lsm.ClusterStatus, error) {
 	var status lsm.ClusterStatus
 	if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
+		g.recordEndpointStatusProbe(endpoint, false)
 		g.markEndpointFailure(endpoint)
 		return lsm.ClusterStatus{}, err
 	}
+	g.recordEndpointStatusProbe(endpoint, true)
 	g.markEndpointSuccess(endpoint)
 	return status, nil
 }
@@ -714,6 +751,87 @@ func (g *Gateway) endpointHealth(endpoint string) (bool, string) {
 		return false, ""
 	}
 	return true, until.UTC().Format(time.RFC3339Nano)
+}
+
+func (g *Gateway) recordEndpointReadAttempt(endpoint string, success bool) {
+	if g == nil {
+		return
+	}
+	g.updateEndpointCounters(endpoint, func(stats *gatewayBackendCounters) {
+		stats.readAttempts++
+		if success {
+			stats.readSuccesses++
+		} else {
+			stats.readFailures++
+		}
+	})
+}
+
+func (g *Gateway) recordEndpointWriteAttempt(endpoint string, success bool) {
+	if g == nil {
+		return
+	}
+	g.updateEndpointCounters(endpoint, func(stats *gatewayBackendCounters) {
+		stats.writeAttempts++
+		if success {
+			stats.writeSuccesses++
+		} else {
+			stats.writeFailures++
+		}
+	})
+}
+
+func (g *Gateway) recordEndpointStatusProbe(endpoint string, success bool) {
+	if g == nil {
+		return
+	}
+	g.updateEndpointCounters(endpoint, func(stats *gatewayBackendCounters) {
+		stats.statusProbeAttempts++
+		if success {
+			stats.statusProbeSuccesses++
+		} else {
+			stats.statusProbeFailures++
+		}
+	})
+}
+
+func (g *Gateway) endpointRoutingStats(endpoint string) GatewayBackendStats {
+	if g == nil {
+		return GatewayBackendStats{}
+	}
+	endpoint = NormalizeHTTPBaseURL(endpoint)
+	g.endpoint.mu.Lock()
+	defer g.endpoint.mu.Unlock()
+	stats := g.endpoint.stats[endpoint]
+	if stats == nil {
+		return GatewayBackendStats{}
+	}
+	return GatewayBackendStats{
+		ReadAttempts:         stats.readAttempts,
+		ReadSuccesses:        stats.readSuccesses,
+		ReadFailures:         stats.readFailures,
+		WriteAttempts:        stats.writeAttempts,
+		WriteSuccesses:       stats.writeSuccesses,
+		WriteFailures:        stats.writeFailures,
+		StatusProbeAttempts:  stats.statusProbeAttempts,
+		StatusProbeSuccesses: stats.statusProbeSuccesses,
+		StatusProbeFailures:  stats.statusProbeFailures,
+	}
+}
+
+func (g *Gateway) updateEndpointCounters(endpoint string, update func(*gatewayBackendCounters)) {
+	endpoint = NormalizeHTTPBaseURL(endpoint)
+	g.endpoint.mu.Lock()
+	defer g.endpoint.mu.Unlock()
+	if g.endpoint.stats == nil {
+		g.endpoint.stats = make(map[string]*gatewayBackendCounters)
+	}
+	stats := g.endpoint.stats[endpoint]
+	if stats == nil {
+		stats = &gatewayBackendCounters{}
+		g.endpoint.stats[endpoint] = stats
+	}
+	update(stats)
 }
 
 func cloneUint64Ptr(value *uint64) *uint64 {

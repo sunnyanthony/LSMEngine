@@ -2339,11 +2339,12 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 		if node.Error != "" {
 			fmt.Fprintf(
 				w,
-				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s error=%q\n",
+				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s %s error=%q\n",
 				node.Node,
 				node.Endpoint,
 				node.Degraded,
 				node.DegradedUntil,
+				formatGatewayBackendRoutingStats(node.Routing),
 				node.Error,
 			)
 			continue
@@ -2351,11 +2352,12 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 		if node.Status == nil {
 			fmt.Fprintf(
 				w,
-				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s error=%q\n",
+				"node=%s endpoint=%s ok=false degraded=%v degraded_until=%s %s error=%q\n",
 				node.Node,
 				node.Endpoint,
 				node.Degraded,
 				node.DegradedUntil,
+				formatGatewayBackendRoutingStats(node.Routing),
 				"missing status",
 			)
 			continue
@@ -2367,7 +2369,7 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 		runtime := node.Status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v\n",
+			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v %s\n",
 			nodeID,
 			node.Endpoint,
 			node.Degraded,
@@ -2383,8 +2385,24 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 			node.Status.Revision,
 			node.Status.ShardCount,
 			node.Status.Draining,
+			formatGatewayBackendRoutingStats(node.Routing),
 		)
 	}
+}
+
+func formatGatewayBackendRoutingStats(stats server.GatewayBackendStats) string {
+	return fmt.Sprintf(
+		"backend_read_attempts=%d backend_read_successes=%d backend_read_failures=%d backend_write_attempts=%d backend_write_successes=%d backend_write_failures=%d backend_status_probe_attempts=%d backend_status_probe_successes=%d backend_status_probe_failures=%d",
+		stats.ReadAttempts,
+		stats.ReadSuccesses,
+		stats.ReadFailures,
+		stats.WriteAttempts,
+		stats.WriteSuccesses,
+		stats.WriteFailures,
+		stats.StatusProbeAttempts,
+		stats.StatusProbeSuccesses,
+		stats.StatusProbeFailures,
+	)
 }
 
 func writeClusterWait(w io.Writer, result clusterWaitResult) {

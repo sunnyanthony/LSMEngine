@@ -161,6 +161,24 @@ func writeGatewayMetrics(w io.Writer, status GatewayClusterStatus) {
 	writeMetricType(w, "lsm_gateway_backend_write_available", "gauge")
 	writeMetricHelp(w, "lsm_gateway_backend_apply_lag", "Backend-reported commit-log apply lag.")
 	writeMetricType(w, "lsm_gateway_backend_apply_lag", "gauge")
+	writeMetricHelp(w, "lsm_gateway_backend_read_attempts_total", "Process-local gateway read attempts sent to this backend.")
+	writeMetricType(w, "lsm_gateway_backend_read_attempts_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_read_successes_total", "Process-local gateway read attempts that completed through this backend.")
+	writeMetricType(w, "lsm_gateway_backend_read_successes_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_read_failures_total", "Process-local gateway read attempts that did not complete through this backend.")
+	writeMetricType(w, "lsm_gateway_backend_read_failures_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_write_attempts_total", "Process-local gateway write attempts sent to this backend.")
+	writeMetricType(w, "lsm_gateway_backend_write_attempts_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_write_successes_total", "Process-local gateway write attempts that completed through this backend.")
+	writeMetricType(w, "lsm_gateway_backend_write_successes_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_write_failures_total", "Process-local gateway write attempts that did not complete through this backend.")
+	writeMetricType(w, "lsm_gateway_backend_write_failures_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_status_probe_attempts_total", "Process-local gateway status probes sent to this backend.")
+	writeMetricType(w, "lsm_gateway_backend_status_probe_attempts_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_status_probe_successes_total", "Process-local gateway status probes that succeeded for this backend.")
+	writeMetricType(w, "lsm_gateway_backend_status_probe_successes_total", "counter")
+	writeMetricHelp(w, "lsm_gateway_backend_status_probe_failures_total", "Process-local gateway status probes that failed for this backend.")
+	writeMetricType(w, "lsm_gateway_backend_status_probe_failures_total", "counter")
 	for _, node := range status.Nodes {
 		labels := `node="` + metricLabelValue(node.Node) + `"`
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_up", labels, boolMetric(node.OK))
@@ -173,6 +191,15 @@ func writeGatewayMetrics(w io.Writer, status GatewayClusterStatus) {
 		}
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_write_available", labels, boolMetric(writeAvailable))
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_apply_lag", labels, float64(applyLag))
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_read_attempts_total", labels, node.Routing.ReadAttempts)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_read_successes_total", labels, node.Routing.ReadSuccesses)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_read_failures_total", labels, node.Routing.ReadFailures)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_write_attempts_total", labels, node.Routing.WriteAttempts)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_write_successes_total", labels, node.Routing.WriteSuccesses)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_write_failures_total", labels, node.Routing.WriteFailures)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_status_probe_attempts_total", labels, node.Routing.StatusProbeAttempts)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_status_probe_successes_total", labels, node.Routing.StatusProbeSuccesses)
+		writeMetricCounterWithLabels(w, "lsm_gateway_backend_status_probe_failures_total", labels, node.Routing.StatusProbeFailures)
 	}
 }
 
@@ -196,6 +223,10 @@ func writeMetricGaugeWithLabels(w io.Writer, name string, labels string, value f
 func writeMetricCounter(w io.Writer, name string, value uint64) {
 	writeMetricType(w, name, "counter")
 	fmt.Fprintf(w, "%s %d\n", name, value)
+}
+
+func writeMetricCounterWithLabels(w io.Writer, name string, labels string, value uint64) {
+	fmt.Fprintf(w, "%s{%s} %d\n", name, labels, value)
 }
 
 func boolMetric(value bool) float64 {
@@ -372,11 +403,13 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			lastErr = err
 			continue
 		}
 		resp, err := h.gateway.client.Do(req)
 		if err != nil {
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			h.gateway.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
@@ -386,16 +419,19 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 				firstNotFoundHeader = resp.Header.Clone()
 				firstNotFoundBody, _ = io.ReadAll(resp.Body)
 			}
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			h.gateway.markEndpointSuccess(endpoint)
 			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 			_ = resp.Body.Close()
 			continue
 		}
 		if resp.StatusCode == http.StatusOK || resp.StatusCode < http.StatusInternalServerError {
+			h.gateway.recordEndpointReadAttempt(endpoint, true)
 			h.gateway.markEndpointSuccess(endpoint)
 			copyResponse(w, resp)
 			return
 		}
+		h.gateway.recordEndpointReadAttempt(endpoint, false)
 		h.gateway.markEndpointFailure(endpoint)
 		lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 		_ = resp.Body.Close()
@@ -423,11 +459,13 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			lastErr = err
 			continue
 		}
 		resp, err := h.gateway.client.Do(req)
 		if err != nil {
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			h.gateway.markEndpointFailure(endpoint)
 			lastErr = err
 			continue
@@ -437,24 +475,29 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 			h.gateway.markEndpointSuccess(endpoint)
 			var out getResponse
 			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				h.gateway.recordEndpointReadAttempt(endpoint, false)
 				lastErr = err
 				_ = resp.Body.Close()
 				continue
 			}
 			_ = resp.Body.Close()
 			if out.Found {
+				h.gateway.recordEndpointReadAttempt(endpoint, true)
 				writeJSON(w, http.StatusOK, out)
 				return
 			}
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			if firstNotFound == nil {
 				copy := out
 				firstNotFound = &copy
 			}
 		case resp.StatusCode < http.StatusInternalServerError:
+			h.gateway.recordEndpointReadAttempt(endpoint, true)
 			h.gateway.markEndpointSuccess(endpoint)
 			copyResponse(w, resp)
 			return
 		default:
+			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			h.gateway.markEndpointFailure(endpoint)
 			lastErr = fmt.Errorf("node %q returned status %d", nodeID, resp.StatusCode)
 			_ = resp.Body.Close()
