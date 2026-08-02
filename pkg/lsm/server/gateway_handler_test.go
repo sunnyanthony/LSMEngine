@@ -1249,6 +1249,185 @@ func TestGatewayHandlerReadyUnavailableWithoutWriteLeader(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerReadyEnforcesReachableThreshold(t *testing.T) {
+	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Leader:         true,
+				LeaderKnown:    true,
+				WriteAvailable: true,
+			},
+		})
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(map[string]http.Handler{
+			"node-a": handlerA,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{
+		GatewayReadyMinReachable: 2,
+	}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var health lsm.Health
+	if err := json.NewDecoder(rec.Body).Decode(&health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health.Ready || health.Reason != "gateway_reachable_nodes_below_min" {
+		t.Fatalf("unexpected readiness response: %+v", health)
+	}
+}
+
+func TestGatewayHandlerReadyEnforcesReadReadyThreshold(t *testing.T) {
+	handlers := map[string]http.Handler{
+		"node-a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/cluster/status" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:         "ready",
+					Leader:         true,
+					LeaderKnown:    true,
+					WriteAvailable: true,
+					ApplyLag:       1,
+				},
+			})
+		}),
+		"node-b": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/cluster/status" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:      "follower",
+					LeaderKnown: true,
+					ApplyLag:    9,
+				},
+			})
+		}),
+	}
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(handlers),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	maxLag := uint64(2)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{
+		GatewayReadyMaxReadApplyLag: &maxLag,
+		GatewayReadyMinReadReady:    2,
+	}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var health lsm.Health
+	if err := json.NewDecoder(rec.Body).Decode(&health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health.Ready || health.Reason != "gateway_read_ready_nodes_below_min" {
+		t.Fatalf("unexpected readiness response: %+v", health)
+	}
+
+	rec = httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{
+		GatewayReadyMaxReadApplyLag: &maxLag,
+	}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with default one read-ready node, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayHandlerReadyReadReadyRequiresHealthyRuntime(t *testing.T) {
+	handlers := map[string]http.Handler{
+		"node-a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/cluster/status" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-a",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:         "ready",
+					Leader:         true,
+					LeaderKnown:    true,
+					WriteAvailable: true,
+					ApplyLag:       1,
+				},
+			})
+		}),
+		"node-b": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/cluster/status" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health:      "starting",
+					LeaderKnown: true,
+					ApplyLag:    0,
+				},
+			})
+		}),
+	}
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL: "http://node-a",
+		NodeEndpoints: map[string]string{
+			"node-a": "http://node-a",
+			"node-b": "http://node-b",
+		},
+		HTTPClient: newInMemoryHTTPClient(handlers),
+	})
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+	maxLag := uint64(2)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{
+		GatewayReadyMaxReadApplyLag: &maxLag,
+		GatewayReadyMinReadReady:    2,
+	}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var health lsm.Health
+	if err := json.NewDecoder(rec.Body).Decode(&health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health.Ready || health.Reason != "gateway_read_ready_nodes_below_min" {
+		t.Fatalf("unexpected readiness response: %+v", health)
+	}
+}
+
 func TestGatewayHandlerReadyUnavailableWhenNil(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()

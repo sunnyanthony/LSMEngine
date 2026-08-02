@@ -1116,6 +1116,51 @@ func TestSelectedGatewayMaxReadApplyLag(t *testing.T) {
 	}
 }
 
+func TestSelectedGatewayReadyOptions(t *testing.T) {
+	maxLag := int64(3)
+	cfg := serverconfig.Config{
+		GatewayReadyMinReachable:    2,
+		GatewayReadyMaxReadApplyLag: &maxLag,
+		GatewayReadyMinReadReady:    2,
+	}
+	if got := selectedGatewayReadyMinReachable(cfg, 1, false); got != 2 {
+		t.Fatalf("expected config ready min reachable, got %d", got)
+	}
+	if got := selectedGatewayReadyMinReachable(cfg, 1, true); got != 1 {
+		t.Fatalf("expected flag ready min reachable, got %d", got)
+	}
+	gotLag, err := selectedGatewayReadyMaxReadApplyLag(cfg, -1, false)
+	if err != nil {
+		t.Fatalf("select config ready max read apply lag: %v", err)
+	}
+	if gotLag == nil || *gotLag != 3 {
+		t.Fatalf("expected config ready max read apply lag 3, got %v", gotLag)
+	}
+	gotLag, err = selectedGatewayReadyMaxReadApplyLag(cfg, 5, true)
+	if err != nil {
+		t.Fatalf("select flag ready max read apply lag: %v", err)
+	}
+	if gotLag == nil || *gotLag != 5 {
+		t.Fatalf("expected flag ready max read apply lag 5, got %v", gotLag)
+	}
+	gotLag, err = selectedGatewayReadyMaxReadApplyLag(cfg, -1, true)
+	if err != nil {
+		t.Fatalf("select disabled ready max read apply lag: %v", err)
+	}
+	if gotLag != nil {
+		t.Fatalf("expected disabled ready max read apply lag, got %v", *gotLag)
+	}
+	if _, err := selectedGatewayReadyMaxReadApplyLag(serverconfig.Config{}, -2, true); err == nil {
+		t.Fatalf("expected invalid ready max read apply lag error")
+	}
+	if got := selectedGatewayReadyMinReadReady(cfg, 1, false); got != 2 {
+		t.Fatalf("expected config ready min read ready, got %d", got)
+	}
+	if got := selectedGatewayReadyMinReadReady(cfg, 1, true); got != 1 {
+		t.Fatalf("expected flag ready min read ready, got %d", got)
+	}
+}
+
 func TestWriteStatsIncludesWALStats(t *testing.T) {
 	var buf bytes.Buffer
 	writeStats(&buf, lsm.Stats{

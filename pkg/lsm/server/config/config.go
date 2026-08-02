@@ -38,6 +38,9 @@ type Config struct {
 	GatewayEndpointDNSService         string          `yaml:"gateway_endpoint_dns_service"`
 	GatewayEndpointDNSProto           string          `yaml:"gateway_endpoint_dns_proto"`
 	GatewayEndpointDNSScheme          string          `yaml:"gateway_endpoint_dns_scheme"`
+	GatewayReadyMinReachable          int             `yaml:"gateway_ready_min_reachable"`
+	GatewayReadyMaxReadApplyLag       *int64          `yaml:"gateway_ready_max_read_apply_lag"`
+	GatewayReadyMinReadReady          int             `yaml:"gateway_ready_min_read_ready"`
 	MemtableLimit                     int             `yaml:"memtable_limit"`
 	WALMaxSegmentBytes                uint64          `yaml:"wal_max_segment_bytes"`
 	WALRetainArchivedSegments         int             `yaml:"wal_retain_archived_segments"`
