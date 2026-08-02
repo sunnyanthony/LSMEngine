@@ -59,7 +59,10 @@ leader, loads node endpoints from the mounted `peer-urls.yaml`, and runs with
 commit-log write leader. That mode returns unavailable if no leader is visible
 and is not a raft ReadIndex or lease-read implementation. The Compose service
 can be switched with `LSM_GATEWAY_READ_MODE`, `LSM_GATEWAY_READ_BALANCE_POLICY`,
-and `LSM_GATEWAY_MAX_READ_APPLY_LAG`; for example:
+and `LSM_GATEWAY_MAX_READ_APPLY_LAG`; `/readyz` supervision gates can be tuned
+with `LSM_GATEWAY_READY_MIN_REACHABLE`,
+`LSM_GATEWAY_READY_MAX_READ_APPLY_LAG`, and
+`LSM_GATEWAY_READY_MIN_READ_READY`; for example:
 
 ```bash
 LSM_GATEWAY_READ_MODE=any \
@@ -85,6 +88,11 @@ endpoint. It also exercises range scans and `async-delete` through gateway.
 
 In any-mode the three-node smoke accepts `LSM_GATEWAY_READ_READY_MIN=0..3`
 (zero means at least one); use 3 to require all backends within the lag bound.
+
+Use `LSM_GATEWAY_READY_MIN_REACHABLE`, `LSM_GATEWAY_READY_MIN_READ_READY`,
+and `LSM_GATEWAY_READY_MAX_READ_APPLY_LAG` to configure the container's `/readyz`.
+The smoke checks container readiness after its first committed write catches up;
+an empty cluster may not yet meet a strict raw apply-lag bound.
 
 ## Rolling restart smoke
 
