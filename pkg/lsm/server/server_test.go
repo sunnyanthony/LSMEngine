@@ -771,6 +771,12 @@ func TestHandlerClusterStatus(t *testing.T) {
 		AppliedIndex: 6,
 		ApplyLag:     1,
 	}
+	p.state.status.Compatibility = lsm.CompatibilityStatus{
+		ClusterStatusVersion:   1,
+		ControlStateVersion:    1,
+		StateSnapshotVersion:   1,
+		RaftPeerMessageVersion: 1,
+	}
 	handler := NewHandler(p)
 	req := httptest.NewRequest(http.MethodGet, "/cluster/status", nil)
 	rec := httptest.NewRecorder()
@@ -787,6 +793,9 @@ func TestHandlerClusterStatus(t *testing.T) {
 	}
 	if status.CommitLogRuntime.AppliedIndex != 6 || status.CommitLogRuntime.ApplyLag != 1 {
 		t.Fatalf("unexpected commit-log runtime progress: %+v", status.CommitLogRuntime)
+	}
+	if status.Compatibility.ControlStateVersion == 0 {
+		t.Fatalf("expected compatibility status, got %+v", status.Compatibility)
 	}
 }
 

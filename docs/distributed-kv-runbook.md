@@ -78,7 +78,9 @@ specific committed write, use the write response's `seq` as
 `--min-applied-index <seq>` so counted ready nodes must have materialized that
 commit into local LSM/control state. `--max-apply-lag <n>` is also available for
 raw runtime gap checks, but that gap can include provider/internal raft entries
-and is not a precise pending-KV-mutation count.
+and is not a precise pending-KV-mutation count. During rolling upgrades, add
+`--require-compatible` so counted ready nodes must report the same LSM-owned
+compatibility versions in `/cluster/status`.
 
 The useful fields are:
 
@@ -564,12 +566,15 @@ Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
 - process supervision and automatic replacement triggers;
-- broader mixed-version compatibility tests beyond the current control-state
-  future-version fail-fast guard;
+- broader mixed-version compatibility tests beyond the current compatibility
+  status/wait gate and control-state future-version fail-fast guard;
 - richer policy for raft/shard membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
 
-The external dependency rule also applies here: etcd-raft remains behind the
-builtin commit-log provider. Operator-facing APIs and docs should use
-LSM-owned concepts such as committed entries, runtime status, raft peer message
+The external dependency rule also applies here: third-party libraries must sit
+behind LSM-owned adapter layers before they influence public, server, or
+operator-facing APIs. `internal/lsm/iofs` is the IO example; etcd-raft follows
+the same rule through the builtin commit-log provider and peer transport
+envelopes. Operator-facing APIs and docs should use LSM-owned concepts such as
+committed entries, runtime status, compatibility versions, raft peer message
 envelopes, and shard replica metadata rather than etcd raft protocol types.

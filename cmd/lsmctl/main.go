@@ -799,6 +799,9 @@ type clusterWaitResult struct {
 	Ready               bool                `json:"ready"`
 	ReadyNodes          int                 `json:"ready_nodes"`
 	RequiredReadyNodes  int                 `json:"required_ready_nodes"`
+	RequireCompatible   bool                `json:"require_compatible,omitempty"`
+	Compatible          bool                `json:"compatible"`
+	IncompatibleNodes   []string            `json:"incompatible_nodes,omitempty"`
 	MaxApplyLag         *uint64             `json:"max_apply_lag,omitempty"`
 	MinAppliedIndex     *uint64             `json:"min_applied_index,omitempty"`
 	WriteLeader         string              `json:"write_leader,omitempty"`
@@ -809,6 +812,7 @@ type clusterWaitResult struct {
 type waitClusterOptions struct {
 	RequiredReadyNodes int
 	RequireWriteLeader bool
+	RequireCompatible  bool
 	MaxApplyLag        *uint64
 	MinAppliedIndex    *uint64
 	Timeout            time.Duration
@@ -1262,6 +1266,7 @@ func waitClusterCmd(args []string) {
 	addr := fs.String("addr", "", "http address for one server node")
 	minReady := fs.Int("min-ready", 0, "minimum healthy nodes required; 0 requires all configured endpoints")
 	requireWriteLeader := fs.Bool("write-leader", true, "require a node that can accept committed writes")
+	requireCompatible := fs.Bool("require-compatible", false, "require ready nodes to report the same compatibility versions")
 	maxApplyLag := fs.Int64("max-apply-lag", -1, "maximum commit-log apply lag for ready nodes; -1 disables the gate")
 	minAppliedIndex := fs.Int64("min-applied-index", -1, "minimum applied commit-log index for ready nodes; -1 disables the gate")
 	timeout := fs.Duration("timeout", 60*time.Second, "maximum time to wait")
@@ -1302,6 +1307,7 @@ func waitClusterCmd(args []string) {
 	result, err := waitCluster(endpoints, waitClusterOptions{
 		RequiredReadyNodes: *minReady,
 		RequireWriteLeader: *requireWriteLeader,
+		RequireCompatible:  *requireCompatible,
 		MaxApplyLag:        maxApplyLagOpt,
 		MinAppliedIndex:    minAppliedIndexOpt,
 		Timeout:            *timeout,
@@ -2257,6 +2263,9 @@ func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterW
 			if opts.MinAppliedIndex != nil {
 				message = fmt.Sprintf("%s min_applied_index=%d", message, *opts.MinAppliedIndex)
 			}
+			if opts.RequireCompatible {
+				message = fmt.Sprintf("%s compatible=%v incompatible_nodes=%s", message, last.Compatible, strings.Join(last.IncompatibleNodes, ","))
+			}
 			return last, errors.New(message)
 		}
 		time.Sleep(opts.Interval)
@@ -2266,13 +2275,25 @@ func waitCluster(endpoints map[string]string, opts waitClusterOptions) (clusterW
 func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) clusterWaitResult {
 	result := clusterWaitResult{
 		RequiredReadyNodes: opts.RequiredReadyNodes,
+		RequireCompatible:  opts.RequireCompatible,
+		Compatible:         !opts.RequireCompatible,
 		MaxApplyLag:        opts.MaxApplyLag,
 		MinAppliedIndex:    opts.MinAppliedIndex,
 		Statuses:           statuses,
 	}
+	var compatibilityRef *lsm.CompatibilityStatus
 	for _, node := range statuses.Nodes {
-		if clusterNodeReadyForWait(node, opts.MaxApplyLag, opts.MinAppliedIndex) {
+		nodeReady := clusterNodeReadyForWait(node, opts.MaxApplyLag, opts.MinAppliedIndex)
+		if nodeReady {
 			result.ReadyNodes++
+			if opts.RequireCompatible && node.Status != nil {
+				compatibility := node.Status.Compatibility
+				if compatibilityRef == nil {
+					compatibilityRef = &compatibility
+				} else if !compatibilityStatusEqual(*compatibilityRef, compatibility) {
+					result.IncompatibleNodes = append(result.IncompatibleNodes, clusterStatusNodeName(node))
+				}
+			}
 		}
 		if node.Error != "" || node.Status == nil {
 			continue
@@ -2290,7 +2311,26 @@ func evaluateClusterWait(statuses clusterStatusResult, opts waitClusterOptions) 
 	if opts.RequireWriteLeader {
 		result.Ready = result.Ready && result.WriteLeader != ""
 	}
+	if opts.RequireCompatible {
+		sort.Strings(result.IncompatibleNodes)
+		result.Compatible = compatibilityRef != nil && len(result.IncompatibleNodes) == 0
+		result.Ready = result.Ready && result.Compatible
+	}
 	return result
+}
+
+func compatibilityStatusEqual(a, b lsm.CompatibilityStatus) bool {
+	return a.ClusterStatusVersion == b.ClusterStatusVersion &&
+		a.ControlStateVersion == b.ControlStateVersion &&
+		a.StateSnapshotVersion == b.StateSnapshotVersion &&
+		a.RaftPeerMessageVersion == b.RaftPeerMessageVersion
+}
+
+func clusterStatusNodeName(node clusterStatusNodeResult) string {
+	if node.Status != nil && strings.TrimSpace(node.Status.NodeID) != "" {
+		return strings.TrimSpace(node.Status.NodeID)
+	}
+	return strings.TrimSpace(node.Node)
 }
 
 func clusterNodeReadyForWait(node clusterStatusNodeResult, maxApplyLag *uint64, minAppliedIndex *uint64) bool {
@@ -2321,7 +2361,7 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 		runtime := status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v\n",
+			"node=%s endpoint=%s ok=true health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v compatibility=%s\n",
 			status.NodeID,
 			node.Endpoint,
 			runtime.Health,
@@ -2335,6 +2375,7 @@ func writeClusterStatuses(w io.Writer, result clusterStatusResult) {
 			status.Revision,
 			status.ShardCount,
 			status.Draining,
+			formatCompatibilityStatus(status.Compatibility),
 		)
 	}
 }
@@ -2442,7 +2483,7 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 		runtime := node.Status.CommitLogRuntime
 		fmt.Fprintf(
 			w,
-			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v %s\n",
+			"node=%s endpoint=%s ok=true degraded=%v degraded_until=%s health=%s leader=%v write_available=%v leader_known=%v term=%d index=%d applied_index=%d apply_lag=%d revision=%d shards=%d draining=%v compatibility=%s %s\n",
 			nodeID,
 			node.Endpoint,
 			node.Degraded,
@@ -2458,9 +2499,20 @@ func writeGatewayStatusNodes(w io.Writer, nodes []server.GatewayClusterNodeStatu
 			node.Status.Revision,
 			node.Status.ShardCount,
 			node.Status.Draining,
+			formatCompatibilityStatus(node.Status.Compatibility),
 			formatGatewayBackendRoutingStats(node.Routing),
 		)
 	}
+}
+
+func formatCompatibilityStatus(status lsm.CompatibilityStatus) string {
+	return fmt.Sprintf(
+		"cluster_status:%d,control_state:%d,state_snapshot:%d,raft_peer_message:%d",
+		status.ClusterStatusVersion,
+		status.ControlStateVersion,
+		status.StateSnapshotVersion,
+		status.RaftPeerMessageVersion,
+	)
 }
 
 func formatGatewayBackendRoutingStats(stats server.GatewayBackendStats) string {
@@ -2481,10 +2533,13 @@ func formatGatewayBackendRoutingStats(stats server.GatewayBackendStats) string {
 func writeClusterWait(w io.Writer, result clusterWaitResult) {
 	fmt.Fprintf(
 		w,
-		"ready=%v ready_nodes=%d required_ready=%d write_leader=%s write_leader_endpoint=%s\n",
+		"ready=%v ready_nodes=%d required_ready=%d require_compatible=%v compatible=%v incompatible_nodes=%s write_leader=%s write_leader_endpoint=%s\n",
 		result.Ready,
 		result.ReadyNodes,
 		result.RequiredReadyNodes,
+		result.RequireCompatible,
+		result.Compatible,
+		strings.Join(result.IncompatibleNodes, ","),
 		result.WriteLeader,
 		result.WriteLeaderEndpoint,
 	)
