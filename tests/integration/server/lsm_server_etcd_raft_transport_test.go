@@ -12,7 +12,7 @@ import (
 
 type noopRaftTransport struct{}
 
-func (noopRaftTransport) Send(_ context.Context, _ []lsm.RaftPeerMessage) error {
+func (noopRaftTransport) Send(_ context.Context, _ []lsm.CommitLogPeerMessage) error {
 	return nil
 }
 

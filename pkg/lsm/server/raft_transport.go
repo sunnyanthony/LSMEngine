@@ -15,19 +15,19 @@ import (
 
 const RaftPeerMessagesPath = "/cluster/raft/messages"
 
-// RaftHTTPTransportOptions configures outbound raft peer delivery over HTTP.
+// RaftHTTPTransportOptions configures outbound commit-log peer delivery over HTTP.
 type RaftHTTPTransportOptions struct {
 	PeerURLs   map[uint64]string
 	HTTPClient *http.Client
 }
 
-// RaftHTTPTransport sends LSM-owned raft peer messages to peer server endpoints.
+// RaftHTTPTransport sends LSM-owned commit-log peer messages to peer server endpoints.
 type RaftHTTPTransport struct {
 	peerURLs map[uint64]string
 	client   *http.Client
 }
 
-// NewRaftHTTPTransport returns an outbound HTTP transport for raft peer messages.
+// NewRaftHTTPTransport returns an outbound HTTP transport for commit-log peer messages.
 func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, error) {
 	if len(opts.PeerURLs) == 0 {
 		return nil, fmt.Errorf("raft peer urls required")
@@ -51,14 +51,14 @@ func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, er
 }
 
 // Send groups messages by target raft id and posts them to the configured peer endpoint.
-func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMessage) error {
+func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.CommitLogPeerMessage) error {
 	if len(messages) == 0 {
 		return nil
 	}
 	if t == nil || t.client == nil {
 		return fmt.Errorf("raft http transport is unavailable")
 	}
-	grouped := make(map[uint64][]lsm.RaftPeerMessage)
+	grouped := make(map[uint64][]lsm.CommitLogPeerMessage)
 	for _, message := range messages {
 		if message.To == 0 {
 			return fmt.Errorf("raft peer message missing target")
@@ -79,7 +79,7 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.RaftPeerMes
 func (t *RaftHTTPTransport) sendToPeer(
 	ctx context.Context,
 	peerID uint64,
-	messages []lsm.RaftPeerMessage,
+	messages []lsm.CommitLogPeerMessage,
 ) error {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(raftPeerMessagesRequest{Messages: messages}); err != nil {

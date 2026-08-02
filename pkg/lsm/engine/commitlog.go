@@ -2,9 +2,7 @@ package engine
 
 import (
 	"context"
-	"fmt"
 
-	"go.etcd.io/etcd/raft/v3/raftpb"
 	internalcommitlog "lsmengine/internal/lsm/commitlog"
 )
 
@@ -32,22 +30,11 @@ func (c *builtinCommitLogConsensus) CommitData(ctx context.Context, mutation dat
 	return fromInternalDataCommittedEntry(entry), nil
 }
 
-func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, messages []RaftPeerMessage) error {
+func (c *builtinCommitLogConsensus) HandlePeerMessages(ctx context.Context, messages []CommitLogPeerMessage) error {
 	if len(messages) == 0 {
 		return nil
 	}
-	if c.inner.Provider() == internalcommitlog.ProviderLocal {
-		return nil
-	}
-	converted := make([]raftpb.Message, 0, len(messages))
-	for _, message := range messages {
-		raftMessage, err := toRaftPBMessage(message)
-		if err != nil {
-			return err
-		}
-		converted = append(converted, raftMessage)
-	}
-	return c.inner.HandlePeerMessages(ctx, converted)
+	return c.inner.HandlePeerMessages(ctx, toInternalPeerMessages(messages))
 }
 
 func (c *builtinCommitLogConsensus) Provider() CommitLogProvider {
@@ -77,7 +64,7 @@ func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (com
 	}
 	if opts.CommitLog != nil {
 		if opts.CommitLog.Transport != nil {
-			cfg.Transport = raftPeerTransportAdapter{transport: opts.CommitLog.Transport}
+			cfg.Transport = commitLogPeerTransportAdapter{transport: opts.CommitLog.Transport}
 		}
 	}
 	consensus, err := internalcommitlog.NewBuiltin(cfg)
@@ -91,69 +78,27 @@ func newEtcdRaftCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 	return newBuiltinCommitLogConsensus(opts, CommitLogProviderEtcdRaft)
 }
 
-type raftPeerTransportAdapter struct {
-	transport RaftMessageTransport
+type commitLogPeerTransportAdapter struct {
+	transport CommitLogPeerTransport
 }
 
-func (a raftPeerTransportAdapter) Send(ctx context.Context, messages []raftpb.Message) error {
+func (a commitLogPeerTransportAdapter) Send(ctx context.Context, messages []internalcommitlog.PeerMessage) error {
 	if a.transport == nil {
-		return fmt.Errorf("raft peer transport unavailable")
+		return nil
 	}
-	converted := make([]RaftPeerMessage, 0, len(messages))
-	for _, message := range messages {
-		peerMessage, err := fromRaftPBMessage(message)
-		if err != nil {
-			return err
-		}
-		converted = append(converted, peerMessage)
-	}
-	return a.transport.Send(ctx, converted)
+	return a.transport.Send(ctx, fromInternalPeerMessages(messages))
 }
 
-func cloneRaftPeerMessages(messages []RaftPeerMessage) []RaftPeerMessage {
+func cloneCommitLogPeerMessages(messages []CommitLogPeerMessage) []CommitLogPeerMessage {
 	if len(messages) == 0 {
 		return nil
 	}
-	out := make([]RaftPeerMessage, len(messages))
+	out := make([]CommitLogPeerMessage, len(messages))
 	for i := range messages {
 		out[i] = messages[i]
 		out[i].Payload = append([]byte(nil), messages[i].Payload...)
 	}
 	return out
-}
-
-func fromRaftPBMessage(message raftpb.Message) (RaftPeerMessage, error) {
-	payload, err := message.Marshal()
-	if err != nil {
-		return RaftPeerMessage{}, fmt.Errorf("marshal raft peer message: %w", err)
-	}
-	return RaftPeerMessage{
-		From:    message.From,
-		To:      message.To,
-		Term:    message.Term,
-		Type:    message.Type.String(),
-		Payload: payload,
-	}, nil
-}
-
-func toRaftPBMessage(message RaftPeerMessage) (raftpb.Message, error) {
-	if len(message.Payload) > 0 {
-		var out raftpb.Message
-		if err := out.Unmarshal(message.Payload); err != nil {
-			return raftpb.Message{}, fmt.Errorf("unmarshal raft peer message: %w", err)
-		}
-		return out, nil
-	}
-	messageType, ok := raftpb.MessageType_value[message.Type]
-	if !ok {
-		return raftpb.Message{}, fmt.Errorf("unknown raft peer message type %q", message.Type)
-	}
-	return raftpb.Message{
-		Type: raftpb.MessageType(messageType),
-		From: message.From,
-		To:   message.To,
-		Term: message.Term,
-	}, nil
 }
 
 func toInternalControlMutation(m CommitLogControlMutation) internalcommitlog.ControlMutation {
@@ -204,6 +149,40 @@ func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRunti
 		Leader:   s.Leader,
 		Replicas: s.Replicas,
 	}
+}
+
+func toInternalPeerMessages(messages []CommitLogPeerMessage) []internalcommitlog.PeerMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]internalcommitlog.PeerMessage, len(messages))
+	for i, message := range messages {
+		out[i] = internalcommitlog.PeerMessage{
+			From:    message.From,
+			To:      message.To,
+			Term:    message.Term,
+			Type:    message.Type,
+			Payload: append([]byte(nil), message.Payload...),
+		}
+	}
+	return out
+}
+
+func fromInternalPeerMessages(messages []internalcommitlog.PeerMessage) []CommitLogPeerMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]CommitLogPeerMessage, len(messages))
+	for i, message := range messages {
+		out[i] = CommitLogPeerMessage{
+			From:    message.From,
+			To:      message.To,
+			Term:    message.Term,
+			Type:    message.Type,
+			Payload: append([]byte(nil), message.Payload...),
+		}
+	}
+	return out
 }
 
 func fromInternalControlMutation(m internalcommitlog.ControlMutation) controlMutation {

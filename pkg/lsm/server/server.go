@@ -90,7 +90,7 @@ type handler struct {
 }
 
 type raftPeerMessageHandler interface {
-	HandlePeerMessages(ctx context.Context, messages []lsm.RaftPeerMessage) error
+	HandlePeerMessages(ctx context.Context, messages []lsm.CommitLogPeerMessage) error
 }
 
 const defaultWriteRequestCapacity = 4096
@@ -194,7 +194,7 @@ type cdcEventResponse struct {
 }
 
 type raftPeerMessagesRequest struct {
-	Messages []lsm.RaftPeerMessage `json:"messages"`
+	Messages []lsm.CommitLogPeerMessage `json:"messages"`
 }
 
 func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {

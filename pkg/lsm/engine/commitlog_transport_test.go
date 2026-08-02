@@ -9,20 +9,20 @@ import (
 
 type recordingRaftTransport struct {
 	mu       sync.Mutex
-	messages []RaftPeerMessage
+	messages []CommitLogPeerMessage
 }
 
-func (r *recordingRaftTransport) Send(_ context.Context, messages []RaftPeerMessage) error {
+func (r *recordingRaftTransport) Send(_ context.Context, messages []CommitLogPeerMessage) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.messages = append(r.messages, messages...)
 	return nil
 }
 
-func (r *recordingRaftTransport) Messages() []RaftPeerMessage {
+func (r *recordingRaftTransport) Messages() []CommitLogPeerMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return cloneRaftPeerMessages(r.messages)
+	return cloneCommitLogPeerMessages(r.messages)
 }
 
 func TestEtcdRaftCommitLogBootstrapWithTransport(t *testing.T) {

@@ -16,17 +16,17 @@ const (
 
 // CommitLogOptions controls commit-log provider selection and injection.
 type CommitLogOptions struct {
-	Provider  CommitLogProvider    `json:"provider" yaml:"provider"`
-	Transport RaftMessageTransport `json:"-" yaml:"-"`
-	Factory   CommitLogFactory     `json:"-" yaml:"-"`
+	Provider  CommitLogProvider      `json:"provider" yaml:"provider"`
+	Transport CommitLogPeerTransport `json:"-" yaml:"-"`
+	Factory   CommitLogFactory       `json:"-" yaml:"-"`
 }
 
-// RaftPeerMessage is an LSM-owned envelope for raft peer traffic.
+// CommitLogPeerMessage is an LSM-owned envelope for commit-log peer traffic.
 //
 // Payload is provider-specific encoded message data. Built-in providers keep
 // library-specific protocol details behind their adapters instead of exposing
 // those types through public APIs.
-type RaftPeerMessage struct {
+type CommitLogPeerMessage struct {
 	From    uint64 `json:"from"`
 	To      uint64 `json:"to"`
 	Term    uint64 `json:"term,omitempty"`
@@ -34,13 +34,21 @@ type RaftPeerMessage struct {
 	Payload []byte `json:"payload,omitempty"`
 }
 
-// RaftMessageTransport sends raft peer messages to other nodes.
+// CommitLogPeerTransport sends commit-log peer messages to other nodes.
 //
-// This transport is outbound from the local raft node. Inbound delivery is
+// This transport is outbound from the local commit-log provider. Inbound delivery is
 // handled via CommitLogConsensus.HandlePeerMessages.
-type RaftMessageTransport interface {
-	Send(ctx context.Context, messages []RaftPeerMessage) error
+type CommitLogPeerTransport interface {
+	Send(ctx context.Context, messages []CommitLogPeerMessage) error
 }
+
+// RaftPeerMessage is kept as a compatibility alias for earlier raft foundation
+// branches. New code should use CommitLogPeerMessage.
+type RaftPeerMessage = CommitLogPeerMessage
+
+// RaftMessageTransport is kept as a compatibility alias for earlier raft
+// foundation branches. New code should use CommitLogPeerTransport.
+type RaftMessageTransport = CommitLogPeerTransport
 
 // RaftPeerID returns the deterministic raft id used for a configured node name.
 func RaftPeerID(nodeID string) uint64 {
@@ -99,7 +107,7 @@ type CommitLogRuntimeStatus struct {
 type CommitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation CommitLogControlMutation) (CommitLogControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation CommitLogDataMutation) (CommitLogDataCommittedEntry, error)
-	HandlePeerMessages(ctx context.Context, messages []RaftPeerMessage) error
+	HandlePeerMessages(ctx context.Context, messages []CommitLogPeerMessage) error
 	Provider() CommitLogProvider
 	RuntimeStatus() CommitLogRuntimeStatus
 }

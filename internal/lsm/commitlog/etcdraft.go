@@ -40,7 +40,7 @@ type etcdRaftConsensus struct {
 	nodeID      uint64
 	rawNode     *raft.RawNode
 	storage     *raftPersistentStorage
-	transport   RaftMessageTransport
+	transport   PeerTransport
 	proposalSeq uint64
 	pending     map[uint64]*pendingRaftProposal
 	committed   []raftCommittedProposal
@@ -159,7 +159,7 @@ func (c *etcdRaftConsensus) CommitData(ctx context.Context, mutation DataMutatio
 	return *pending.data, pending.err
 }
 
-func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error {
+func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []PeerMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.rawNode == nil || c.storage == nil {
@@ -168,9 +168,13 @@ func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []r
 	if len(messages) == 0 {
 		return nil
 	}
+	decoded, err := decodeRaftPeerMessages(messages)
+	if err != nil {
+		return err
+	}
 	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
 	defer cancel()
-	for _, msg := range messages {
+	for _, msg := range decoded {
 		if msg.To != 0 && msg.To != c.nodeID {
 			continue
 		}
@@ -334,8 +338,12 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		if c.transport == nil {
 			return fmt.Errorf("raft transport is not configured for peer messages")
 		}
+		encoded, err := encodeRaftPeerMessages(outbound)
+		if err != nil {
+			return err
+		}
 		sendCtx, cancel := withDefaultTimeout(ctx, etcdRaftSendTimeout)
-		err := c.transport.Send(sendCtx, outbound)
+		err = c.transport.Send(sendCtx, encoded)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("raft transport send: %w", err)
@@ -348,6 +356,59 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 	}
 	c.rawNode.Advance(rd)
 	return nil
+}
+
+func encodeRaftPeerMessages(messages []raftpb.Message) ([]PeerMessage, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	out := make([]PeerMessage, len(messages))
+	for i, message := range messages {
+		payload, err := message.Marshal()
+		if err != nil {
+			return nil, fmt.Errorf("marshal raft peer message: %w", err)
+		}
+		out[i] = PeerMessage{
+			From:    message.From,
+			To:      message.To,
+			Term:    message.Term,
+			Type:    message.Type.String(),
+			Payload: payload,
+		}
+	}
+	return out, nil
+}
+
+func decodeRaftPeerMessages(messages []PeerMessage) ([]raftpb.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	out := make([]raftpb.Message, len(messages))
+	for i, message := range messages {
+		if len(message.Payload) > 0 {
+			if err := out[i].Unmarshal(message.Payload); err != nil {
+				return nil, fmt.Errorf("unmarshal raft peer message: %w", err)
+			}
+		} else {
+			messageType, ok := raftpb.MessageType_value[message.Type]
+			if !ok {
+				return nil, fmt.Errorf("unknown raft peer message type %q", message.Type)
+			}
+			out[i] = raftpb.Message{
+				Type: raftpb.MessageType(messageType),
+				From: message.From,
+				To:   message.To,
+				Term: message.Term,
+			}
+		}
+		if message.From != 0 && out[i].From != message.From {
+			return nil, fmt.Errorf("raft peer message from mismatch: envelope=%d payload=%d", message.From, out[i].From)
+		}
+		if message.To != 0 && out[i].To != message.To {
+			return nil, fmt.Errorf("raft peer message to mismatch: envelope=%d payload=%d", message.To, out[i].To)
+		}
+	}
+	return out, nil
 }
 
 func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error {
