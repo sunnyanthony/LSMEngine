@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -1335,6 +1336,154 @@ func TestWriteStatsIncludesWALStats(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
 		}
+	}
+}
+
+func TestStateSnapshotExportRestoreFile(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := lsm.New(lsm.Options{
+		DataDir:               sourceDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if err := source.Put([]byte("snapshot-key"), []byte("snapshot-value")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+
+	snapshotPath := filepath.Join(t.TempDir(), "state-snapshot.json")
+	exported, err := exportStateSnapshotFile(sourceDir, snapshotPath, false)
+	if err != nil {
+		t.Fatalf("export snapshot: %v", err)
+	}
+	if !exported.Exported || exported.Path != snapshotPath || exported.Bytes == 0 {
+		t.Fatalf("unexpected export result: %+v", exported)
+	}
+
+	targetDir := t.TempDir()
+	restored, err := restoreStateSnapshotFile(targetDir, snapshotPath)
+	if err != nil {
+		t.Fatalf("restore snapshot: %v", err)
+	}
+	if !restored.Restored || restored.Path != snapshotPath || restored.Bytes != exported.Bytes {
+		t.Fatalf("unexpected restore result: %+v", restored)
+	}
+
+	target, err := lsm.New(lsm.Options{
+		DataDir:               targetDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new restored target: %v", err)
+	}
+	defer target.Close()
+	entry, ok := target.Get([]byte("snapshot-key"))
+	if !ok || string(entry.Value) != "snapshot-value" {
+		t.Fatalf("expected restored value, got %q found=%v", string(entry.Value), ok)
+	}
+}
+
+func TestStateSnapshotExportRefusesOverwrite(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := lsm.New(lsm.Options{
+		DataDir:               sourceDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if err := source.Put([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+
+	snapshotPath := filepath.Join(t.TempDir(), "state-snapshot.json")
+	if err := os.WriteFile(snapshotPath, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write existing snapshot: %v", err)
+	}
+	if _, err := exportStateSnapshotFile(sourceDir, snapshotPath, false); err == nil {
+		t.Fatalf("expected export to refuse overwrite")
+	}
+}
+
+func TestStateSnapshotExportForceOverwrites(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := lsm.New(lsm.Options{
+		DataDir:               sourceDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if err := source.Put([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+
+	snapshotPath := filepath.Join(t.TempDir(), "state-snapshot.json")
+	if err := os.WriteFile(snapshotPath, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write existing snapshot: %v", err)
+	}
+	exported, err := exportStateSnapshotFile(sourceDir, snapshotPath, true)
+	if err != nil {
+		t.Fatalf("force export snapshot: %v", err)
+	}
+	if !exported.Exported || exported.Bytes <= len("existing") {
+		t.Fatalf("unexpected force export result: %+v", exported)
+	}
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read forced snapshot: %v", err)
+	}
+	if string(data) == "existing" {
+		t.Fatalf("expected force export to overwrite existing content")
+	}
+}
+
+func TestStateSnapshotRestoreRejectsNonEmptyTarget(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := lsm.New(lsm.Options{
+		DataDir:               sourceDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if err := source.Put([]byte("snapshot"), []byte("value")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+	snapshotPath := filepath.Join(t.TempDir(), "state-snapshot.json")
+	if _, err := exportStateSnapshotFile(sourceDir, snapshotPath, false); err != nil {
+		t.Fatalf("export snapshot: %v", err)
+	}
+
+	targetDir := t.TempDir()
+	target, err := lsm.New(lsm.Options{
+		DataDir:               targetDir,
+		CompactionL0Threshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new target: %v", err)
+	}
+	if err := target.Put([]byte("existing"), []byte("value")); err != nil {
+		t.Fatalf("put target: %v", err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatalf("close target: %v", err)
+	}
+	if _, err := restoreStateSnapshotFile(targetDir, snapshotPath); err == nil {
+		t.Fatalf("expected restore to reject non-empty target")
 	}
 }
 

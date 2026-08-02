@@ -78,6 +78,10 @@ func main() {
 		replacementPlanCmd(os.Args[2:])
 	case "replacement-apply":
 		replacementApplyCmd(os.Args[2:])
+	case "snapshot-export":
+		snapshotExportCmd(os.Args[2:])
+	case "snapshot-restore":
+		snapshotRestoreCmd(os.Args[2:])
 	case "compact":
 		compactCmd(os.Args[2:])
 	case "stats":
@@ -91,7 +95,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|compact|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|snapshot-export|snapshot-restore|compact|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -1738,6 +1742,62 @@ func replacementApplyCmd(args []string) {
 		return
 	}
 	writeReplacementApply(os.Stdout, result)
+}
+
+type stateSnapshotFileResult struct {
+	Path     string `json:"path"`
+	Bytes    int    `json:"bytes"`
+	Exported bool   `json:"exported,omitempty"`
+	Restored bool   `json:"restored,omitempty"`
+}
+
+func snapshotExportCmd(args []string) {
+	fs := flag.NewFlagSet("snapshot-export", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	outPath := fs.String("out", "", "output snapshot file")
+	force := fs.Bool("force", false, "overwrite output snapshot file")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	result, err := exportStateSnapshotFile(*dataDir, *outPath, *force)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	fmt.Fprintf(os.Stdout, "snapshot_exported=%v path=%s bytes=%d\n", result.Exported, result.Path, result.Bytes)
+}
+
+func snapshotRestoreCmd(args []string) {
+	fs := flag.NewFlagSet("snapshot-restore", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	inPath := fs.String("in", "", "input snapshot file")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	result, err := restoreStateSnapshotFile(*dataDir, *inPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	fmt.Fprintf(os.Stdout, "snapshot_restored=%v path=%s bytes=%d\n", result.Restored, result.Path, result.Bytes)
 }
 
 func readStats(addr, dataDir string) (lsm.Stats, error) {
@@ -3822,6 +3882,79 @@ func openLocal(dataDir string) (*lsm.LSM, error) {
 		DataDir:               dataDir,
 		CompactionL0Threshold: 0,
 	})
+}
+
+func exportStateSnapshotFile(dataDir string, path string, force bool) (stateSnapshotFileResult, error) {
+	if dataDir == "" {
+		return stateSnapshotFileResult{}, fmt.Errorf("snapshot-export requires --data-dir or config data_dir")
+	}
+	if path == "" {
+		return stateSnapshotFileResult{}, fmt.Errorf("snapshot-export requires --out")
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return stateSnapshotFileResult{}, err
+	}
+	payload, exportErr := store.ExportStateSnapshot()
+	closeErr := store.Close()
+	if exportErr != nil {
+		return stateSnapshotFileResult{}, exportErr
+	}
+	if closeErr != nil {
+		return stateSnapshotFileResult{}, closeErr
+	}
+	if err := writeStateSnapshotFile(path, payload, force); err != nil {
+		return stateSnapshotFileResult{}, err
+	}
+	return stateSnapshotFileResult{Path: path, Bytes: len(payload), Exported: true}, nil
+}
+
+func restoreStateSnapshotFile(dataDir string, path string) (stateSnapshotFileResult, error) {
+	if dataDir == "" {
+		return stateSnapshotFileResult{}, fmt.Errorf("snapshot-restore requires --data-dir or config data_dir")
+	}
+	if path == "" {
+		return stateSnapshotFileResult{}, fmt.Errorf("snapshot-restore requires --in")
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return stateSnapshotFileResult{}, err
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return stateSnapshotFileResult{}, err
+	}
+	restoreErr := store.RestoreStateSnapshot(payload)
+	closeErr := store.Close()
+	if restoreErr != nil {
+		return stateSnapshotFileResult{}, restoreErr
+	}
+	if closeErr != nil {
+		return stateSnapshotFileResult{}, closeErr
+	}
+	return stateSnapshotFileResult{Path: path, Bytes: len(payload), Restored: true}, nil
+}
+
+func writeStateSnapshotFile(path string, data []byte, force bool) error {
+	flag := os.O_WRONLY | os.O_CREATE
+	if force {
+		flag |= os.O_TRUNC
+	} else {
+		flag |= os.O_EXCL
+	}
+	file, err := os.OpenFile(path, flag, 0o600)
+	if err != nil {
+		return err
+	}
+	n, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return closeErr
 }
 
 func getJSON(url string, out any) error {

@@ -39,6 +39,16 @@ func (l *LSM) exportStateSnapshot() ([]byte, error) {
 	return l.exportStateSnapshotAt(0)
 }
 
+// ExportStateSnapshot encodes the current visible key/value state and
+// control-plane metadata as an LSM-owned state-machine snapshot payload.
+//
+// The payload is intended for offline or embedded restore workflows and for
+// commit-log providers that need engine-owned raft snapshot data. It is not a
+// live cluster-wide backup protocol.
+func (l *LSM) ExportStateSnapshot() ([]byte, error) {
+	return l.exportStateSnapshot()
+}
+
 func (l *LSM) exportStateSnapshotAt(index uint64) ([]byte, error) {
 	if l == nil {
 		return nil, fmt.Errorf("nil lsm")
@@ -74,6 +84,16 @@ func (l *LSM) exportStateSnapshotAt(index uint64) ([]byte, error) {
 
 func (l *LSM) applyStateSnapshotToEmpty(data []byte) error {
 	return l.applyStateSnapshotToEmptyAt(0, data)
+}
+
+// RestoreStateSnapshot restores an LSM-owned state-machine snapshot payload
+// into an empty engine.
+//
+// Restore fails if the engine already has local data, a committed log position,
+// or non-empty control state. Raft follower catch-up uses the internal raft
+// snapshot apply path instead, which can logically reset lagging local state.
+func (l *LSM) RestoreStateSnapshot(data []byte) error {
+	return l.applyStateSnapshotToEmpty(data)
 }
 
 func (l *LSM) applyStateSnapshotToEmptyAt(index uint64, data []byte) error {

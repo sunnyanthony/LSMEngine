@@ -557,6 +557,29 @@ commit through quorum, starts node-d, runs `lsmctl replacement-plan`, runs
 `lsmctl wait-cluster`, and verifies node-d catches up to committed values from
 before and after the old node failed.
 
+## Local State Snapshots
+
+For offline embedded or single-node recovery workflows, export the local
+LSM-owned state-machine payload while no other process owns the data directory:
+
+```bash
+go run ./cmd/lsmctl snapshot-export --data-dir ./data --out ./state-snapshot.json
+```
+
+Restore that payload into a fresh empty data directory:
+
+```bash
+go run ./cmd/lsmctl snapshot-restore --data-dir ./restore-data --in ./state-snapshot.json
+```
+
+Restore is intentionally empty-engine only. It fails if the target already has
+local data, a committed log position, or non-empty control state. In a raft
+cluster, lagging follower reset still happens through provider-owned raft
+snapshot delivery, where the builtin provider applies the same LSM-owned
+payload after the matching raft snapshot index. Do not treat
+`snapshot-export` / `snapshot-restore` as an online cluster backup protocol or
+as a replacement for raft log retention, raft snapshots, or quorum.
+
 ## Failure Expectations
 
 Expected behavior during common failures:

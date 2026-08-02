@@ -91,6 +91,34 @@ func TestStateSnapshotRestoresVisibleDataAndControlToEmptyEngine(t *testing.T) {
 	}
 }
 
+func TestPublicStateSnapshotExportRestore(t *testing.T) {
+	source, err := New(Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	defer source.Close()
+	if err := source.Put([]byte("public"), []byte("snapshot")); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	payload, err := source.ExportStateSnapshot()
+	if err != nil {
+		t.Fatalf("export public snapshot: %v", err)
+	}
+
+	target, err := New(Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
+	if err != nil {
+		t.Fatalf("new target: %v", err)
+	}
+	defer target.Close()
+	if err := target.RestoreStateSnapshot(payload); err != nil {
+		t.Fatalf("restore public snapshot: %v", err)
+	}
+	entry, ok := target.Get([]byte("public"))
+	if !ok || string(entry.Value) != "snapshot" {
+		t.Fatalf("expected restored public=snapshot, got %q found=%v", string(entry.Value), ok)
+	}
+}
+
 func TestStateSnapshotRestoreRejectsNonEmptyEngine(t *testing.T) {
 	source, err := New(Options{DataDir: t.TempDir(), CompactionL0Threshold: 0})
 	if err != nil {
