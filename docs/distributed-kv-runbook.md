@@ -143,6 +143,10 @@ The useful fields are:
   be sparse), not a pending-record count or a replication/read-consistency gate.
   A failed manifest publication leaves this observation at its last successful
   value; these counters alone do not report manifest health.
+  Configure
+  `wal_ready_max_checkpoint_lag` to make `/readyz` report
+  `reason=wal_checkpoint_lag` when this local retention debt exceeds the
+  supervisor threshold.
   `wal_max_segment_bytes` rotates the active WAL segment after flushed bytes
   reach the configured threshold, but archived segment retention remains a
   separate policy decision.

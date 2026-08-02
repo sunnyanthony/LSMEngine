@@ -105,6 +105,7 @@ func New(opts Options) (*LSM, error) {
 		flowMetrics:                       flowMetrics,
 		mtLimit:                           opts.MemtableLimit,
 		walRetainArchivedSegments:         opts.WALRetainArchivedSegments,
+		walReadyMaxCheckpointLag:          opts.WALReadyMaxCheckpointLag,
 		autoRepair:                        autoRepair,
 		missingSegmentPolicy:              missingPolicy,
 		replayBatchSize:                   opts.ReplayBatchSize,

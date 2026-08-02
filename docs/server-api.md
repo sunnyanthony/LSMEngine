@@ -118,6 +118,7 @@ the LSM engine. It is intentionally separate from the engine internals.
 - `GET /metrics` exposes node-local LSM/WAL/compaction/backpressure/read stats. `lsm_engine_wal_segment_scan_error` is 1 when WAL counts/bytes are partial; do not treat that sample as a complete disk-usage measurement. WAL checkpoint lag is sequence distance, not a pending-record count or quorum durability signal.
 - `/metrics` also exposes compaction, backpressure, and WAL configuration thresholds. Evaluate pressure ratios only with a positive denominator. WAL segment bytes are a post-block rotation threshold, not a hard file-size cap; zero disables rotation. Zero archived retention disables automatic pruning, not retention of all but zero files.
 - Stats and metrics also expose the configured periodic compaction check interval; zero disables periodic checks, without disabling flush-triggered compaction. Stats additionally expose adaptive-check enablement and the current pressure-adjusted effective check interval.
+- WAL stats and metrics expose the configured checkpoint-lag readiness threshold; zero disables this local readiness gate.
 - `get` / `put` / `delete` also support local single-run access with `--data-dir`.
 - WAL bytes include segment/framing overhead and exclude the pending block buffer;
   pending block records are not the async request queue depth. These numbers do

@@ -323,6 +323,8 @@ func writeServerMetrics(w io.Writer, stats lsm.Stats) {
 	writeMetricGauge(w, "lsm_engine_wal_bytes", float64(stats.WAL.TotalBytes))
 	writeMetricHelp(w, "lsm_engine_wal_checkpoint_lag", "Current WAL checkpoint lag in sequence numbers.")
 	writeMetricGauge(w, "lsm_engine_wal_checkpoint_lag", float64(stats.WAL.CheckpointLag))
+	writeMetricHelp(w, "lsm_engine_wal_ready_max_checkpoint_lag", "Configured maximum WAL checkpoint lag for readiness; 0 means disabled.")
+	writeMetricGauge(w, "lsm_engine_wal_ready_max_checkpoint_lag", float64(stats.WAL.ReadyMaxCheckpointLag))
 	writeMetricHelp(w, "lsm_engine_wal_max_segment_bytes", "WAL rotation threshold checked after a block; not a hard size limit. Zero disables rotation.")
 	writeMetricGauge(w, "lsm_engine_wal_max_segment_bytes", float64(stats.WAL.MaxSegmentBytes))
 	writeMetricHelp(w, "lsm_engine_wal_retain_archived_segments", "Minimum newest archives retained after checkpoint pruning. Zero disables automatic pruning.")
