@@ -57,11 +57,22 @@ single gateway endpoint. The gateway routes writes to the current raft write
 leader, loads node endpoints from the mounted `peer-urls.yaml`, and runs with
 `--read-mode leader` so `/kv/get` and `/kv/range` proxy to the current
 commit-log write leader. That mode returns unavailable if no leader is visible
-and is not a raft ReadIndex or lease-read implementation. The smoke also
+and is not a raft ReadIndex or lease-read implementation. The Compose service
+can be switched with `LSM_GATEWAY_READ_MODE`, `LSM_GATEWAY_READ_BALANCE_POLICY`,
+and `LSM_GATEWAY_MAX_READ_APPLY_LAG`; for example:
+
+```bash
+LSM_GATEWAY_READ_MODE=any \
+LSM_GATEWAY_READ_BALANCE_POLICY=adaptive \
+LSM_GATEWAY_MAX_READ_APPLY_LAG=2 \
+examples/docker-compose-cluster/gateway-smoke.sh
+```
+
+The smoke also
 verifies gateway `/readyz` reports backend write readiness, the Compose
 healthcheck marks the gateway container healthy from that readiness check, and
 `lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 --read-mode leader --max-read-apply-lag 2 --min-read-ready 1`
-waits until `/gateway/status` reports all three backend nodes, leader read mode,
+waits until `/gateway/status` reports all three backend nodes, the configured read mode,
 the current write leader, and at least one read-ready backend within the default
 apply-lag bound after the first committed write and final delete catch-up.
 Startup omits only the lag bound because bootstrap/election entries can leave

@@ -62,7 +62,11 @@ services:
       - --write-consistency-default
       - local_committed
       - --read-mode
-      - leader
+      - ${LSM_GATEWAY_READ_MODE:-leader}
+      - --read-balance-policy
+      - ${LSM_GATEWAY_READ_BALANCE_POLICY:-round_robin}
+      - --max-read-apply-lag
+      - ${LSM_GATEWAY_MAX_READ_APPLY_LAG:--1}
       - --endpoint-file
       - /etc/lsm/peer-urls.yaml
     ports:
