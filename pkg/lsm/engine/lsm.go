@@ -56,6 +56,7 @@ type Options struct {
 	WALBatchMax                       int
 	WALAutoRepair                     *bool
 	WALMissingSegmentPolicy           *MissingSegmentPolicy
+	CDCMaxEventsPerShard              int
 	ReplayBatchSize                   int
 	FlushQueueSize                    int
 	FlushBackpressureQueueThreshold   int

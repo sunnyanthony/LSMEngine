@@ -34,6 +34,8 @@ type ClusterStatus = engine.ClusterStatus
 type CompatibilityStatus = engine.CompatibilityStatus
 type CDCEvent = engine.CDCEvent
 type CDCReadResult = engine.CDCReadResult
+type CDCShardStatus = engine.CDCShardStatus
+type CDCStatus = engine.CDCStatus
 type ControlWriteOptions = engine.ControlWriteOptions
 type Iterator = engine.Iterator
 type Snapshot = engine.Snapshot
@@ -57,6 +59,10 @@ const (
 	MemtableKindMap             = engine.MemtableKindMap
 	MemtableKindSkipList        = engine.MemtableKindSkipList
 	MemtableKindShardedSkipList = engine.MemtableKindShardedSkipList
+)
+
+const (
+	CDCSourceMemory = engine.CDCSourceMemory
 )
 
 const (

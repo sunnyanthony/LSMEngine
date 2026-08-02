@@ -37,6 +37,9 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.WALRetainArchivedSegments < 0 {
 		return opts, fmt.Errorf("wal retain archived segments must be non-negative")
 	}
+	if opts.CDCMaxEventsPerShard < 0 {
+		return opts, fmt.Errorf("cdc max events per shard must be non-negative")
+	}
 	if opts.FlushQueueSize == 0 {
 		opts.FlushQueueSize = 4
 	}
