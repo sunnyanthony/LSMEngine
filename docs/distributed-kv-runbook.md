@@ -87,6 +87,9 @@ write leader to have applied at least that index. Custom providers need not map
 data sequences to commit-log indexes; do not use their `seq` as this gate unless
 the provider guarantees that mapping. This gate is not a linearizable read barrier.
 
+Use `--require-compatible` to require counted ready nodes to report identical,
+known LSM-owned compatibility versions. Equality does not prove rolling-upgrade safety.
+
 The useful fields are:
 
 - `commit_log_runtime.mode`: should be `raft_transport_foundation` for the
@@ -631,14 +634,15 @@ Do not claim production-grade distributed operation yet. The remaining work is:
 
 - service discovery and automatic peer URL reconciliation;
 - process supervision and automatic replacement triggers;
-- broader mixed-version compatibility tests beyond the current control-state
-  future-version fail-fast guard;
+- broader mixed-version compatibility tests beyond the current compatibility
+  status/wait gate and control-state future-version fail-fast guard;
 - richer policy for raft/shard membership lifecycle around node replacement;
 - stronger chaos and upgrade coverage.
 
-The external dependency rule also applies here: third-party libraries must stay
-behind an LSM-owned adapter layer, the same way IO integration sits behind
-`internal/lsm/iofs`. etcd-raft remains behind the builtin commit-log provider.
-Operator-facing APIs and docs should use LSM-owned concepts such as committed
-entries, runtime status, raft peer message envelopes, and shard replica metadata
-rather than etcd raft protocol types.
+The external dependency rule also applies here: third-party libraries must sit
+behind LSM-owned adapter layers before they influence public, server, or
+operator-facing APIs. `internal/lsm/iofs` is the IO example; etcd-raft follows
+the same rule through the builtin commit-log provider and peer transport
+envelopes. Operator-facing APIs and docs should use LSM-owned concepts such as
+committed entries, runtime status, compatibility versions, raft peer message
+envelopes, and shard replica metadata rather than etcd raft protocol types.

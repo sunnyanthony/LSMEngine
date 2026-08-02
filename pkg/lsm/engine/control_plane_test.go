@@ -61,6 +61,18 @@ func TestControlPlaneDefaults(t *testing.T) {
 	if status.CommitLogRuntime.Term == 0 {
 		t.Fatalf("expected local provider term > 0")
 	}
+	if status.Compatibility.ClusterStatusVersion != clusterStatusCompatibilityVersion {
+		t.Fatalf("expected cluster status compatibility version, got %+v", status.Compatibility)
+	}
+	if status.Compatibility.ControlStateVersion != currentControlStateVersion {
+		t.Fatalf("expected control state compatibility version, got %+v", status.Compatibility)
+	}
+	if status.Compatibility.StateSnapshotVersion != lsmStateSnapshotVersion {
+		t.Fatalf("expected state snapshot compatibility version, got %+v", status.Compatibility)
+	}
+	if status.Compatibility.RaftPeerMessageVersion != raftPeerMessageCompatibilityVersion {
+		t.Fatalf("expected raft peer message compatibility version, got %+v", status.Compatibility)
+	}
 }
 
 func TestControlPlaneRejectsUnknownStorageMode(t *testing.T) {
