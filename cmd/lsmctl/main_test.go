@@ -2762,7 +2762,142 @@ func TestApplyPlannedReplacementExecutesSelectedCandidate(t *testing.T) {
 	if result.Result.OldNode != "node-a" || result.Result.NewNode != "node-d" {
 		t.Fatalf("unexpected result: %+v", result.Result)
 	}
+	if result.Attempts != 1 || result.RetryAttempts != 1 {
+		t.Fatalf("unexpected retry evidence: %+v", result)
+	}
 	if raftAddCalls.Load() != 1 || addReplicaCalls.Load() != 1 || drainCalls.Load() != 1 || removeReplicaCalls.Load() != 1 || raftRemoveCalls.Load() != 1 {
+		t.Fatalf("unexpected call counts raftAdd=%d add=%d drain=%d remove=%d raftRemove=%d",
+			raftAddCalls.Load(), addReplicaCalls.Load(), drainCalls.Load(), removeReplicaCalls.Load(), raftRemoveCalls.Load())
+	}
+}
+
+func TestApplyPlannedReplacementRetriesTransientApplyFailure(t *testing.T) {
+	var raftAddCalls atomic.Int32
+	var raftRemoveCalls atomic.Int32
+	var addReplicaCalls atomic.Int32
+	var drainCalls atomic.Int32
+	var removeReplicaCalls atomic.Int32
+
+	nodeA := httptest.NewServer(http.NotFoundHandler())
+	nodeAURL := nodeA.URL
+	nodeA.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-d",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeD.Close()
+
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID: "node-b",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Leader:         true,
+					WriteAvailable: true,
+					Health:         "ready",
+					LeaderKnown:    true,
+				},
+			})
+		case "/cluster/shards":
+			replicas := []lsm.ReplicaStatus{
+				{NodeID: "node-a", Role: "follower", Healthy: false},
+				{NodeID: "node-b", Role: "leader", Healthy: true},
+				{NodeID: "node-c", Role: "follower", Healthy: true},
+			}
+			if addReplicaCalls.Load() > 0 {
+				replicas = append(replicas, lsm.ReplicaStatus{NodeID: "node-d", Role: "follower", Healthy: true})
+			}
+			if removeReplicaCalls.Load() > 0 {
+				next := replicas[:0]
+				for _, replica := range replicas {
+					if replica.NodeID != "node-a" {
+						next = append(next, replica)
+					}
+				}
+				replicas = next
+			}
+			_ = json.NewEncoder(w).Encode([]lsm.ShardStatus{{
+				ID:       "users",
+				Leader:   "node-b",
+				Replicas: replicas,
+			}})
+		case "/cluster/nodes/node-d/raft-add":
+			if raftAddCalls.Add(1) == 1 {
+				http.Error(w, "temporary leader handoff", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/add-replica":
+			addReplicaCalls.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode add replica: %v", err)
+			}
+			if req.OperationID != "repair-node-a-node-d-add-users-node-d" {
+				t.Fatalf("unexpected add operation id: %+v", req)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/drain":
+			drainCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/shards/users/remove-replica":
+			removeReplicaCalls.Add(1)
+			var req targetRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode remove replica: %v", err)
+			}
+			if req.OperationID != "repair-node-a-node-d-remove-users-node-a" {
+				t.Fatalf("unexpected remove operation id: %+v", req)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/cluster/nodes/node-a/raft-remove":
+			raftRemoveCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeB.Close()
+
+	nodeC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cluster/status":
+			_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+				NodeID:           "node-c",
+				CommitLogRuntime: lsm.CommitLogRuntimeStatus{Health: "follower", LeaderKnown: true},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nodeC.Close()
+
+	result, err := applyPlannedReplacement(map[string]string{
+		"node-a": nodeAURL,
+		"node-b": nodeB.URL,
+		"node-c": nodeC.URL,
+		"node-d": nodeD.URL,
+	}, replaceNodeOptions{
+		NewNode:            "node-d",
+		OperationPrefix:    "repair-node-a-node-d",
+		ApplyRetryAttempts: 2,
+	})
+	if err != nil {
+		t.Fatalf("apply replacement with retry: %v", err)
+	}
+	if result.Attempts != 2 || result.RetryAttempts != 2 {
+		t.Fatalf("unexpected retry evidence: %+v", result)
+	}
+	if raftAddCalls.Load() != 2 || addReplicaCalls.Load() != 1 || drainCalls.Load() != 1 || removeReplicaCalls.Load() != 1 || raftRemoveCalls.Load() != 1 {
 		t.Fatalf("unexpected call counts raftAdd=%d add=%d drain=%d remove=%d raftRemove=%d",
 			raftAddCalls.Load(), addReplicaCalls.Load(), drainCalls.Load(), removeReplicaCalls.Load(), raftRemoveCalls.Load())
 	}
