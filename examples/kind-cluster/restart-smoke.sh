@@ -117,7 +117,8 @@ wait_cluster_applied() {
   kubectl_lsm lsm-cluster-0 wait-cluster \
     $(node_endpoint_args) \
     --timeout 90s \
-    --min-applied-index "$seq" >/dev/null
+    --min-applied-index "$seq" \
+    --require-compatible >/dev/null
 }
 
 require_cmd docker

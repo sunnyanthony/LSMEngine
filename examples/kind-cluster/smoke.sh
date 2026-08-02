@@ -83,9 +83,10 @@ seq_from_output() {
 wait_cluster_applied() {
   local seq="$1"
   local output
-  output="$(kubectl_lsm wait-cluster $(node_endpoint_args) --timeout 90s --min-applied-index "$seq")"
+  output="$(kubectl_lsm wait-cluster $(node_endpoint_args) --timeout 90s --min-applied-index "$seq" --require-compatible)"
   require_contains "$output" "ready=true"
   require_contains "$output" "ready_nodes=3"
+  require_contains "$output" "compatible=true"
 }
 
 require_cmd docker

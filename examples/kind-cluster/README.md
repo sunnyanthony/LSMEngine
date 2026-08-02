@@ -37,9 +37,9 @@ with `--read-mode leader` and the gateway read-ready apply-lag gate before
 client traffic. `LSM_GATEWAY_READ_READY_MIN` and
 `LSM_GATEWAY_READ_READY_MAX_LAG` override the default smoke readiness bound. The
 script then waits for all pods to apply the committed write/delete sequence with
-`wait-cluster --min-applied-index` before reading followers, so it checks catch-up
-instead of only endpoint reachability. The manifests use short in-cluster DNS
-names such as
+`wait-cluster --min-applied-index --require-compatible` before reading
+followers, so it checks catch-up and LSM-owned compatibility versions instead
+of only endpoint reachability. The manifests use short in-cluster DNS names such as
 `lsm-cluster-0.lsm-cluster` instead of assuming a specific cluster DNS suffix.
 
 ## Persistent restart smoke

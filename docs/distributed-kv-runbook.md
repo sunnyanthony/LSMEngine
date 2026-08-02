@@ -348,6 +348,10 @@ Use the Compose rolling restart smoke for a repeatable local check:
 examples/docker-compose-cluster/rolling-restart.sh
 ```
 
+The Compose and kind smokes run their cluster waits with
+`--require-compatible`, so they fail if ready nodes report different
+LSM-owned compatibility versions during restart or catch-up checks.
+
 For manual Compose validation:
 
 1. Start the cluster with `LSM_COMPOSE_KEEP=1`.
