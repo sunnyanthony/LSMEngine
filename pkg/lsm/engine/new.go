@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"time"
 
 	"lsmengine/internal/lsm/bootstrap"
 	"lsmengine/internal/lsm/cleanup"
@@ -113,6 +112,7 @@ func New(opts Options) (*LSM, error) {
 		flushBackpressureQueueThreshold:   opts.FlushBackpressureQueueThreshold,
 		compactionL0Threshold:             opts.CompactionL0Threshold,
 		compactionCheckInterval:           opts.CompactionCheckInterval,
+		compactionAdaptiveCheck:           opts.CompactionAdaptiveCheck,
 		compactionBackpressureL0Threshold: opts.CompactionBackpressureL0Threshold,
 		closeTimeout:                      opts.CloseTimeout,
 		ctx:                               ctx,
@@ -233,16 +233,7 @@ func New(opts Options) (*LSM, error) {
 			lsm.bg.Add(1)
 			go func() {
 				defer lsm.bg.Done()
-				ticker := time.NewTicker(opts.CompactionCheckInterval)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-						lsm.compactionSvc.Trigger()
-					}
-				}
+				lsm.runCompactionCheckLoop(ctx)
 			}()
 		}
 		lsm.compactionSvc.Trigger()

@@ -66,6 +66,7 @@ flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
 compaction_check_interval: "30s"
+compaction_adaptive_check: true
 compaction_backpressure_l0_threshold: 12
 io_backend: "async"
 io_backend_strict: true
@@ -189,6 +190,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.CompactionCheckInterval != 30*time.Second {
 		t.Fatalf("expected compaction check interval, got %v", cfg.CompactionCheckInterval)
+	}
+	if !cfg.CompactionAdaptiveCheck {
+		t.Fatalf("expected adaptive compaction check enabled")
 	}
 	if cfg.CompactionBackpressureL0Threshold != 12 {
 		t.Fatalf("expected compaction backpressure l0 threshold, got %d", cfg.CompactionBackpressureL0Threshold)
