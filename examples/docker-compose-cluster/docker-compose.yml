@@ -67,6 +67,12 @@ services:
       - ${LSM_GATEWAY_READ_BALANCE_POLICY:-round_robin}
       - --max-read-apply-lag
       - ${LSM_GATEWAY_MAX_READ_APPLY_LAG:--1}
+      - --ready-min-reachable
+      - ${LSM_GATEWAY_READY_MIN_REACHABLE:-0}
+      - --ready-max-read-apply-lag
+      - ${LSM_GATEWAY_READY_MAX_READ_APPLY_LAG:--1}
+      - --ready-min-read-ready
+      - ${LSM_GATEWAY_READY_MIN_READ_READY:-0}
       - --endpoint-file
       - /etc/lsm/peer-urls.yaml
     ports:
