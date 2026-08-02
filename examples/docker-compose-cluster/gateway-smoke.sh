@@ -8,6 +8,9 @@ KEEP="${LSM_COMPOSE_KEEP:-0}"
 LSMCTL_BIN="${LSMCTL_BIN:-}"
 GATEWAY_ADDR="${LSM_GATEWAY_ADDR:-127.0.0.1:8090}"
 GATEWAY_URL="http://$GATEWAY_ADDR"
+GATEWAY_READ_MODE="${LSM_GATEWAY_READ_MODE:-leader}"
+GATEWAY_READ_BALANCE_POLICY="${LSM_GATEWAY_READ_BALANCE_POLICY:-round_robin}"
+GATEWAY_MAX_READ_APPLY_LAG="${LSM_GATEWAY_MAX_READ_APPLY_LAG:--1}"
 GATEWAY_READ_READY_MIN="${LSM_GATEWAY_READ_READY_MIN:-1}"
 GATEWAY_READ_READY_MAX_LAG="${LSM_GATEWAY_READ_READY_MAX_LAG:-2}"
 
@@ -88,7 +91,7 @@ wait_for_gateway_status() {
     --addr "$GATEWAY_URL" \
     --timeout 60s \
     --min-reachable 3 \
-    --read-mode leader \
+    --read-mode "$GATEWAY_READ_MODE" \
     --max-read-apply-lag "$GATEWAY_READ_READY_MAX_LAG" \
     --min-read-ready "$GATEWAY_READ_READY_MIN" >/dev/null; then
     echo "timed out waiting for gateway-status at $GATEWAY_URL" >&2
@@ -154,6 +157,11 @@ wait_for_health "$GATEWAY_URL"
 wait_for_ready "$GATEWAY_URL"
 wait_for_gateway_container_health
 wait_for_gateway_status
+
+gateway_status_output="$(lsmctl gateway-status --addr "$GATEWAY_URL")"
+require_contains "$gateway_status_output" "read_mode=$GATEWAY_READ_MODE"
+require_contains "$gateway_status_output" "read_balance_policy=$GATEWAY_READ_BALANCE_POLICY"
+require_contains "$gateway_status_output" "max_read_apply_lag=$GATEWAY_MAX_READ_APPLY_LAG"
 
 put_output="$(lsmctl put --addr "$GATEWAY_URL" --key gateway-smoke --value ok)"
 require_contains "$put_output" "state=committed"
