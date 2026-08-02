@@ -620,6 +620,36 @@ func TestEvaluateClusterWaitRequiresKnownCompatibility(t *testing.T) {
 	}
 }
 
+func TestWriteClusterWaitReportsCompatibilityGate(t *testing.T) {
+	result := clusterWaitResult{
+		Ready:              false,
+		ReadyNodes:         2,
+		RequiredReadyNodes: 2,
+		RequireCompatible:  true,
+		Compatible:         false,
+		IncompatibleNodes:  []string{"node-b"},
+	}
+	var buf bytes.Buffer
+	writeClusterWait(&buf, result)
+	out := buf.String()
+	for _, want := range []string{
+		"require_compatible=true",
+		"compatible=false",
+		"incompatible_nodes=node-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, out)
+		}
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if !strings.Contains(string(payload), `"compatible":false`) {
+		t.Fatalf("expected JSON to include compatible=false, got %s", payload)
+	}
+}
+
 func TestReadGatewayStatusRemote(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/gateway/status" {

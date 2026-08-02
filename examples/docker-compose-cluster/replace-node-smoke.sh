@@ -94,6 +94,7 @@ wait_cluster_ready() {
   lsmctl wait-cluster \
     $(cluster_config_args) \
     --min-ready "$min_ready" \
+    --require-compatible \
     --timeout 60s >/dev/null
 }
 
@@ -104,6 +105,7 @@ wait_cluster_applied() {
     $(cluster_config_args) \
     --min-ready "$min_ready" \
     --min-applied-index "$seq" \
+    --require-compatible \
     --timeout 60s >/dev/null
 }
 

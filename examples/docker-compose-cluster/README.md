@@ -34,7 +34,8 @@ examples/docker-compose-cluster/smoke.sh
 The script builds the server image, waits for all three health endpoints, writes
 and deletes a key through cluster-aware `lsmctl`, waits for all nodes to apply
 the committed write/delete sequence using `wait-cluster` with
-`--min-applied-index`, and tears the cluster down unless `LSM_COMPOSE_KEEP=1`
+`--min-applied-index`, requires matching compatibility versions with
+`--require-compatible`, and tears the cluster down unless `LSM_COMPOSE_KEEP=1`
 is set.
 
 Useful environment overrides:
@@ -94,12 +95,13 @@ examples/docker-compose-cluster/rolling-restart.sh
 ```
 
 This starts the same static three-node cluster, drains one node at a time with
-`lsmctl drain-node`, stops it, uses `lsmctl wait-cluster --min-ready 2` to
-verify the remaining quorum, uses `lsmctl put --cluster` to commit a write,
+`lsmctl drain-node`, stops it, uses
+`lsmctl wait-cluster --min-ready 2 --require-compatible` to verify the
+remaining compatible quorum, uses `lsmctl put --cluster` to commit a write,
 restarts the stopped node with its existing volume, resumes it with
-`lsmctl resume-node`, waits for all three nodes to apply the write's committed
-sequence, and verifies all three nodes can read the write before the next node
-is restarted.
+`lsmctl resume-node`, waits for all three compatible nodes to apply the write's
+committed sequence, and verifies all three nodes can read the write before the
+next node is restarted.
 
 ## Replacement smoke
 
@@ -121,13 +123,13 @@ examples/docker-compose-cluster/failed-replacement-smoke.sh
 ```
 
 This starts node-a/node-b/node-c, writes committed values, stops node-a before
-replacement, uses `lsmctl wait-cluster --min-ready 2` to verify the surviving
-quorum, starts node-d with `raft.join: true`, runs `lsmctl replacement-plan`,
-then runs `lsmctl replacement-apply`, which includes the same replacement
-catch-up gate before shard membership changes. It waits for the
-node-b/node-c/node-d quorum to apply the committed sequences from before and
-after node-a stopped, verifies node-d can read those values, then verifies the
-new cluster can accept and read a committed write.
+replacement, uses `lsmctl wait-cluster --min-ready 2 --require-compatible` to
+verify the surviving compatible quorum, starts node-d with `raft.join: true`,
+runs `lsmctl replacement-plan`, then runs `lsmctl replacement-apply`, which
+includes the same replacement catch-up gate before shard membership changes. It
+waits for the node-b/node-c/node-d compatible quorum to apply the committed
+sequences from before and after node-a stopped, verifies node-d can read those
+values, then verifies the new cluster can accept and read a committed write.
 
 ## Manual commands
 
@@ -136,7 +138,8 @@ docker compose -f examples/docker-compose-cluster/docker-compose.yml up -d --bui
 go run ./cmd/lsmctl wait-cluster \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
-  --node-endpoint node-c=http://127.0.0.1:8082
+  --node-endpoint node-c=http://127.0.0.1:8082 \
+  --require-compatible
 go run ./cmd/lsmctl put --cluster \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
