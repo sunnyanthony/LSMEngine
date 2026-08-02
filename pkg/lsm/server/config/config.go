@@ -45,6 +45,7 @@ type Config struct {
 	WALMaxSegmentBytes                uint64          `yaml:"wal_max_segment_bytes"`
 	WALRetainArchivedSegments         int             `yaml:"wal_retain_archived_segments"`
 	WALReadyMaxCheckpointLag          uint64          `yaml:"wal_ready_max_checkpoint_lag"`
+	WALBackpressureMaxCheckpointLag   uint64          `yaml:"wal_backpressure_max_checkpoint_lag"`
 	FlushQueueSize                    int             `yaml:"flush_queue_size"`
 	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
 	CompactionL0Threshold             int             `yaml:"compaction_l0_threshold"`

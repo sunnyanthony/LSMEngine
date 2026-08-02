@@ -15,9 +15,10 @@ import (
 
 func TestStatsSnapshot(t *testing.T) {
 	store, err := New(Options{
-		DataDir:                  t.TempDir(),
-		CompactionL0Threshold:    1,
-		WALReadyMaxCheckpointLag: 128,
+		DataDir:                         t.TempDir(),
+		CompactionL0Threshold:           1,
+		WALReadyMaxCheckpointLag:        128,
+		WALBackpressureMaxCheckpointLag: 96,
 	})
 	if err != nil {
 		t.Fatalf("new: %v", err)
@@ -62,6 +63,12 @@ func TestStatsSnapshot(t *testing.T) {
 	}
 	if stats.WAL.ReadyMaxCheckpointLag != 128 {
 		t.Fatalf("expected wal ready checkpoint lag threshold, got %+v", stats.WAL)
+	}
+	if stats.WAL.BackpressureMaxCheckpointLag != 96 {
+		t.Fatalf("expected wal backpressure checkpoint lag threshold, got %+v", stats.WAL)
+	}
+	if stats.WriteBackpressure.WALCheckpointLagLimit != 96 {
+		t.Fatalf("expected write backpressure wal checkpoint lag threshold, got %+v", stats.WriteBackpressure)
 	}
 	if stats.WAL.Closed {
 		t.Fatalf("expected open wal stats, got %+v", stats.WAL)
@@ -520,6 +527,79 @@ func TestWriteBackpressureDoesNotBlockCommittedApply(t *testing.T) {
 	}
 	if _, ok := store.Get([]byte("c")); !ok {
 		t.Fatalf("expected committed entry to apply despite local write backpressure")
+	}
+	stats := store.Stats()
+	if stats.WriteBackpressure.Rejects != 0 {
+		t.Fatalf("expected committed apply not to count as rejected write, got %+v", stats.WriteBackpressure)
+	}
+}
+
+func TestWriteBackpressureRejectsWALCheckpointLag(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                         t.TempDir(),
+		WALBackpressureMaxCheckpointLag: 5,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	atomic.StoreUint64(&store.seq, 11)
+	atomic.StoreUint64(&store.lastFlush, 5)
+
+	err = store.Put([]byte("lagged"), []byte("write"))
+	if !errors.Is(err, errs.ErrBackpressure) {
+		t.Fatalf("expected backpressure, got %v", err)
+	}
+	stats := store.Stats()
+	if !stats.WriteBackpressure.Active || stats.WriteBackpressure.Reason != writeBackpressureReasonWAL {
+		t.Fatalf("expected wal checkpoint lag write backpressure, got %+v", stats.WriteBackpressure)
+	}
+	if stats.WriteBackpressure.WALCheckpointLag != 6 || stats.WriteBackpressure.WALCheckpointLagLimit != 5 {
+		t.Fatalf("unexpected wal checkpoint lag backpressure stats: %+v", stats.WriteBackpressure)
+	}
+	if stats.WriteBackpressure.Rejects != 1 {
+		t.Fatalf("expected one rejected write, got %+v", stats.WriteBackpressure)
+	}
+	if stats.Seq != 11 {
+		t.Fatalf("expected rejected write not to commit, got seq=%d", stats.Seq)
+	}
+}
+
+func TestWALCheckpointLagBackpressureDoesNotBlockCommittedApply(t *testing.T) {
+	store, err := New(Options{
+		DataDir:                         t.TempDir(),
+		WALBackpressureMaxCheckpointLag: 5,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	atomic.StoreUint64(&store.seq, 11)
+	atomic.StoreUint64(&store.lastFlush, 5)
+
+	seq, err := store.writer.applyCommittedData(dataCommittedEntry{
+		Commit:   CommitLogCommit{Index: 12, Term: 1},
+		Seq:      12,
+		Mutation: dataMutation{Kind: "put", Key: []byte("committed"), Value: []byte("apply")},
+	})
+	if err != nil {
+		t.Fatalf("apply committed data: %v", err)
+	}
+	if seq != 12 {
+		t.Fatalf("expected seq 12, got %d", seq)
+	}
+	if _, ok := store.Get([]byte("committed")); !ok {
+		t.Fatalf("expected committed entry to apply despite wal checkpoint lag backpressure")
 	}
 	stats := store.Stats()
 	if stats.WriteBackpressure.Rejects != 0 {

@@ -118,7 +118,9 @@ The useful fields are:
   lag means archived WAL may not yet be safe to prune. Configure
   `wal_ready_max_checkpoint_lag` to make `/readyz` report
   `reason=wal_checkpoint_lag` when this local retention debt exceeds the
-  supervisor threshold.
+  supervisor threshold. Configure `wal_backpressure_max_checkpoint_lag` to
+  reject new local writes before commit-log proposal when the same debt exceeds
+  the write-admission threshold. That gate does not reject committed raft apply.
   `wal_max_segment_bytes` rotates the active WAL segment after flushed bytes
   reach the configured threshold, but archived segment retention remains a
   separate policy decision.

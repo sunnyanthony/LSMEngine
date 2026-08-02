@@ -48,6 +48,7 @@ type Options struct {
 	WALMaxSegmentBytes                uint64
 	WALRetainArchivedSegments         int
 	WALReadyMaxCheckpointLag          uint64
+	WALBackpressureMaxCheckpointLag   uint64
 	WALMaxRecord                      uint64
 	WALBlockSize                      uint32
 	WALAsync                          bool
@@ -163,6 +164,7 @@ type LSM struct {
 	mtLimit                           int
 	walRetainArchivedSegments         int
 	walReadyMaxCheckpointLag          uint64
+	walBackpressureMaxCheckpointLag   uint64
 	autoRepair                        bool
 	ctx                               context.Context
 	cancel                            context.CancelFunc

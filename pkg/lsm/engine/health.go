@@ -45,28 +45,31 @@ type WriteBackpressureStats struct {
 	FlushQueueThreshold    int
 	CompactionL0Threshold  int
 	CompactionL0TableCount int
+	WALCheckpointLag       uint64
+	WALCheckpointLagLimit  uint64
 }
 
 // WALStats describes WAL segment pressure and write-path configuration state.
 type WALStats struct {
-	SegmentID              uint64
-	SegmentCount           int
-	ArchivedSegmentCount   int
-	ActiveSegmentBytes     uint64
-	ArchivedSegmentBytes   uint64
-	TotalBytes             uint64
-	CheckpointSeq          uint64
-	CheckpointLag          uint64
-	ReadyMaxCheckpointLag  uint64
-	MaxSegmentBytes        uint64
-	RetainArchivedSegments int
-	BlockSize              uint32
-	PendingBlockBytes      int
-	PendingBlockRecords    int
-	Sync                   bool
-	Async                  bool
-	Closed                 bool
-	SegmentScanError       string
+	SegmentID                    uint64
+	SegmentCount                 int
+	ArchivedSegmentCount         int
+	ActiveSegmentBytes           uint64
+	ArchivedSegmentBytes         uint64
+	TotalBytes                   uint64
+	CheckpointSeq                uint64
+	CheckpointLag                uint64
+	ReadyMaxCheckpointLag        uint64
+	BackpressureMaxCheckpointLag uint64
+	MaxSegmentBytes              uint64
+	RetainArchivedSegments       int
+	BlockSize                    uint32
+	PendingBlockBytes            int
+	PendingBlockRecords          int
+	Sync                         bool
+	Async                        bool
+	Closed                       bool
+	SegmentScanError             string
 }
 
 // Stats describes a point-in-time view of engine activity.
@@ -259,39 +262,45 @@ func (s *Stats) applyWALStats(l *LSM) {
 	}
 	stats := l.wal.Stats()
 	s.WAL = WALStats{
-		SegmentID:              stats.SegmentID,
-		SegmentCount:           stats.SegmentCount,
-		ArchivedSegmentCount:   stats.ArchivedSegmentCount,
-		ActiveSegmentBytes:     stats.ActiveSegmentBytes,
-		ArchivedSegmentBytes:   stats.ArchivedSegmentBytes,
-		TotalBytes:             stats.TotalBytes,
-		CheckpointSeq:          atomic.LoadUint64(&l.lastFlush),
-		ReadyMaxCheckpointLag:  l.walReadyMaxCheckpointLag,
-		MaxSegmentBytes:        stats.MaxSegmentBytes,
-		RetainArchivedSegments: l.walRetainArchivedSegments,
-		BlockSize:              stats.BlockSize,
-		PendingBlockBytes:      stats.PendingBlockBytes,
-		PendingBlockRecords:    stats.PendingBlockRecords,
-		Sync:                   stats.Sync,
-		Async:                  stats.Async,
-		Closed:                 stats.Closed,
-		SegmentScanError:       stats.SegmentScanError,
+		SegmentID:                    stats.SegmentID,
+		SegmentCount:                 stats.SegmentCount,
+		ArchivedSegmentCount:         stats.ArchivedSegmentCount,
+		ActiveSegmentBytes:           stats.ActiveSegmentBytes,
+		ArchivedSegmentBytes:         stats.ArchivedSegmentBytes,
+		TotalBytes:                   stats.TotalBytes,
+		CheckpointSeq:                atomic.LoadUint64(&l.lastFlush),
+		CheckpointLag:                l.walCheckpointLag(),
+		ReadyMaxCheckpointLag:        l.walReadyMaxCheckpointLag,
+		BackpressureMaxCheckpointLag: l.walBackpressureMaxCheckpointLag,
+		MaxSegmentBytes:              stats.MaxSegmentBytes,
+		RetainArchivedSegments:       l.walRetainArchivedSegments,
+		BlockSize:                    stats.BlockSize,
+		PendingBlockBytes:            stats.PendingBlockBytes,
+		PendingBlockRecords:          stats.PendingBlockRecords,
+		Sync:                         stats.Sync,
+		Async:                        stats.Async,
+		Closed:                       stats.Closed,
+		SegmentScanError:             stats.SegmentScanError,
 	}
-	if s.Seq > s.WAL.CheckpointSeq {
-		s.WAL.CheckpointLag = s.Seq - s.WAL.CheckpointSeq
+}
+
+func (l *LSM) walCheckpointLag() uint64 {
+	if l == nil {
+		return 0
 	}
+	seq := atomic.LoadUint64(&l.seq)
+	checkpoint := atomic.LoadUint64(&l.lastFlush)
+	if seq <= checkpoint {
+		return 0
+	}
+	return seq - checkpoint
 }
 
 func (l *LSM) walCheckpointLagOverReadyLimit() bool {
 	if l == nil || l.walReadyMaxCheckpointLag == 0 {
 		return false
 	}
-	seq := atomic.LoadUint64(&l.seq)
-	checkpoint := atomic.LoadUint64(&l.lastFlush)
-	if seq <= checkpoint {
-		return false
-	}
-	return seq-checkpoint > l.walReadyMaxCheckpointLag
+	return l.walCheckpointLag() > l.walReadyMaxCheckpointLag
 }
 
 func (s *Stats) applyCompactionRuntimeStats(l *LSM) {
@@ -322,5 +331,7 @@ func (s *Stats) applyWriteBackpressureStats(l *LSM) {
 		FlushQueueThreshold:    stats.queueLimit,
 		CompactionL0Threshold:  stats.l0Limit,
 		CompactionL0TableCount: stats.l0TableCount,
+		WALCheckpointLag:       stats.walLag,
+		WALCheckpointLagLimit:  stats.walLagLimit,
 	}
 }
