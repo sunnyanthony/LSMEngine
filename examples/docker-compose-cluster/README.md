@@ -109,9 +109,10 @@ examples/docker-compose-cluster/replace-node-smoke.sh
 
 This starts node-a/node-b/node-c, writes a committed value, starts node-d with
 `raft.join: true`, preflights `lsmctl replace-node --dry-run`, runs
-`lsmctl replace-node --old-node node-a --new-node node-d`, verifies node-d can
-read the committed value, stops node-a, waits for the node-b/node-c/node-d
-quorum, then verifies it can accept and read a new committed write.
+`lsmctl replace-node --old-node node-a --new-node node-d`, waits for the
+post-`raft-add` replacement catch-up gate, verifies node-d can read the
+committed value, stops node-a, waits for the node-b/node-c/node-d quorum, then
+verifies it can accept and read a new committed write.
 
 ## Failed replacement smoke
 
@@ -122,10 +123,11 @@ examples/docker-compose-cluster/failed-replacement-smoke.sh
 This starts node-a/node-b/node-c, writes committed values, stops node-a before
 replacement, uses `lsmctl wait-cluster --min-ready 2` to verify the surviving
 quorum, starts node-d with `raft.join: true`, runs `lsmctl replacement-plan`,
-then runs `lsmctl replacement-apply`. It waits for the node-b/node-c/node-d
-quorum to apply the committed sequences from before and after node-a stopped,
-verifies node-d can read those values, then verifies the new cluster can accept
-and read a committed write.
+then runs `lsmctl replacement-apply`, which includes the same replacement
+catch-up gate before shard membership changes. It waits for the
+node-b/node-c/node-d quorum to apply the committed sequences from before and
+after node-a stopped, verifies node-d can read those values, then verifies the
+new cluster can accept and read a committed write.
 
 ## Manual commands
 

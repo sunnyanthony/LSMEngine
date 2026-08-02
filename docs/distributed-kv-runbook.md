@@ -472,11 +472,15 @@ go run ./cmd/lsmctl replacement-apply \
 ```
 
 `replacement-apply` runs the same planning step and then executes the replacement
-sequence once. It still rejects zero or multiple unavailable old-node candidates
-unless `--old-node` is provided. It is intentionally not a background repair
-loop; an external supervisor remains responsible for starting the replacement
-process, writing endpoint discovery data, choosing retry policy, and deciding
-when to invoke the command.
+sequence once. After `raft-add`, it waits for the replacement node to report
+healthy commit-log status, `commit_log_runtime.apply_lag <=
+--max-catchup-apply-lag` (default `0`), and `applied_index` at least as high as
+the current healthy existing replicas observed during the wait. It still rejects
+zero or multiple unavailable old-node candidates unless `--old-node` is
+provided. It is intentionally not a background repair loop; an external
+supervisor remains responsible for starting the replacement process, writing
+endpoint discovery data, choosing retry policy, and deciding when to invoke the
+command.
 
 Manual replacement workflow:
 
@@ -503,12 +507,15 @@ go run ./cmd/lsmctl replace-node \
 The dry run checks endpoint wiring, discovers the current commit-log write
 leader, verifies the replacement endpoint reports the expected node id, and
 prints the shard replacement plan without submitting mutations. The real command
-uses the same preflight before it adds `--new-node` as a raft voter, adds it as a
-shard replica for those shards, drains the old node, removes the old shard
-replicas, and removes the old raft voter. Use repeated `--shard` flags to
-constrain the replacement to specific shards. Use `--allow-unavailable-old-node`
-only for failed-node replacement; ordinary maintenance drains should keep waiting
-for the target node to report `draining=true`.
+uses the same preflight before it adds `--new-node` as a raft voter, waits for
+the replacement node catch-up gate, adds it as a shard replica for those shards,
+drains the old node, removes the old shard replicas, and removes the old raft
+voter. Use repeated `--shard` flags to constrain the replacement to specific
+shards. `--catchup-timeout` controls the post-`raft-add` wait and `0` disables
+it for explicit emergency operation; `--max-catchup-apply-lag` controls the
+accepted replacement-node lag. Use `--allow-unavailable-old-node` only for
+failed-node replacement; ordinary maintenance drains should keep waiting for the
+target node to report `draining=true`.
 
 Use the Compose replacement smoke for a repeatable local check:
 

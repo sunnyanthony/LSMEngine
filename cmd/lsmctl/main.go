@@ -871,6 +871,7 @@ type replaceNodeResult struct {
 	DryRun    bool                       `json:"dry_run,omitempty"`
 	Shards    []string                   `json:"shards"`
 	Preflight replaceNodePreflightResult `json:"preflight"`
+	Catchup   replacementCatchupResult   `json:"catchup,omitempty"`
 	Steps     []membershipActionResult   `json:"steps"`
 	Drain     drainNodeResult            `json:"drain"`
 	Statuses  clusterStatusResult        `json:"statuses"`
@@ -895,6 +896,17 @@ type replacementShardPolicyResult struct {
 	HealthyRemaining        int      `json:"healthy_remaining"`
 	HealthyRemainingNodes   []string `json:"healthy_remaining_nodes"`
 	UnavailableReplicaNodes []string `json:"unavailable_replica_nodes,omitempty"`
+}
+
+type replacementCatchupResult struct {
+	Enabled              bool   `json:"enabled"`
+	Node                 string `json:"node,omitempty"`
+	Endpoint             string `json:"endpoint,omitempty"`
+	Health               string `json:"health,omitempty"`
+	AppliedIndex         uint64 `json:"applied_index,omitempty"`
+	RequiredAppliedIndex uint64 `json:"required_applied_index,omitempty"`
+	ApplyLag             uint64 `json:"apply_lag,omitempty"`
+	MaxApplyLag          uint64 `json:"max_apply_lag,omitempty"`
 }
 
 type replacementPlanResult struct {
@@ -925,7 +937,14 @@ type replaceNodeOptions struct {
 	OperationPrefix         string
 	DryRun                  bool
 	AllowUnavailableOldNode bool
+	CatchupTimeout          time.Duration
+	CatchupMaxApplyLag      *uint64
 	CommandEndpoints        replacementCommandEndpointSource
+}
+
+type replacementCatchupOptions struct {
+	Timeout     time.Duration
+	MaxApplyLag *uint64
 }
 
 type replacementCommandEndpointSource struct {
@@ -1514,6 +1533,8 @@ func replaceNodeCmd(args []string) {
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
 	dryRun := fs.Bool("dry-run", false, "preflight and print the replacement plan without submitting mutations")
 	allowUnavailableOldNode := fs.Bool("allow-unavailable-old-node", false, "complete replacement drain when old node status is unreachable after shard leadership has moved")
+	catchupTimeout := fs.Duration("catchup-timeout", 60*time.Second, "maximum time to wait for replacement node catch-up after raft-add; 0 disables")
+	maxCatchupApplyLag := fs.Int64("max-catchup-apply-lag", 0, "maximum replacement node apply lag after raft-add")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing --old-node")
 	var nodeEndpoints nodeEndpointFlags
@@ -1539,6 +1560,13 @@ func replaceNodeCmd(args []string) {
 	if len(endpoints) == 0 {
 		log.Fatal("replace-node requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
+	catchupMaxApplyLag, err := replacementMaxCatchupApplyLag(*maxCatchupApplyLag)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *catchupTimeout < 0 {
+		log.Fatal("catchup-timeout must be non-negative")
+	}
 	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
 		OldNode:                 *oldNode,
 		NewNode:                 *newNode,
@@ -1546,6 +1574,8 @@ func replaceNodeCmd(args []string) {
 		OperationPrefix:         *operationPrefix,
 		DryRun:                  *dryRun,
 		AllowUnavailableOldNode: *allowUnavailableOldNode,
+		CatchupTimeout:          *catchupTimeout,
+		CatchupMaxApplyLag:      catchupMaxApplyLag,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -1564,6 +1594,8 @@ func replacementPlanCmd(args []string) {
 	oldNode := fs.String("old-node", "", "node id to replace; if omitted, exactly one unavailable node is selected")
 	newNode := fs.String("new-node", "", "replacement node id")
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for the suggested replace-node command")
+	catchupTimeout := fs.Duration("catchup-timeout", 60*time.Second, "replacement catch-up timeout for suggested replace-node command; 0 disables")
+	maxCatchupApplyLag := fs.Int64("max-catchup-apply-lag", 0, "replacement max apply lag for suggested replace-node command")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing selected old node")
 	var nodeEndpoints nodeEndpointFlags
@@ -1587,13 +1619,22 @@ func replacementPlanCmd(args []string) {
 	if len(endpoints) == 0 {
 		log.Fatal("replacement-plan requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
+	catchupMaxApplyLag, err := replacementMaxCatchupApplyLag(*maxCatchupApplyLag)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *catchupTimeout < 0 {
+		log.Fatal("catchup-timeout must be non-negative")
+	}
 	result, err := planReplacementNode(endpoints, replaceNodeOptions{
-		OldNode:          *oldNode,
-		NewNode:          *newNode,
-		ShardIDs:         []string(shardIDs),
-		OperationPrefix:  *operationPrefix,
-		DryRun:           true,
-		CommandEndpoints: commandEndpointSource,
+		OldNode:            *oldNode,
+		NewNode:            *newNode,
+		ShardIDs:           []string(shardIDs),
+		OperationPrefix:    *operationPrefix,
+		DryRun:             true,
+		CatchupTimeout:     *catchupTimeout,
+		CatchupMaxApplyLag: catchupMaxApplyLag,
+		CommandEndpoints:   commandEndpointSource,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -1612,6 +1653,8 @@ func replacementApplyCmd(args []string) {
 	oldNode := fs.String("old-node", "", "node id to replace; if omitted, exactly one unavailable node is selected")
 	newNode := fs.String("new-node", "", "replacement node id")
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
+	catchupTimeout := fs.Duration("catchup-timeout", 60*time.Second, "maximum time to wait for replacement node catch-up after raft-add; 0 disables")
+	maxCatchupApplyLag := fs.Int64("max-catchup-apply-lag", 0, "maximum replacement node apply lag after raft-add")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing selected old node")
 	var nodeEndpoints nodeEndpointFlags
@@ -1635,12 +1678,21 @@ func replacementApplyCmd(args []string) {
 	if len(endpoints) == 0 {
 		log.Fatal("replacement-apply requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
 	}
+	catchupMaxApplyLag, err := replacementMaxCatchupApplyLag(*maxCatchupApplyLag)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *catchupTimeout < 0 {
+		log.Fatal("catchup-timeout must be non-negative")
+	}
 	result, err := applyPlannedReplacement(endpoints, replaceNodeOptions{
-		OldNode:          *oldNode,
-		NewNode:          *newNode,
-		ShardIDs:         []string(shardIDs),
-		OperationPrefix:  *operationPrefix,
-		CommandEndpoints: commandEndpointSource,
+		OldNode:            *oldNode,
+		NewNode:            *newNode,
+		ShardIDs:           []string(shardIDs),
+		OperationPrefix:    *operationPrefix,
+		CatchupTimeout:     *catchupTimeout,
+		CatchupMaxApplyLag: catchupMaxApplyLag,
+		CommandEndpoints:   commandEndpointSource,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -2817,6 +2869,15 @@ func replaceClusterNode(endpoints map[string]string, opts replaceNodeOptions) (r
 		return result, err
 	}
 	result.Steps = append(result.Steps, raftAdd)
+	catchup, err := waitReplacementNodeCatchup(endpoints, plan.newNode, replacementCatchupOptions{
+		Timeout:     opts.CatchupTimeout,
+		MaxApplyLag: opts.CatchupMaxApplyLag,
+	})
+	if err != nil {
+		result.Catchup = catchup
+		return result, err
+	}
+	result.Catchup = catchup
 	for _, shardID := range plan.shardIDs {
 		step, err := changeShardReplica(endpoints, "add-replica", shardID, plan.newNode, controlRequestOptions{
 			OperationID: prefix + "-add-" + shardID + "-" + plan.newNode,
@@ -3047,6 +3108,100 @@ func commitLogRuntimeReadReady(health string) bool {
 	return health == "ready" || health == "follower"
 }
 
+func replacementMaxCatchupApplyLag(value int64) (*uint64, error) {
+	if value < 0 {
+		return nil, fmt.Errorf("max-catchup-apply-lag must be non-negative")
+	}
+	out := uint64(value)
+	return &out, nil
+}
+
+func waitReplacementNodeCatchup(
+	endpoints map[string]string,
+	nodeID string,
+	opts replacementCatchupOptions,
+) (replacementCatchupResult, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if opts.Timeout < 0 {
+		return replacementCatchupResult{}, fmt.Errorf("catchup-timeout must be non-negative")
+	}
+	maxApplyLag := uint64(0)
+	if opts.MaxApplyLag != nil {
+		maxApplyLag = *opts.MaxApplyLag
+	}
+	result := replacementCatchupResult{
+		Enabled:     opts.Timeout != 0,
+		Node:        nodeID,
+		MaxApplyLag: maxApplyLag,
+	}
+	if !result.Enabled {
+		return result, nil
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		statuses, err := readClusterStatuses(endpoints)
+		if err != nil {
+			lastErr = err
+		} else {
+			requiredApplied := replacementRequiredAppliedIndex(statuses, nodeID)
+			result.RequiredAppliedIndex = requiredApplied
+			if target := statusNodeByName(statuses, nodeID); target != nil {
+				result.Endpoint = target.Endpoint
+				if target.Status != nil {
+					runtime := target.Status.CommitLogRuntime
+					result.Health = runtime.Health
+					result.AppliedIndex = runtime.AppliedIndex
+					result.ApplyLag = runtime.ApplyLag
+				}
+				maxLag := maxApplyLag
+				if clusterNodeReadyForWait(*target, &maxLag, &requiredApplied) {
+					return result, nil
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			message := fmt.Sprintf(
+				"replacement catch-up timed out for node %q: applied_index=%d required_applied_index=%d apply_lag=%d max_apply_lag=%d health=%q",
+				nodeID,
+				result.AppliedIndex,
+				result.RequiredAppliedIndex,
+				result.ApplyLag,
+				result.MaxApplyLag,
+				result.Health,
+			)
+			if lastErr != nil {
+				message = message + ": " + lastErr.Error()
+			}
+			return result, errors.New(message)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func replacementRequiredAppliedIndex(statuses clusterStatusResult, replacementNode string) uint64 {
+	replacementNode = strings.TrimSpace(replacementNode)
+	var required uint64
+	for _, node := range statuses.Nodes {
+		nodeID := strings.TrimSpace(node.Node)
+		if node.Status != nil && strings.TrimSpace(node.Status.NodeID) != "" {
+			nodeID = strings.TrimSpace(node.Status.NodeID)
+		}
+		if nodeID == "" || nodeID == replacementNode || !clusterNodeReplacementHealthy(node) {
+			continue
+		}
+		applied := node.Status.CommitLogRuntime.AppliedIndex
+		if applied > required {
+			required = applied
+		}
+	}
+	return required
+}
+
 func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (replacementPlanResult, error) {
 	newNode := strings.TrimSpace(opts.NewNode)
 	if newNode == "" {
@@ -3073,29 +3228,35 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 		}
 	}
 	plan, err := preflightReplaceClusterNode(endpoints, replaceNodeOptions{
-		OldNode:         oldNode,
-		NewNode:         newNode,
-		ShardIDs:        opts.ShardIDs,
-		OperationPrefix: opts.OperationPrefix,
-		DryRun:          true,
+		OldNode:            oldNode,
+		NewNode:            newNode,
+		ShardIDs:           opts.ShardIDs,
+		OperationPrefix:    opts.OperationPrefix,
+		DryRun:             true,
+		CatchupTimeout:     opts.CatchupTimeout,
+		CatchupMaxApplyLag: opts.CatchupMaxApplyLag,
 	})
 	if err != nil {
 		return replacementPlanResult{}, err
 	}
 	dryRunArgs := replaceNodeCommandArgs(endpoints, replaceNodeOptions{
-		OldNode:          oldNode,
-		NewNode:          newNode,
-		ShardIDs:         opts.ShardIDs,
-		OperationPrefix:  opts.OperationPrefix,
-		DryRun:           true,
-		CommandEndpoints: opts.CommandEndpoints,
+		OldNode:            oldNode,
+		NewNode:            newNode,
+		ShardIDs:           opts.ShardIDs,
+		OperationPrefix:    opts.OperationPrefix,
+		DryRun:             true,
+		CatchupTimeout:     opts.CatchupTimeout,
+		CatchupMaxApplyLag: opts.CatchupMaxApplyLag,
+		CommandEndpoints:   opts.CommandEndpoints,
 	})
 	applyArgs := replaceNodeCommandArgs(endpoints, replaceNodeOptions{
-		OldNode:          oldNode,
-		NewNode:          newNode,
-		ShardIDs:         opts.ShardIDs,
-		OperationPrefix:  opts.OperationPrefix,
-		CommandEndpoints: opts.CommandEndpoints,
+		OldNode:            oldNode,
+		NewNode:            newNode,
+		ShardIDs:           opts.ShardIDs,
+		OperationPrefix:    opts.OperationPrefix,
+		CatchupTimeout:     opts.CatchupTimeout,
+		CatchupMaxApplyLag: opts.CatchupMaxApplyLag,
+		CommandEndpoints:   opts.CommandEndpoints,
 	})
 	return replacementPlanResult{
 		OldNode:       oldNode,
@@ -3111,12 +3272,14 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 
 func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
 	plan, err := planReplacementNode(endpoints, replaceNodeOptions{
-		OldNode:          opts.OldNode,
-		NewNode:          opts.NewNode,
-		ShardIDs:         opts.ShardIDs,
-		OperationPrefix:  opts.OperationPrefix,
-		DryRun:           true,
-		CommandEndpoints: opts.CommandEndpoints,
+		OldNode:            opts.OldNode,
+		NewNode:            opts.NewNode,
+		ShardIDs:           opts.ShardIDs,
+		OperationPrefix:    opts.OperationPrefix,
+		DryRun:             true,
+		CatchupTimeout:     opts.CatchupTimeout,
+		CatchupMaxApplyLag: opts.CatchupMaxApplyLag,
+		CommandEndpoints:   opts.CommandEndpoints,
 	})
 	if err != nil {
 		return replacementApplyResult{}, err
@@ -3127,6 +3290,8 @@ func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOption
 		ShardIDs:                opts.ShardIDs,
 		OperationPrefix:         opts.OperationPrefix,
 		AllowUnavailableOldNode: true,
+		CatchupTimeout:          opts.CatchupTimeout,
+		CatchupMaxApplyLag:      opts.CatchupMaxApplyLag,
 	})
 	if err != nil {
 		return replacementApplyResult{Plan: plan, Result: result}, err
@@ -3210,6 +3375,12 @@ func replaceNodeCommandArgs(endpoints map[string]string, opts replaceNodeOptions
 	}
 	if prefix := strings.TrimSpace(opts.OperationPrefix); prefix != "" {
 		args = append(args, "--operation-prefix", prefix)
+	}
+	if opts.CatchupTimeout != 0 {
+		args = append(args, "--catchup-timeout", opts.CatchupTimeout.String())
+	}
+	if opts.CatchupMaxApplyLag != nil {
+		args = append(args, "--max-catchup-apply-lag", strconv.FormatUint(*opts.CatchupMaxApplyLag, 10))
 	}
 	args = appendReplacementCommandEndpointArgs(args, endpoints, opts.CommandEndpoints)
 	for _, shardID := range opts.ShardIDs {
@@ -3335,6 +3506,7 @@ func writeReplaceNodeResult(w io.Writer, result replaceNodeResult) {
 		result.Preflight.NewEndpoint,
 	)
 	writeReplacementPolicy(w, result.Preflight.Policy)
+	writeReplacementCatchup(w, result.Catchup)
 	for _, step := range result.Steps {
 		if step.Shard != "" {
 			fmt.Fprintf(w, "step=%s shard=%s node=%s submitted_to=%s\n", step.Operation, step.Shard, step.Node, step.SubmittedTo)
@@ -3346,6 +3518,22 @@ func writeReplaceNodeResult(w io.Writer, result replaceNodeResult) {
 		fmt.Fprintf(w, "step=drain-node node=%s submitted_to=%s\n", result.Drain.Target, result.Drain.SubmittedTo)
 	}
 	writeClusterStatuses(w, result.Statuses)
+}
+
+func writeReplacementCatchup(w io.Writer, result replacementCatchupResult) {
+	if !result.Enabled {
+		return
+	}
+	fmt.Fprintf(
+		w,
+		"policy=catchup node=%s applied_index=%d required_applied_index=%d apply_lag=%d max_apply_lag=%d health=%s\n",
+		result.Node,
+		result.AppliedIndex,
+		result.RequiredAppliedIndex,
+		result.ApplyLag,
+		result.MaxApplyLag,
+		result.Health,
+	)
 }
 
 func writeReplacementPlan(w io.Writer, result replacementPlanResult) {
