@@ -46,6 +46,7 @@ type Config struct {
 	WALRetainArchivedSegments         int             `yaml:"wal_retain_archived_segments"`
 	WALReadyMaxCheckpointLag          uint64          `yaml:"wal_ready_max_checkpoint_lag"`
 	WALBackpressureMaxCheckpointLag   uint64          `yaml:"wal_backpressure_max_checkpoint_lag"`
+	CDCMaxEventsPerShard              int             `yaml:"cdc_max_events_per_shard"`
 	FlushQueueSize                    int             `yaml:"flush_queue_size"`
 	FlushBackpressureQueueThreshold   int             `yaml:"flush_backpressure_queue_threshold"`
 	CompactionL0Threshold             int             `yaml:"compaction_l0_threshold"`

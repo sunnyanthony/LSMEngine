@@ -153,6 +153,7 @@ func serveCmd(args []string) {
 		WALRetainArchivedSegments:         cfg.WALRetainArchivedSegments,
 		WALReadyMaxCheckpointLag:          cfg.WALReadyMaxCheckpointLag,
 		WALBackpressureMaxCheckpointLag:   cfg.WALBackpressureMaxCheckpointLag,
+		CDCMaxEventsPerShard:              cfg.CDCMaxEventsPerShard,
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,

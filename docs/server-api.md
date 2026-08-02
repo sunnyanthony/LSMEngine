@@ -53,10 +53,13 @@ the LSM engine. It is intentionally separate from the engine internals.
   - Embedded mode can inject a custom commit-log provider via `CommitLogOptions.Factory`; the provider contract is committed-entry first, not apply-callback based.
 
 ### CDC HTTP (foundation)
+- `GET /cdc/status`
+  - Returns CDC source metadata: `durable`, `source`, `replay_on_restart`, `max_events_per_shard`, and per-shard retained windows.
+  - Current source is `memory`, with `durable=false` and `replay_on_restart=false`; this is a machine-readable contract for clients and operators, not a durable CDC implementation.
 - `GET /cdc/events?shard=<id>&offset=<n>&limit=<n>`
   - Returns per-shard ordered events after `offset`.
-  - Response includes `next_offset`, `oldest_offset`, and `dropped_before` (retention signal).
-  - Delivery contract at this stage: node-local and in-memory only; events are readable while retained and are not rebuilt from WAL on restart.
+  - Response includes `next_offset`, `oldest_offset`, and `dropped_before` (retention signal). `next_offset` is the exclusive cursor to pass back as the next `offset`; when no events are returned it preserves the requested offset.
+  - Delivery contract at this stage: node-local and in-memory only; events are readable while retained up to `cdc_max_events_per_shard` and are not rebuilt from WAL on restart.
   - Durability decision for the current phase: CDC is a recent-observation API, not a durable changefeed. Clients must handle `dropped_before` or restart gaps by resyncing from the KV API. WAL-backed or raft-log-backed CDC remains deferred until full state-machine snapshot/catch-up semantics are implemented.
 
 ### Async writes (webhook callback)
@@ -140,6 +143,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `wal_retain_archived_segments` enables conservative archived WAL cleanup when greater than zero. Cleanup only removes a contiguous archived prefix whose entries are covered by the manifest WAL checkpoint, writes a local pruned marker so restart can distinguish intentional prefix pruning from missing segments, and keeps at least the configured number of newest archived segments.
   - `wal_ready_max_checkpoint_lag` makes `/readyz` fail with `reason=wal_checkpoint_lag` when local `seq - wal_checkpoint_seq` exceeds the configured supervisor threshold.
   - `wal_backpressure_max_checkpoint_lag` rejects new local writes before commit-log proposal when local `seq - wal_checkpoint_seq` exceeds the configured write-admission threshold. Already committed raft entries still apply locally.
+  - `cdc_max_events_per_shard` controls the node-local in-memory CDC retention window. `0` uses the engine default. `/cdc/status` reports the effective value and retained per-shard windows.
   - `flush_backpressure_queue_threshold` rejects new local writes before commit when the immutable flush backlog reaches the configured depth.
   - `compaction_l0_threshold` enables background L0 compaction.
   - `compaction_check_interval` periodically wakes the node-local compaction runtime when non-zero. The planner still decides whether any table rewrite should run.

@@ -64,6 +64,7 @@ wal_max_segment_bytes: 4096
 wal_retain_archived_segments: 2
 wal_ready_max_checkpoint_lag: 64
 wal_backpressure_max_checkpoint_lag: 48
+cdc_max_events_per_shard: 128
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
@@ -186,6 +187,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.WALBackpressureMaxCheckpointLag != 48 {
 		t.Fatalf("expected wal backpressure max checkpoint lag, got %d", cfg.WALBackpressureMaxCheckpointLag)
+	}
+	if cfg.CDCMaxEventsPerShard != 128 {
+		t.Fatalf("expected cdc max events per shard, got %d", cfg.CDCMaxEventsPerShard)
 	}
 	if cfg.FlushQueueSize != 8 {
 		t.Fatalf("expected flush queue size, got %d", cfg.FlushQueueSize)

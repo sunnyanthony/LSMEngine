@@ -74,6 +74,9 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	if cdc, ok := provider.(lsm.CDCProvider); ok {
 		handler.cdc = cdc
 	}
+	if cdcStatus, ok := provider.(lsm.CDCStatusProvider); ok {
+		handler.cdcStatus = cdcStatus
+	}
 	if compaction, ok := provider.(lsm.CompactionProvider); ok {
 		handler.compaction = compaction
 	}
@@ -88,6 +91,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	mux.HandleFunc("/cluster/shards", handler.handleShards)
 	mux.HandleFunc("/cluster/routes", handler.handleRoutes)
 	mux.HandleFunc(RaftPeerMessagesPath, handler.handleRaftPeerMessages)
+	mux.HandleFunc("/cdc/status", handler.handleCDCStatus)
 	mux.HandleFunc("/cdc/events", handler.handleCDCEvents)
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
@@ -119,6 +123,7 @@ type handler struct {
 	ranger                   lsm.RangeProvider
 	writer                   lsm.WriteProvider
 	cdc                      lsm.CDCProvider
+	cdcStatus                lsm.CDCStatusProvider
 	compaction               lsm.CompactionProvider
 	raft                     raftPeerMessageHandler
 	requests                 *writeRequestStore
@@ -395,6 +400,14 @@ type cdcEventResponse struct {
 	CommittedAt time.Time `json:"committed_at"`
 }
 
+type cdcStatusResponse struct {
+	Durable           bool                 `json:"durable"`
+	Source            string               `json:"source"`
+	ReplayOnRestart   bool                 `json:"replay_on_restart"`
+	MaxEventsPerShard int                  `json:"max_events_per_shard"`
+	Shards            []lsm.CDCShardStatus `json:"shards"`
+}
+
 type raftPeerMessagesRequest struct {
 	Messages []lsm.CommitLogPeerMessage `json:"messages"`
 }
@@ -492,6 +505,25 @@ func (h *handler) handleCDCEvents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) handleCDCStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.cdcStatus == nil {
+		http.NotFound(w, r)
+		return
+	}
+	status := h.cdcStatus.CDCStatus()
+	writeJSON(w, http.StatusOK, cdcStatusResponse{
+		Durable:           status.Durable,
+		Source:            status.Source,
+		ReplayOnRestart:   status.ReplayOnRestart,
+		MaxEventsPerShard: status.MaxEventsPerShard,
+		Shards:            status.Shards,
+	})
 }
 
 func (h *handler) handleRaftPeerMessages(w http.ResponseWriter, r *http.Request) {

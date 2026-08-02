@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ const (
 	defaultCDCReadLimit         = 100
 	maxCDCReadLimit             = 1000
 	defaultCDCMaxEventsPerShard = 4096
+	CDCSourceMemory             = "memory"
 )
 
 // CDCEvent is a committed data-change event in a node-local retained stream.
@@ -29,18 +31,86 @@ type CDCEvent struct {
 
 // CDCReadResult is one page of retained in-memory events for a shard.
 type CDCReadResult struct {
-	ShardID       string     `json:"shard_id"`
-	FromOffset    uint64     `json:"from_offset"`
+	ShardID    string `json:"shard_id"`
+	FromOffset uint64 `json:"from_offset"`
+	// NextOffset is the exclusive cursor clients should send as the next request offset.
 	NextOffset    uint64     `json:"next_offset"`
 	OldestOffset  uint64     `json:"oldest_offset"`
 	DroppedBefore bool       `json:"dropped_before"`
 	Events        []CDCEvent `json:"events"`
 }
 
+// CDCShardStatus describes the retained event window for one shard.
+type CDCShardStatus struct {
+	ShardID      string `json:"shard_id"`
+	OldestOffset uint64 `json:"oldest_offset"`
+	// NextOffset is the latest retained exclusive cursor for ReadCDCEvents.
+	NextOffset     uint64 `json:"next_offset"`
+	RetainedEvents int    `json:"retained_events"`
+}
+
+// CDCStatus describes the CDC stream source and retention contract.
+type CDCStatus struct {
+	Durable           bool             `json:"durable"`
+	Source            string           `json:"source"`
+	ReplayOnRestart   bool             `json:"replay_on_restart"`
+	MaxEventsPerShard int              `json:"max_events_per_shard"`
+	Shards            []CDCShardStatus `json:"shards"`
+}
+
 type cdcStreamStore struct {
 	mu       sync.RWMutex
 	capacity int
 	shards   map[string][]CDCEvent
+}
+
+func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
+	out := CDCStatus{
+		Durable:           false,
+		Source:            CDCSourceMemory,
+		ReplayOnRestart:   false,
+		MaxEventsPerShard: 0,
+	}
+	if s == nil {
+		return out
+	}
+	out.MaxEventsPerShard = s.capacity
+
+	seen := make(map[string]struct{}, len(knownShards))
+	s.mu.RLock()
+	for shardID, stream := range s.shards {
+		out.Shards = append(out.Shards, cdcShardStatusFromStream(shardID, stream))
+		seen[shardID] = struct{}{}
+	}
+	s.mu.RUnlock()
+
+	for _, shardID := range knownShards {
+		shardID = strings.TrimSpace(shardID)
+		if shardID == "" {
+			continue
+		}
+		if _, ok := seen[shardID]; ok {
+			continue
+		}
+		out.Shards = append(out.Shards, CDCShardStatus{ShardID: shardID})
+	}
+	sort.Slice(out.Shards, func(i, j int) bool {
+		return out.Shards[i].ShardID < out.Shards[j].ShardID
+	})
+	return out
+}
+
+func cdcShardStatusFromStream(shardID string, stream []CDCEvent) CDCShardStatus {
+	out := CDCShardStatus{
+		ShardID:        shardID,
+		RetainedEvents: len(stream),
+	}
+	if len(stream) == 0 {
+		return out
+	}
+	out.OldestOffset = stream[0].Offset
+	out.NextOffset = stream[len(stream)-1].Offset
+	return out
 }
 
 func newCDCStreamStore(capacity int) *cdcStreamStore {
@@ -97,7 +167,7 @@ func (s *cdcStreamStore) read(shardID string, offset uint64, limit int) (CDCRead
 		return out, nil
 	}
 	out.OldestOffset = copied[0].Offset
-	if out.OldestOffset > 0 && offset+1 < out.OldestOffset {
+	if out.OldestOffset > 0 && offset < out.OldestOffset-1 {
 		out.DroppedBefore = true
 	}
 
@@ -160,6 +230,25 @@ func (l *LSM) recordCDCEvent(op string, key []byte, value []byte, seq uint64, to
 		Tombstone:   tombstone,
 		CommittedAt: time.Now().UTC(),
 	})
+}
+
+// CDCStatus returns node-local CDC retention and durability metadata.
+func (l *LSM) CDCStatus() CDCStatus {
+	if l == nil || l.cdc == nil {
+		return CDCStatus{
+			Durable:           false,
+			Source:            CDCSourceMemory,
+			ReplayOnRestart:   false,
+			MaxEventsPerShard: 0,
+		}
+	}
+	var known []string
+	if l.control != nil {
+		for _, shard := range l.control.shardsSnapshot() {
+			known = append(known, shard.ID)
+		}
+	}
+	return l.cdc.status(known)
 }
 
 // ReadCDCEvents returns node-local retained per-shard change events after the given offset.

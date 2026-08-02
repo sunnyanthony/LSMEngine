@@ -72,6 +72,7 @@ write_consistency_default: "accepted"
 # wal_retain_archived_segments: 2
 # wal_ready_max_checkpoint_lag: 0
 # wal_backpressure_max_checkpoint_lag: 0
+# cdc_max_events_per_shard: 4096
 # flush_queue_size: 4
 # compaction_l0_threshold: 4
 # compaction_check_interval: "30s"

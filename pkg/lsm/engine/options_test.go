@@ -65,6 +65,12 @@ func TestNormalizeOptionsRejectsNegativeBackpressureThresholds(t *testing.T) {
 	}); err == nil {
 		t.Fatalf("expected error for negative compaction check interval")
 	}
+	if _, err := normalizeOptions(Options{
+		DataDir:              t.TempDir(),
+		CDCMaxEventsPerShard: -1,
+	}); err == nil {
+		t.Fatalf("expected error for negative cdc max events per shard")
+	}
 }
 
 func TestWalRepairPolicyDefaults(t *testing.T) {

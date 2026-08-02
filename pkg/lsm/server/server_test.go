@@ -123,6 +123,7 @@ type writeControlStubProvider struct {
 type cdcStubProvider struct {
 	stubProvider
 	result  lsm.CDCReadResult
+	status  lsm.CDCStatus
 	lastReq struct {
 		shardID string
 		offset  uint64
@@ -157,6 +158,10 @@ func (p *cdcStubProvider) ReadCDCEvents(shardID string, offset uint64, limit int
 	p.lastReq.offset = offset
 	p.lastReq.limit = limit
 	return p.result, nil
+}
+
+func (p *cdcStubProvider) CDCStatus() lsm.CDCStatus {
+	return p.status
 }
 
 func (p *raftStubProvider) HandlePeerMessages(_ context.Context, messages []lsm.RaftPeerMessage) error {
@@ -945,6 +950,37 @@ func TestHandlerCDCEvents(t *testing.T) {
 	}
 	if out.Events[1].Tombstone != true {
 		t.Fatalf("expected second event tombstone=true")
+	}
+}
+
+func TestHandlerCDCStatus(t *testing.T) {
+	provider := &cdcStubProvider{
+		status: lsm.CDCStatus{
+			Durable:           false,
+			Source:            lsm.CDCSourceMemory,
+			ReplayOnRestart:   false,
+			MaxEventsPerShard: 128,
+			Shards: []lsm.CDCShardStatus{
+				{ShardID: "users", OldestOffset: 2, NextOffset: 5, RetainedEvents: 4},
+			},
+		},
+	}
+	handler := NewHandler(provider)
+	req := httptest.NewRequest(http.MethodGet, "/cdc/status", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var out cdcStatusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Durable || out.ReplayOnRestart || out.Source != lsm.CDCSourceMemory || out.MaxEventsPerShard != 128 {
+		t.Fatalf("unexpected cdc status metadata: %+v", out)
+	}
+	if len(out.Shards) != 1 || out.Shards[0].ShardID != "users" || out.Shards[0].NextOffset != 5 {
+		t.Fatalf("unexpected cdc shard status: %+v", out.Shards)
 	}
 }
 

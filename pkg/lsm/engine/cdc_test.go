@@ -70,3 +70,28 @@ func TestReadCDCEventsReturnsEmptyForKnownShardWithNoEvents(t *testing.T) {
 		t.Fatalf("expected no events, got %+v", result.Events)
 	}
 }
+
+func TestCDCStatusReportsRetainedWindows(t *testing.T) {
+	store := newCDCStreamStore(2)
+	store.append(CDCEvent{Offset: 1, ShardID: "users", Operation: "put", Key: []byte("a"), Value: []byte("1"), CommittedAt: time.Now().UTC()})
+	store.append(CDCEvent{Offset: 2, ShardID: "users", Operation: "put", Key: []byte("b"), Value: []byte("2"), CommittedAt: time.Now().UTC()})
+	store.append(CDCEvent{Offset: 3, ShardID: "users", Operation: "delete", Key: []byte("b"), Tombstone: true, CommittedAt: time.Now().UTC()})
+
+	status := store.status([]string{"orders", "users"})
+	if status.Durable || status.ReplayOnRestart || status.Source != CDCSourceMemory {
+		t.Fatalf("expected in-memory non-durable status, got %+v", status)
+	}
+	if status.MaxEventsPerShard != 2 {
+		t.Fatalf("expected max events 2, got %+v", status)
+	}
+	if len(status.Shards) != 2 {
+		t.Fatalf("expected users and orders shard status, got %+v", status.Shards)
+	}
+	if status.Shards[0].ShardID != "orders" || status.Shards[0].RetainedEvents != 0 {
+		t.Fatalf("expected empty orders status first, got %+v", status.Shards)
+	}
+	users := status.Shards[1]
+	if users.ShardID != "users" || users.OldestOffset != 2 || users.NextOffset != 3 || users.RetainedEvents != 2 {
+		t.Fatalf("unexpected users cdc status: %+v", users)
+	}
+}
