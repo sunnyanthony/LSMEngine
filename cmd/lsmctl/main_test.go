@@ -190,6 +190,61 @@ func TestReadCDCEventsRemote(t *testing.T) {
 	}
 }
 
+func TestReadClusterCDCEventsRecordsPartialFailures(t *testing.T) {
+	committedAt := time.Unix(1700000000, 0).UTC()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cdc/events" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("shard"); got != "users" {
+			t.Fatalf("unexpected shard %q", got)
+		}
+		if got := r.URL.Query().Get("offset"); got != "3" {
+			t.Fatalf("unexpected offset %q", got)
+		}
+		if got := r.URL.Query().Get("limit"); got != "2" {
+			t.Fatalf("unexpected limit %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(cdcReadResult{
+			ShardID:      "users",
+			FromOffset:   3,
+			NextOffset:   4,
+			OldestOffset: 4,
+			StartOffset:  1,
+			Events: []cdcEventResult{
+				{
+					Offset:      4,
+					Operation:   "put",
+					KeyBase64:   base64.StdEncoding.EncodeToString([]byte("a")),
+					ValueBase64: base64.StdEncoding.EncodeToString([]byte("1")),
+					CommittedAt: committedAt,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := readClusterCDCEvents(map[string]string{
+		"node-a": "http://127.0.0.1:1",
+		"node-b": srv.URL,
+	}, "users", 3, 2)
+	if err != nil {
+		t.Fatalf("read cluster cdc events: %v", err)
+	}
+	if len(got.Nodes) != 2 {
+		t.Fatalf("expected two node results, got %+v", got)
+	}
+	if got.Nodes[0].Node != "node-a" || got.Nodes[0].Error == "" {
+		t.Fatalf("expected node-a partial failure, got %+v", got.Nodes[0])
+	}
+	if got.Nodes[1].Node != "node-b" || got.Nodes[1].Result == nil {
+		t.Fatalf("expected node-b events, got %+v", got.Nodes[1])
+	}
+	if len(got.Nodes[1].Result.Events) != 1 || got.Nodes[1].Result.Events[0].Operation != "put" {
+		t.Fatalf("unexpected node-b cdc events: %+v", got.Nodes[1].Result)
+	}
+}
+
 func TestReadCDCEventsLocal(t *testing.T) {
 	dir := t.TempDir()
 	store, err := lsm.New(lsm.Options{DataDir: dir})
@@ -284,6 +339,37 @@ func TestWriteCDCInspectionOutput(t *testing.T) {
 	} {
 		if !strings.Contains(clusterOut, want) {
 			t.Fatalf("expected cluster status output to contain %q, got:\n%s", want, clusterOut)
+		}
+	}
+
+	var clusterEventsBuf bytes.Buffer
+	writeClusterCDCEvents(&clusterEventsBuf, clusterCDCEventsResult{
+		Nodes: []clusterCDCEventsNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://node-a:8080",
+				Result: &cdcReadResult{
+					ShardID:      "users",
+					FromOffset:   7,
+					NextOffset:   8,
+					OldestOffset: 8,
+					StartOffset:  0,
+					Events: []cdcEventResult{
+						{Offset: 8, Operation: "put", KeyBase64: base64.StdEncoding.EncodeToString([]byte("k")), ValueBase64: base64.StdEncoding.EncodeToString([]byte("v"))},
+					},
+				},
+			},
+			{Node: "node-b", Endpoint: "http://node-b:8080", Error: "unreachable"},
+		},
+	})
+	clusterEventsOut := clusterEventsBuf.String()
+	for _, want := range []string{
+		"node=node-a endpoint=http://node-a:8080 shard=users from_offset=7 next_offset=8 oldest_offset=8 start_offset=0 dropped_before=false events=1",
+		"node=node-a offset=8 operation=put key=k value=v tombstone=false",
+		"node=node-b endpoint=http://node-b:8080 error=unreachable",
+	} {
+		if !strings.Contains(clusterEventsOut, want) {
+			t.Fatalf("expected cluster events output to contain %q, got:\n%s", want, clusterEventsOut)
 		}
 	}
 }

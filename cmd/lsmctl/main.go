@@ -758,6 +758,17 @@ type clusterCDCStatusNodeResult struct {
 	Error    string         `json:"error,omitempty"`
 }
 
+type clusterCDCEventsResult struct {
+	Nodes []clusterCDCEventsNodeResult `json:"nodes"`
+}
+
+type clusterCDCEventsNodeResult struct {
+	Node     string         `json:"node"`
+	Endpoint string         `json:"endpoint"`
+	Result   *cdcReadResult `json:"result,omitempty"`
+	Error    string         `json:"error,omitempty"`
+}
+
 type kvWriteRequest struct {
 	KeyBase64   string               `json:"key_base64"`
 	ValueBase64 string               `json:"value_base64,omitempty"`
@@ -1339,6 +1350,9 @@ func cdcEventsCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "read CDC events from all configured cluster endpoints")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	shardID := fs.String("shard", "", "shard id; omitted uses the server default when exactly one shard is known")
 	offset := fs.Uint64("offset", 0, "read events after this offset")
 	limit := fs.Int("limit", 0, "maximum events to return; 0 uses server default")
@@ -1349,6 +1363,25 @@ func cdcEventsCmd(args []string) {
 	cfg := loadConfigOrExit(*configPath)
 	if *addr == "" {
 		*addr = cfg.Addr
+	}
+	if *clusterMode || len(nodeEndpoints) > 0 {
+		endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(endpoints) == 0 {
+			log.Fatal("cdc-events --cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
+		}
+		result, err := readClusterCDCEvents(endpoints, *shardID, *offset, *limit)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *jsonOut {
+			writeJSON(os.Stdout, result)
+			return
+		}
+		writeClusterCDCEvents(os.Stdout, result)
+		return
 	}
 	if *dataDir == "" {
 		*dataDir = cfg.DataDir
@@ -2029,6 +2062,28 @@ func readCDCEvents(addr, dataDir string, shardID string, offset uint64, limit in
 		return cdcReadResult{}, err
 	}
 	return cdcReadResultFromEngine(result), nil
+}
+
+func readClusterCDCEvents(endpoints map[string]string, shardID string, offset uint64, limit int) (clusterCDCEventsResult, error) {
+	nodes := sortedEndpointNodes(endpoints)
+	result := clusterCDCEventsResult{
+		Nodes: make([]clusterCDCEventsNodeResult, 0, len(nodes)),
+	}
+	for _, nodeID := range nodes {
+		endpoint := normalizeHTTPBaseURL(endpoints[nodeID])
+		events, err := readCDCEvents(endpoint, "", shardID, offset, limit)
+		node := clusterCDCEventsNodeResult{
+			Node:     nodeID,
+			Endpoint: endpoint,
+		}
+		if err != nil {
+			node.Error = err.Error()
+		} else {
+			node.Result = &events
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	return result, nil
 }
 
 func cdcReadResultFromEngine(result lsm.CDCReadResult) cdcReadResult {
@@ -4369,9 +4424,42 @@ func writeCDCEvents(w io.Writer, result cdcReadResult) {
 	}
 }
 
+func writeClusterCDCEvents(w io.Writer, result clusterCDCEventsResult) {
+	for _, node := range result.Nodes {
+		if node.Error != "" || node.Result == nil {
+			fmt.Fprintf(w, "node=%s endpoint=%s error=%s\n", node.Node, node.Endpoint, node.Error)
+			continue
+		}
+		events := node.Result
+		fmt.Fprintf(
+			w,
+			"node=%s endpoint=%s shard=%s from_offset=%d next_offset=%d oldest_offset=%d start_offset=%d dropped_before=%v events=%d\n",
+			node.Node,
+			node.Endpoint,
+			events.ShardID,
+			events.FromOffset,
+			events.NextOffset,
+			events.OldestOffset,
+			events.StartOffset,
+			events.DroppedBefore,
+			len(events.Events),
+		)
+		for _, event := range events.Events {
+			writeCDCEventWithPrefix(w, "node="+node.Node, event)
+		}
+	}
+}
+
 func writeCDCEvent(w io.Writer, event cdcEventResult) {
+	writeCDCEventWithPrefix(w, "", event)
+}
+
+func writeCDCEventWithPrefix(w io.Writer, prefix string, event cdcEventResult) {
 	key, keyOK := decodeBase64Text(event.KeyBase64)
 	value, valueOK := decodeBase64Text(event.ValueBase64)
+	if prefix != "" {
+		fmt.Fprintf(w, "%s ", prefix)
+	}
 	fmt.Fprintf(w, "offset=%d operation=%s", event.Offset, event.Operation)
 	if keyOK {
 		fmt.Fprintf(w, " key=%s", key)

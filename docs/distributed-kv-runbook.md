@@ -141,9 +141,11 @@ The useful fields are:
   CDC status/errors. Current CDC is `source=memory`, `durable=false`, and
   `replay_on_restart=false`.
 - `lsmctl cdc-events --addr <node-url> --shard <id> --offset <n>` prints
-  retained CDC events after an offset. Use `start_offset` and
-  `dropped_before` to detect retention overflow, restart, or state-snapshot
-  restore gaps; resync through normal KV reads when a gap is reported.
+  retained CDC events after an offset. Add `--cluster` with endpoint discovery
+  flags to poll every configured node and compare per-node retained event
+  pages/errors. Use `start_offset` and `dropped_before` to detect retention
+  overflow, restart, or state-snapshot restore gaps; resync through normal KV
+  reads when a gap is reported.
 - `POST /compact` and `lsmctl compact --addr <node-url>` wake one node's local
   compaction runtime. This is useful after inspecting L0/table pressure, but it
   does not bypass the planner's configured policy and is not a cluster-wide
@@ -167,6 +169,10 @@ go run ./cmd/lsmctl cdc-status --cluster \
   --node-endpoint node-b=http://127.0.0.1:8081 \
   --node-endpoint node-c=http://127.0.0.1:8082
 go run ./cmd/lsmctl cdc-events --addr http://127.0.0.1:8080 --shard default --offset 0 --limit 10
+go run ./cmd/lsmctl cdc-events --cluster --shard users --offset 0 --limit 10 \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082
 go run ./cmd/lsmctl compact --addr http://127.0.0.1:8080
 ```
 
