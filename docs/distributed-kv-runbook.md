@@ -256,8 +256,16 @@ go run ./cmd/lsmctl wait-gateway --addr http://127.0.0.1:8090 --min-reachable 3 
 `--max-read-apply-lag` makes `wait-gateway` count reachable backends whose latest
 reported `commit_log_runtime.apply_lag` is within the bound. `--min-read-ready`
 sets the required count; when the max lag gate is enabled and `--min-read-ready`
-is omitted or `0`, the wait requires at least one read-ready backend. This is an
-operator/status gate only and does not change gateway read routing.
+is omitted or `0`, the wait requires at least one read-ready backend. The same
+checks can be applied to the gateway `/readyz` endpoint with:
+
+```bash
+go run ./cmd/lsmctl gateway --ready-min-reachable <n> --ready-max-read-apply-lag <n> --ready-min-read-ready <n>
+```
+
+The matching `gateway_ready_*` config keys provide the same behavior, so external
+supervisors can use one healthcheck instead of a separate wait loop.
+These are operator/status gates only and do not change gateway read routing.
 
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown

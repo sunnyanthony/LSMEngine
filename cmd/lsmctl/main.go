@@ -213,6 +213,9 @@ func gatewayCmd(args []string) {
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
 	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; 0 uses config/default")
+	readyMinReachable := fs.Int("ready-min-reachable", 0, "minimum reachable backend nodes for /readyz; 0 keeps default write-leader readiness")
+	readyMaxReadApplyLag := fs.Int64("ready-max-read-apply-lag", -1, "maximum backend apply lag for /readyz read-ready nodes; -1 disables")
+	readyMinReadReady := fs.Int("ready-min-read-ready", 0, "minimum read-ready backend nodes for /readyz; 0 requires one when ready max lag is enabled")
 	var nodeEndpoints nodeEndpointFlags
 	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
 	if err := fs.Parse(args); err != nil {
@@ -222,6 +225,9 @@ func gatewayCmd(args []string) {
 	var maxReadApplyLagSet bool
 	var writeRetryBackoffSet bool
 	var endpointFailureCooldownSet bool
+	var readyMaxReadApplyLagSet bool
+	var readyMinReachableSet bool
+	var readyMinReadReadySet bool
 	var discoveryFlagState gatewayEndpointDiscoveryFlagState
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -243,6 +249,12 @@ func gatewayCmd(args []string) {
 			writeRetryBackoffSet = true
 		case "endpoint-failure-cooldown":
 			endpointFailureCooldownSet = true
+		case "ready-max-read-apply-lag":
+			readyMaxReadApplyLagSet = true
+		case "ready-min-reachable":
+			readyMinReachableSet = true
+		case "ready-min-read-ready":
+			readyMinReadReadySet = true
 		}
 	})
 
@@ -272,6 +284,21 @@ func gatewayCmd(args []string) {
 	}
 	gatewayWriteRetryBackoff := selectedGatewayWriteRetryBackoff(cfg, *writeRetryBackoff, writeRetryBackoffSet)
 	gatewayEndpointFailureCooldown := selectedGatewayEndpointFailureCooldown(cfg, *endpointFailureCooldown, endpointFailureCooldownSet)
+	gatewayReadyMaxReadApplyLag, err := selectedGatewayReadyMaxReadApplyLag(cfg, *readyMaxReadApplyLag, readyMaxReadApplyLagSet)
+	if err != nil {
+		log.Fatalf("gateway ready read apply lag: %v", err)
+	}
+	gatewayReadyMinReachable := selectedGatewayReadyMinReachable(cfg, *readyMinReachable, readyMinReachableSet)
+	gatewayReadyMinReadReady := selectedGatewayReadyMinReadReady(cfg, *readyMinReadReady, readyMinReadReadySet)
+	if gatewayReadyMinReachable < 0 {
+		log.Fatal("gateway ready min reachable must be non-negative")
+	}
+	if gatewayReadyMinReadReady < 0 {
+		log.Fatal("gateway ready min read ready must be non-negative")
+	}
+	if gatewayReadyMinReadReady > 0 && gatewayReadyMaxReadApplyLag == nil {
+		log.Fatal("gateway ready min read ready requires ready max read apply lag")
+	}
 	gatewayEndpointDiscovery := selectedGatewayEndpointDiscoveryOptions(cfg, gatewayEndpointDiscoveryOptions{
 		EndpointFile:  *endpointFile,
 		DNSSRVName:    *endpointDNSName,
@@ -300,7 +327,10 @@ func gatewayCmd(args []string) {
 	srv := &http.Server{
 		Addr: *listen,
 		Handler: server.NewGatewayHandler(gateway, server.HandlerOptions{
-			WriteConsistencyDefault: mustWriteConsistencyDefault(consistencyDefault),
+			WriteConsistencyDefault:     mustWriteConsistencyDefault(consistencyDefault),
+			GatewayReadyMinReachable:    gatewayReadyMinReachable,
+			GatewayReadyMaxReadApplyLag: gatewayReadyMaxReadApplyLag,
+			GatewayReadyMinReadReady:    gatewayReadyMinReadReady,
 		}),
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
@@ -357,6 +387,38 @@ func selectedGatewayMaxReadApplyLag(cfg serverconfig.Config, flagValue int64, fl
 	}
 	out := uint64(value)
 	return &out, nil
+}
+
+func selectedGatewayReadyMinReachable(cfg serverconfig.Config, flagValue int, flagSet bool) int {
+	if flagSet {
+		return flagValue
+	}
+	return cfg.GatewayReadyMinReachable
+}
+
+func selectedGatewayReadyMaxReadApplyLag(cfg serverconfig.Config, flagValue int64, flagSet bool) (*uint64, error) {
+	if !flagSet && cfg.GatewayReadyMaxReadApplyLag == nil {
+		return nil, nil
+	}
+	value := flagValue
+	if !flagSet {
+		value = *cfg.GatewayReadyMaxReadApplyLag
+	}
+	if value < -1 {
+		return nil, fmt.Errorf("ready max read apply lag must be -1 or non-negative")
+	}
+	if value == -1 {
+		return nil, nil
+	}
+	out := uint64(value)
+	return &out, nil
+}
+
+func selectedGatewayReadyMinReadReady(cfg serverconfig.Config, flagValue int, flagSet bool) int {
+	if flagSet {
+		return flagValue
+	}
+	return cfg.GatewayReadyMinReadReady
 }
 
 func selectedGatewayWriteRetryBackoff(
