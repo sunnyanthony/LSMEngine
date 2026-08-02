@@ -63,6 +63,7 @@ memtable_limit: 2048
 wal_max_segment_bytes: 4096
 wal_retain_archived_segments: 2
 wal_ready_max_checkpoint_lag: 64
+wal_backpressure_max_checkpoint_lag: 48
 flush_queue_size: 8
 flush_backpressure_queue_threshold: 6
 compaction_l0_threshold: 4
@@ -182,6 +183,9 @@ io_async_max_in_flight: 8
 	}
 	if cfg.WALReadyMaxCheckpointLag != 64 {
 		t.Fatalf("expected wal ready max checkpoint lag, got %d", cfg.WALReadyMaxCheckpointLag)
+	}
+	if cfg.WALBackpressureMaxCheckpointLag != 48 {
+		t.Fatalf("expected wal backpressure max checkpoint lag, got %d", cfg.WALBackpressureMaxCheckpointLag)
 	}
 	if cfg.FlushQueueSize != 8 {
 		t.Fatalf("expected flush queue size, got %d", cfg.FlushQueueSize)

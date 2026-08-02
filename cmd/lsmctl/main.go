@@ -148,6 +148,7 @@ func serveCmd(args []string) {
 		WALMaxSegmentBytes:                cfg.WALMaxSegmentBytes,
 		WALRetainArchivedSegments:         cfg.WALRetainArchivedSegments,
 		WALReadyMaxCheckpointLag:          cfg.WALReadyMaxCheckpointLag,
+		WALBackpressureMaxCheckpointLag:   cfg.WALBackpressureMaxCheckpointLag,
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,
@@ -640,6 +641,8 @@ func writeStats(w io.Writer, stats lsm.Stats) {
 	fmt.Fprintf(w, "write_backpressure_flush_queue_threshold=%d\n", stats.WriteBackpressure.FlushQueueThreshold)
 	fmt.Fprintf(w, "write_backpressure_compaction_l0_threshold=%d\n", stats.WriteBackpressure.CompactionL0Threshold)
 	fmt.Fprintf(w, "write_backpressure_compaction_l0_tables=%d\n", stats.WriteBackpressure.CompactionL0TableCount)
+	fmt.Fprintf(w, "write_backpressure_wal_checkpoint_lag=%d\n", stats.WriteBackpressure.WALCheckpointLag)
+	fmt.Fprintf(w, "write_backpressure_wal_checkpoint_lag_limit=%d\n", stats.WriteBackpressure.WALCheckpointLagLimit)
 	fmt.Fprintf(w, "wal_segment_id=%d\n", stats.WAL.SegmentID)
 	fmt.Fprintf(w, "wal_segments=%d\n", stats.WAL.SegmentCount)
 	fmt.Fprintf(w, "wal_archived_segments=%d\n", stats.WAL.ArchivedSegmentCount)
@@ -649,6 +652,7 @@ func writeStats(w io.Writer, stats lsm.Stats) {
 	fmt.Fprintf(w, "wal_checkpoint_seq=%d\n", stats.WAL.CheckpointSeq)
 	fmt.Fprintf(w, "wal_checkpoint_lag=%d\n", stats.WAL.CheckpointLag)
 	fmt.Fprintf(w, "wal_ready_max_checkpoint_lag=%d\n", stats.WAL.ReadyMaxCheckpointLag)
+	fmt.Fprintf(w, "wal_backpressure_max_checkpoint_lag=%d\n", stats.WAL.BackpressureMaxCheckpointLag)
 	fmt.Fprintf(w, "wal_max_segment_bytes=%d\n", stats.WAL.MaxSegmentBytes)
 	fmt.Fprintf(w, "wal_retain_archived_segments=%d\n", stats.WAL.RetainArchivedSegments)
 	fmt.Fprintf(w, "wal_block_size=%d\n", stats.WAL.BlockSize)

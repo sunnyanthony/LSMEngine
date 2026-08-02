@@ -9,6 +9,7 @@ const (
 	writeBackpressureReasonFlushBlocked = "flush_blocked"
 	writeBackpressureReasonFlushQueue   = "flush_queue"
 	writeBackpressureReasonL0           = "l0_compaction_pressure"
+	writeBackpressureReasonWAL          = "wal_checkpoint_lag"
 )
 
 type writeBackpressureSnapshot struct {
@@ -18,6 +19,8 @@ type writeBackpressureSnapshot struct {
 	queueLimit   int
 	l0Limit      int
 	l0TableCount int
+	walLagLimit  uint64
+	walLag       uint64
 }
 
 func (s *writeService) admitWrite(delta int) error {
@@ -43,6 +46,8 @@ func (l *LSM) writeBackpressureSnapshot() writeBackpressureSnapshot {
 		queueLimit:   l.flushBackpressureQueueThreshold,
 		l0Limit:      l.compactionBackpressureL0Threshold,
 		l0TableCount: l.l0TableCount(),
+		walLagLimit:  l.walBackpressureMaxCheckpointLag,
+		walLag:       l.walCheckpointLag(),
 	}
 }
 
@@ -80,6 +85,10 @@ func (l *LSM) writeBackpressureReason(admission bool, delta int) string {
 		if !admission || wouldFlush {
 			return writeBackpressureReasonL0
 		}
+	}
+	walLimit := l.walBackpressureMaxCheckpointLag
+	if walLimit > 0 && l.walCheckpointLag() > walLimit {
+		return writeBackpressureReasonWAL
 	}
 	if !admission || !wouldFlush {
 		return ""
