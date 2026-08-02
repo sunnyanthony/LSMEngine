@@ -35,7 +35,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - Reports LSM-owned compatibility versions through cluster status so rolling upgrade tooling can detect mixed incompatible nodes before membership changes.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.
   - Tracks node-local control `revision` and applied `operation_id` fingerprints for optimistic concurrency plus bounded idempotent retry dedupe.
-- `cmd/lsmctl`: server mode, remote/local point `get` / `put` / `delete`, plus stats and health commands.
+- `cmd/lsmctl`: server mode, remote/local point `get` / `put` / `delete`, CDC inspection, plus stats and health commands.
 
 ## Internal modules (by responsibility)
 - `internal/lsm/memory`: entry ownership, arenas, buffer pools.

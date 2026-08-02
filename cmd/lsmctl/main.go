@@ -56,6 +56,10 @@ func main() {
 		asyncDeleteCmd(os.Args[2:])
 	case "write-status":
 		writeStatusCmd(os.Args[2:])
+	case "cdc-status":
+		cdcStatusCmd(os.Args[2:])
+	case "cdc-events":
+		cdcEventsCmd(os.Args[2:])
 	case "cluster-status":
 		clusterStatusCmd(os.Args[2:])
 	case "wait-cluster":
@@ -95,7 +99,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|snapshot-export|snapshot-restore|compact|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|gateway|gateway-status|wait-gateway|get|range|put|delete|async-put|async-delete|write-status|cdc-status|cdc-events|cluster-status|wait-cluster|drain-node|resume-node|raft-add-node|raft-remove-node|shard-add-replica|shard-remove-replica|replace-node|replacement-plan|replacement-apply|snapshot-export|snapshot-restore|compact|stats|health> [options]")
 }
 
 func serveCmd(args []string) {
@@ -724,6 +728,25 @@ type kvRangeEntry struct {
 	Seq         uint64 `json:"seq"`
 }
 
+type cdcReadResult struct {
+	ShardID       string           `json:"shard_id"`
+	FromOffset    uint64           `json:"from_offset"`
+	NextOffset    uint64           `json:"next_offset"`
+	OldestOffset  uint64           `json:"oldest_offset"`
+	StartOffset   uint64           `json:"start_offset"`
+	DroppedBefore bool             `json:"dropped_before"`
+	Events        []cdcEventResult `json:"events"`
+}
+
+type cdcEventResult struct {
+	Offset      uint64    `json:"offset"`
+	Operation   string    `json:"operation"`
+	KeyBase64   string    `json:"key_base64,omitempty"`
+	ValueBase64 string    `json:"value_base64,omitempty"`
+	Tombstone   bool      `json:"tombstone,omitempty"`
+	CommittedAt time.Time `json:"committed_at"`
+}
+
 type kvWriteRequest struct {
 	KeyBase64   string               `json:"key_base64"`
 	ValueBase64 string               `json:"value_base64,omitempty"`
@@ -1249,6 +1272,63 @@ func writeStatusCmd(args []string) {
 		log.Fatal(err)
 	}
 	writeKVStatus(os.Stdout, status, *jsonOut)
+}
+
+func cdcStatusCmd(args []string) {
+	fs := flag.NewFlagSet("cdc-status", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	status, err := readCDCStatus(*addr, *dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, status)
+		return
+	}
+	writeCDCStatus(os.Stdout, status)
+}
+
+func cdcEventsCmd(args []string) {
+	fs := flag.NewFlagSet("cdc-events", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	dataDir := fs.String("data-dir", "", "data directory")
+	addr := fs.String("addr", "", "http address for server mode")
+	shardID := fs.String("shard", "", "shard id; omitted uses the server default when exactly one shard is known")
+	offset := fs.Uint64("offset", 0, "read events after this offset")
+	limit := fs.Int("limit", 0, "maximum events to return; 0 uses server default")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	cfg := loadConfigOrExit(*configPath)
+	if *addr == "" {
+		*addr = cfg.Addr
+	}
+	if *dataDir == "" {
+		*dataDir = cfg.DataDir
+	}
+	result, err := readCDCEvents(*addr, *dataDir, *shardID, *offset, *limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *jsonOut {
+		writeJSON(os.Stdout, result)
+		return
+	}
+	writeCDCEvents(os.Stdout, result)
 }
 
 func clusterStatusCmd(args []string) {
@@ -1846,6 +1926,76 @@ func readHealth(addr, dataDir string, ready bool) (lsm.Health, error) {
 	}
 	defer store.Close()
 	return store.Health(), nil
+}
+
+func readCDCStatus(addr, dataDir string) (lsm.CDCStatus, error) {
+	if addr != "" {
+		var status lsm.CDCStatus
+		if err := getJSON(normalizeHTTPBaseURL(addr)+"/cdc/status", &status); err != nil {
+			return lsm.CDCStatus{}, err
+		}
+		return status, nil
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return lsm.CDCStatus{}, err
+	}
+	defer store.Close()
+	return store.CDCStatus(), nil
+}
+
+func readCDCEvents(addr, dataDir string, shardID string, offset uint64, limit int) (cdcReadResult, error) {
+	if addr != "" {
+		query := url.Values{}
+		if strings.TrimSpace(shardID) != "" {
+			query.Set("shard", strings.TrimSpace(shardID))
+		}
+		query.Set("offset", strconv.FormatUint(offset, 10))
+		if limit > 0 {
+			query.Set("limit", strconv.Itoa(limit))
+		}
+		var result cdcReadResult
+		if err := getJSON(normalizeHTTPBaseURL(addr)+"/cdc/events?"+query.Encode(), &result); err != nil {
+			return cdcReadResult{}, err
+		}
+		if result.Events == nil {
+			result.Events = []cdcEventResult{}
+		}
+		return result, nil
+	}
+	store, err := openLocal(dataDir)
+	if err != nil {
+		return cdcReadResult{}, err
+	}
+	defer store.Close()
+	result, err := store.ReadCDCEvents(shardID, offset, limit)
+	if err != nil {
+		return cdcReadResult{}, err
+	}
+	return cdcReadResultFromEngine(result), nil
+}
+
+func cdcReadResultFromEngine(result lsm.CDCReadResult) cdcReadResult {
+	out := cdcReadResult{
+		ShardID:       result.ShardID,
+		FromOffset:    result.FromOffset,
+		NextOffset:    result.NextOffset,
+		OldestOffset:  result.OldestOffset,
+		StartOffset:   result.StartOffset,
+		DroppedBefore: result.DroppedBefore,
+		Events:        make([]cdcEventResult, 0, len(result.Events)),
+	}
+	for _, event := range result.Events {
+		out.Events = append(out.Events, cdcEventResult{
+			Offset:      event.Offset,
+			Operation:   event.Operation,
+			KeyBase64:   base64.StdEncoding.EncodeToString(event.Key),
+			ValueBase64: base64.StdEncoding.EncodeToString(event.Value),
+			Tombstone:   event.Tombstone,
+			CommittedAt: event.CommittedAt,
+		})
+	}
+	return out
 }
 
 func readKV(addr, dataDir string, key []byte) (kvGetResult, error) {
@@ -4091,6 +4241,74 @@ func writeKVRange(w io.Writer, result kvRangeResult) {
 	if result.Truncated {
 		fmt.Fprintf(w, "truncated=true limit=%d\n", result.Limit)
 	}
+}
+
+func writeCDCStatus(w io.Writer, status lsm.CDCStatus) {
+	fmt.Fprintf(w, "durable=%v\n", status.Durable)
+	fmt.Fprintf(w, "source=%s\n", status.Source)
+	fmt.Fprintf(w, "replay_on_restart=%v\n", status.ReplayOnRestart)
+	fmt.Fprintf(w, "start_offset=%d\n", status.StartOffset)
+	fmt.Fprintf(w, "max_events_per_shard=%d\n", status.MaxEventsPerShard)
+	for _, shard := range status.Shards {
+		fmt.Fprintf(
+			w,
+			"shard=%s start_offset=%d oldest_offset=%d next_offset=%d retained_events=%d\n",
+			shard.ShardID,
+			shard.StartOffset,
+			shard.OldestOffset,
+			shard.NextOffset,
+			shard.RetainedEvents,
+		)
+	}
+}
+
+func writeCDCEvents(w io.Writer, result cdcReadResult) {
+	fmt.Fprintf(
+		w,
+		"shard=%s from_offset=%d next_offset=%d oldest_offset=%d start_offset=%d dropped_before=%v events=%d\n",
+		result.ShardID,
+		result.FromOffset,
+		result.NextOffset,
+		result.OldestOffset,
+		result.StartOffset,
+		result.DroppedBefore,
+		len(result.Events),
+	)
+	for _, event := range result.Events {
+		writeCDCEvent(w, event)
+	}
+}
+
+func writeCDCEvent(w io.Writer, event cdcEventResult) {
+	key, keyOK := decodeBase64Text(event.KeyBase64)
+	value, valueOK := decodeBase64Text(event.ValueBase64)
+	fmt.Fprintf(w, "offset=%d operation=%s", event.Offset, event.Operation)
+	if keyOK {
+		fmt.Fprintf(w, " key=%s", key)
+	} else if event.KeyBase64 != "" {
+		fmt.Fprintf(w, " key_base64=%s", event.KeyBase64)
+	}
+	if valueOK {
+		fmt.Fprintf(w, " value=%s", value)
+	} else if event.ValueBase64 != "" {
+		fmt.Fprintf(w, " value_base64=%s", event.ValueBase64)
+	}
+	fmt.Fprintf(w, " tombstone=%v", event.Tombstone)
+	if !event.CommittedAt.IsZero() {
+		fmt.Fprintf(w, " committed_at=%s", event.CommittedAt.Format(time.RFC3339Nano))
+	}
+	fmt.Fprintln(w)
+}
+
+func decodeBase64Text(encoded string) (string, bool) {
+	if encoded == "" {
+		return "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", false
+	}
+	return string(decoded), true
 }
 
 func normalizeHTTPBaseURL(raw string) string {

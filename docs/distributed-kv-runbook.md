@@ -133,6 +133,14 @@ The useful fields are:
   and periodic compaction check interval so alerts can compare pressure against
   policy. Use it for per-node monitoring;
   it is not a cluster-wide durability or replication health summary.
+- `lsmctl cdc-status --addr <node-url>` prints the node-local CDC source,
+  durability, retention capacity, `start_offset`, and per-shard retained
+  windows. Current CDC is `source=memory`, `durable=false`, and
+  `replay_on_restart=false`.
+- `lsmctl cdc-events --addr <node-url> --shard <id> --offset <n>` prints
+  retained CDC events after an offset. Use `start_offset` and
+  `dropped_before` to detect retention overflow, restart, or state-snapshot
+  restore gaps; resync through normal KV reads when a gap is reported.
 - `POST /compact` and `lsmctl compact --addr <node-url>` wake one node's local
   compaction runtime. This is useful after inspecting L0/table pressure, but it
   does not bypass the planner's configured policy and is not a cluster-wide
@@ -150,6 +158,8 @@ go run ./cmd/lsmctl put --addr http://127.0.0.1:8080 --key user:1 --value alice
 go run ./cmd/lsmctl get --addr http://127.0.0.1:8081 --key user:1
 go run ./cmd/lsmctl range --addr http://127.0.0.1:8082 --start user: --end user~ --limit 10
 go run ./cmd/lsmctl delete --addr http://127.0.0.1:8080 --key user:1
+go run ./cmd/lsmctl cdc-status --addr http://127.0.0.1:8080
+go run ./cmd/lsmctl cdc-events --addr http://127.0.0.1:8080 --shard default --offset 0 --limit 10
 go run ./cmd/lsmctl compact --addr http://127.0.0.1:8080
 ```
 

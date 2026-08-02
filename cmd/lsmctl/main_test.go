@@ -75,6 +75,152 @@ func TestReadHealthRemoteCanUseReadinessEndpoint(t *testing.T) {
 	}
 }
 
+func TestReadCDCStatusRemote(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cdc/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.CDCStatus{
+			Durable:           false,
+			Source:            lsm.CDCSourceMemory,
+			ReplayOnRestart:   false,
+			StartOffset:       7,
+			MaxEventsPerShard: 128,
+			Shards: []lsm.CDCShardStatus{
+				{ShardID: "default", StartOffset: 7, OldestOffset: 8, NextOffset: 9, RetainedEvents: 1},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := readCDCStatus(srv.URL, "")
+	if err != nil {
+		t.Fatalf("read cdc status: %v", err)
+	}
+	if got.Source != lsm.CDCSourceMemory || got.StartOffset != 7 || got.MaxEventsPerShard != 128 {
+		t.Fatalf("unexpected cdc status: %+v", got)
+	}
+	if len(got.Shards) != 1 || got.Shards[0].ShardID != "default" || got.Shards[0].StartOffset != 7 {
+		t.Fatalf("unexpected cdc shard status: %+v", got.Shards)
+	}
+}
+
+func TestReadCDCEventsRemote(t *testing.T) {
+	committedAt := time.Unix(1700000000, 0).UTC()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cdc/events" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("shard"); got != "users" {
+			t.Fatalf("unexpected shard %q", got)
+		}
+		if got := r.URL.Query().Get("offset"); got != "3" {
+			t.Fatalf("unexpected offset %q", got)
+		}
+		if got := r.URL.Query().Get("limit"); got != "2" {
+			t.Fatalf("unexpected limit %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(cdcReadResult{
+			ShardID:       "users",
+			FromOffset:    3,
+			NextOffset:    4,
+			OldestOffset:  4,
+			StartOffset:   1,
+			DroppedBefore: true,
+			Events: []cdcEventResult{
+				{
+					Offset:      4,
+					Operation:   "put",
+					KeyBase64:   base64.StdEncoding.EncodeToString([]byte("a")),
+					ValueBase64: base64.StdEncoding.EncodeToString([]byte("1")),
+					CommittedAt: committedAt,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := readCDCEvents(srv.URL, "", "users", 3, 2)
+	if err != nil {
+		t.Fatalf("read cdc events: %v", err)
+	}
+	if got.ShardID != "users" || got.StartOffset != 1 || !got.DroppedBefore {
+		t.Fatalf("unexpected cdc read metadata: %+v", got)
+	}
+	if len(got.Events) != 1 || got.Events[0].KeyBase64 != base64.StdEncoding.EncodeToString([]byte("a")) {
+		t.Fatalf("unexpected cdc events: %+v", got.Events)
+	}
+}
+
+func TestReadCDCEventsLocal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := lsm.New(lsm.Options{DataDir: dir})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if _, err := store.PutWithSeq([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	got, err := readCDCEvents("", dir, "default", 0, 10)
+	if err != nil {
+		t.Fatalf("read local cdc events: %v", err)
+	}
+	if !got.DroppedBefore || got.StartOffset == 0 {
+		t.Fatalf("expected local reopen to report restart baseline, got %+v", got)
+	}
+	if len(got.Events) != 0 {
+		t.Fatalf("expected local reopen to have no in-memory events, got %+v", got.Events)
+	}
+}
+
+func TestWriteCDCInspectionOutput(t *testing.T) {
+	var statusBuf bytes.Buffer
+	writeCDCStatus(&statusBuf, lsm.CDCStatus{
+		Durable:           false,
+		Source:            lsm.CDCSourceMemory,
+		StartOffset:       7,
+		MaxEventsPerShard: 128,
+		Shards: []lsm.CDCShardStatus{
+			{ShardID: "default", StartOffset: 7, OldestOffset: 8, NextOffset: 9, RetainedEvents: 1},
+		},
+	})
+	statusOut := statusBuf.String()
+	for _, want := range []string{
+		"source=memory",
+		"start_offset=7",
+		"shard=default start_offset=7 oldest_offset=8 next_offset=9 retained_events=1",
+	} {
+		if !strings.Contains(statusOut, want) {
+			t.Fatalf("expected status output to contain %q, got:\n%s", want, statusOut)
+		}
+	}
+
+	var eventsBuf bytes.Buffer
+	writeCDCEvents(&eventsBuf, cdcReadResult{
+		ShardID:      "default",
+		FromOffset:   0,
+		NextOffset:   8,
+		OldestOffset: 8,
+		StartOffset:  7,
+		Events: []cdcEventResult{
+			{Offset: 8, Operation: "put", KeyBase64: base64.StdEncoding.EncodeToString([]byte("k")), ValueBase64: base64.StdEncoding.EncodeToString([]byte("v"))},
+		},
+	})
+	eventsOut := eventsBuf.String()
+	for _, want := range []string{
+		"shard=default from_offset=0 next_offset=8 oldest_offset=8 start_offset=7 dropped_before=false events=1",
+		"offset=8 operation=put key=k value=v tombstone=false",
+	} {
+		if !strings.Contains(eventsOut, want) {
+			t.Fatalf("expected events output to contain %q, got:\n%s", want, eventsOut)
+		}
+	}
+}
+
 func TestParseWriteConsistencyDefault(t *testing.T) {
 	tests := []struct {
 		name    string
