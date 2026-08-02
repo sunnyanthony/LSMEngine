@@ -74,6 +74,13 @@ func TestStateSnapshotRestoresVisibleDataAndControlToEmptyEngine(t *testing.T) {
 	if target.commitLogAppliedIndex != source.commitLogAppliedIndex {
 		t.Fatalf("expected applied index %d, got %d", source.commitLogAppliedIndex, target.commitLogAppliedIndex)
 	}
+	cdcResult, err := target.ReadCDCEvents("users", 0, 10)
+	if err != nil {
+		t.Fatalf("read target cdc events: %v", err)
+	}
+	if !cdcResult.DroppedBefore || cdcResult.StartOffset != source.seq || len(cdcResult.Events) != 0 {
+		t.Fatalf("expected restored snapshot to signal cdc baseline %d, got %+v", source.seq, cdcResult)
+	}
 	if err := target.Close(); err != nil {
 		t.Fatalf("close target: %v", err)
 	}
@@ -216,6 +223,13 @@ func TestRaftStateSnapshotResetsNonEmptyEngine(t *testing.T) {
 	}
 	if target.commitLogAppliedIndex != source.commitLogAppliedIndex {
 		t.Fatalf("expected applied index %d, got %d", source.commitLogAppliedIndex, target.commitLogAppliedIndex)
+	}
+	cdcResult, err := target.ReadCDCEvents("default", 0, 10)
+	if err != nil {
+		t.Fatalf("read target cdc events: %v", err)
+	}
+	if !cdcResult.DroppedBefore || cdcResult.StartOffset != source.seq || len(cdcResult.Events) != 0 {
+		t.Fatalf("expected reset snapshot to signal cdc baseline %d, got %+v", source.seq, cdcResult)
 	}
 	if err := target.Close(); err != nil {
 		t.Fatalf("close target: %v", err)

@@ -36,13 +36,16 @@ type CDCReadResult struct {
 	// NextOffset is the exclusive cursor clients should send as the next request offset.
 	NextOffset    uint64     `json:"next_offset"`
 	OldestOffset  uint64     `json:"oldest_offset"`
+	StartOffset   uint64     `json:"start_offset"`
 	DroppedBefore bool       `json:"dropped_before"`
 	Events        []CDCEvent `json:"events"`
 }
 
 // CDCShardStatus describes the retained event window for one shard.
 type CDCShardStatus struct {
-	ShardID      string `json:"shard_id"`
+	ShardID string `json:"shard_id"`
+	// StartOffset is the last materialized sequence before this in-memory feed can be read.
+	StartOffset  uint64 `json:"start_offset"`
 	OldestOffset uint64 `json:"oldest_offset"`
 	// NextOffset is the latest retained exclusive cursor for ReadCDCEvents.
 	NextOffset     uint64 `json:"next_offset"`
@@ -51,17 +54,20 @@ type CDCShardStatus struct {
 
 // CDCStatus describes the CDC stream source and retention contract.
 type CDCStatus struct {
-	Durable           bool             `json:"durable"`
-	Source            string           `json:"source"`
-	ReplayOnRestart   bool             `json:"replay_on_restart"`
+	Durable         bool   `json:"durable"`
+	Source          string `json:"source"`
+	ReplayOnRestart bool   `json:"replay_on_restart"`
+	// StartOffset is the node-wide CDC baseline after recovery or snapshot restore.
+	StartOffset       uint64           `json:"start_offset"`
 	MaxEventsPerShard int              `json:"max_events_per_shard"`
 	Shards            []CDCShardStatus `json:"shards"`
 }
 
 type cdcStreamStore struct {
-	mu       sync.RWMutex
-	capacity int
-	shards   map[string][]CDCEvent
+	mu          sync.RWMutex
+	capacity    int
+	startOffset uint64
+	shards      map[string][]CDCEvent
 }
 
 func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
@@ -78,8 +84,9 @@ func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
 
 	seen := make(map[string]struct{}, len(knownShards))
 	s.mu.RLock()
+	out.StartOffset = s.startOffset
 	for shardID, stream := range s.shards {
-		out.Shards = append(out.Shards, cdcShardStatusFromStream(shardID, stream))
+		out.Shards = append(out.Shards, s.cdcShardStatusFromStreamLocked(shardID, stream))
 		seen[shardID] = struct{}{}
 	}
 	s.mu.RUnlock()
@@ -92,7 +99,12 @@ func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
 		if _, ok := seen[shardID]; ok {
 			continue
 		}
-		out.Shards = append(out.Shards, CDCShardStatus{ShardID: shardID})
+		out.Shards = append(out.Shards, CDCShardStatus{
+			ShardID:      shardID,
+			StartOffset:  out.StartOffset,
+			OldestOffset: firstAvailableCDCOffset(out.StartOffset),
+			NextOffset:   out.StartOffset,
+		})
 	}
 	sort.Slice(out.Shards, func(i, j int) bool {
 		return out.Shards[i].ShardID < out.Shards[j].ShardID
@@ -100,9 +112,12 @@ func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
 	return out
 }
 
-func cdcShardStatusFromStream(shardID string, stream []CDCEvent) CDCShardStatus {
+func (s *cdcStreamStore) cdcShardStatusFromStreamLocked(shardID string, stream []CDCEvent) CDCShardStatus {
 	out := CDCShardStatus{
 		ShardID:        shardID,
+		StartOffset:    s.startOffset,
+		OldestOffset:   firstAvailableCDCOffset(s.startOffset),
+		NextOffset:     s.startOffset,
 		RetainedEvents: len(stream),
 	}
 	if len(stream) == 0 {
@@ -135,12 +150,41 @@ func (s *cdcStreamStore) append(event CDCEvent) {
 	event.Value = append([]byte(nil), event.Value...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if event.Offset <= s.startOffset {
+		return
+	}
 	stream := append(s.shards[event.ShardID], event)
 	if len(stream) > s.capacity {
 		drop := len(stream) - s.capacity
 		stream = append([]CDCEvent(nil), stream[drop:]...)
 	}
 	s.shards[event.ShardID] = stream
+}
+
+func (s *cdcStreamStore) setStartOffset(offset uint64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offset <= s.startOffset {
+		return
+	}
+	s.startOffset = offset
+	for shardID, stream := range s.shards {
+		keepAt := 0
+		for keepAt < len(stream) && stream[keepAt].Offset <= offset {
+			keepAt++
+		}
+		if keepAt == 0 {
+			continue
+		}
+		if keepAt >= len(stream) {
+			delete(s.shards, shardID)
+			continue
+		}
+		s.shards[shardID] = append([]CDCEvent(nil), stream[keepAt:]...)
+	}
 }
 
 func (s *cdcStreamStore) read(shardID string, offset uint64, limit int) (CDCReadResult, error) {
@@ -155,14 +199,23 @@ func (s *cdcStreamStore) read(shardID string, offset uint64, limit int) (CDCRead
 
 	s.mu.RLock()
 	stream, ok := s.shards[shardID]
+	startOffset := s.startOffset
 	if !ok {
 		s.mu.RUnlock()
+		if offset < startOffset {
+			return cdcReadGapResult(shardID, offset, limit, startOffset), nil
+		}
 		return CDCReadResult{}, errs.ErrShardNotFound
 	}
 	copied := append([]CDCEvent(nil), stream...)
 	s.mu.RUnlock()
 
 	out := emptyCDCReadResult(shardID, offset, limit)
+	out.StartOffset = startOffset
+	if offset < startOffset {
+		out.DroppedBefore = true
+		out.OldestOffset = firstAvailableCDCOffset(startOffset)
+	}
 	if len(copied) == 0 {
 		return out, nil
 	}
@@ -184,6 +237,14 @@ func (s *cdcStreamStore) read(shardID string, offset uint64, limit int) (CDCRead
 	return out, nil
 }
 
+func cdcReadGapResult(shardID string, offset uint64, limit int, startOffset uint64) CDCReadResult {
+	out := emptyCDCReadResult(shardID, offset, limit)
+	out.StartOffset = startOffset
+	out.OldestOffset = firstAvailableCDCOffset(startOffset)
+	out.DroppedBefore = true
+	return out
+}
+
 func normalizeCDCReadLimit(limit int) int {
 	if limit <= 0 {
 		return defaultCDCReadLimit
@@ -202,6 +263,13 @@ func emptyCDCReadResult(shardID string, offset uint64, limit int) CDCReadResult 
 		NextOffset: offset,
 		Events:     make([]CDCEvent, 0, limit),
 	}
+}
+
+func firstAvailableCDCOffset(startOffset uint64) uint64 {
+	if startOffset == ^uint64(0) {
+		return startOffset
+	}
+	return startOffset + 1
 }
 
 func cloneCDCEvent(in CDCEvent) CDCEvent {
@@ -278,7 +346,23 @@ func (l *LSM) ReadCDCEvents(shardID string, offset uint64, limit int) (CDCReadRe
 		return result, nil
 	}
 	if knownShard && errors.Is(err, errs.ErrShardNotFound) {
-		return emptyCDCReadResult(shardID, offset, limit), nil
+		return l.cdc.emptyKnownShardResult(shardID, offset, limit), nil
 	}
 	return CDCReadResult{}, err
+}
+
+func (s *cdcStreamStore) emptyKnownShardResult(shardID string, offset uint64, limit int) CDCReadResult {
+	if s == nil {
+		return emptyCDCReadResult(shardID, offset, limit)
+	}
+	s.mu.RLock()
+	startOffset := s.startOffset
+	s.mu.RUnlock()
+	out := emptyCDCReadResult(shardID, offset, limit)
+	out.StartOffset = startOffset
+	if offset < startOffset {
+		out.DroppedBefore = true
+		out.OldestOffset = firstAvailableCDCOffset(startOffset)
+	}
+	return out
 }

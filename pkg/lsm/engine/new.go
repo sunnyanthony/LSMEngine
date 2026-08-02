@@ -176,6 +176,7 @@ func New(opts Options) (*LSM, error) {
 		cancel()
 		return nil, err
 	}
+	lsm.cdc.setStartOffset(lsm.seq)
 	lsm.commitLogAppliedIndex = lsm.initialCommitLogAppliedIndex()
 	if setter, ok := lsm.commitLog.(commitLogStateSnapshotterSetter); ok {
 		if err := setter.SetStateSnapshotter(lsmStateSnapshotter{l: lsm}); err != nil {

@@ -904,6 +904,7 @@ func TestHandlerCDCEvents(t *testing.T) {
 			FromOffset:    3,
 			NextOffset:    5,
 			OldestOffset:  2,
+			StartOffset:   1,
 			DroppedBefore: true,
 			Events: []lsm.CDCEvent{
 				{
@@ -939,7 +940,7 @@ func TestHandlerCDCEvents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.ShardID != "users" || out.NextOffset != 5 || !out.DroppedBefore {
+	if out.ShardID != "users" || out.NextOffset != 5 || out.StartOffset != 1 || !out.DroppedBefore {
 		t.Fatalf("unexpected cdc response metadata: %+v", out)
 	}
 	if len(out.Events) != 2 {
@@ -959,9 +960,10 @@ func TestHandlerCDCStatus(t *testing.T) {
 			Durable:           false,
 			Source:            lsm.CDCSourceMemory,
 			ReplayOnRestart:   false,
+			StartOffset:       1,
 			MaxEventsPerShard: 128,
 			Shards: []lsm.CDCShardStatus{
-				{ShardID: "users", OldestOffset: 2, NextOffset: 5, RetainedEvents: 4},
+				{ShardID: "users", StartOffset: 1, OldestOffset: 2, NextOffset: 5, RetainedEvents: 4},
 			},
 		},
 	}
@@ -976,10 +978,10 @@ func TestHandlerCDCStatus(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Durable || out.ReplayOnRestart || out.Source != lsm.CDCSourceMemory || out.MaxEventsPerShard != 128 {
+	if out.Durable || out.ReplayOnRestart || out.Source != lsm.CDCSourceMemory || out.StartOffset != 1 || out.MaxEventsPerShard != 128 {
 		t.Fatalf("unexpected cdc status metadata: %+v", out)
 	}
-	if len(out.Shards) != 1 || out.Shards[0].ShardID != "users" || out.Shards[0].NextOffset != 5 {
+	if len(out.Shards) != 1 || out.Shards[0].ShardID != "users" || out.Shards[0].StartOffset != 1 || out.Shards[0].NextOffset != 5 {
 		t.Fatalf("unexpected cdc shard status: %+v", out.Shards)
 	}
 }
