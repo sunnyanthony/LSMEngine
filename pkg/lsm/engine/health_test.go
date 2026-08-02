@@ -356,13 +356,20 @@ func TestTriggerCompactionRequestsRuntimeRun(t *testing.T) {
 		}
 	}()
 
-	before := store.Stats().CompactionRuntime.Triggers
+	waitForStats(t, func() bool {
+		stats := store.Stats().CompactionRuntime
+		return stats.Triggers > 0 && stats.Runs > 0 && stats.Steps > 0 && !stats.Running
+	})
+	before := store.Stats().CompactionRuntime
 	if err := store.TriggerCompaction(); err != nil {
 		t.Fatalf("trigger compaction: %v", err)
 	}
 	waitForStats(t, func() bool {
 		stats := store.Stats().CompactionRuntime
-		return stats.Triggers > before && stats.Runs > 0 && stats.Steps > 0
+		return stats.Triggers > before.Triggers &&
+			stats.Runs > before.Runs &&
+			stats.Steps > before.Steps &&
+			!stats.Running
 	})
 }
 
