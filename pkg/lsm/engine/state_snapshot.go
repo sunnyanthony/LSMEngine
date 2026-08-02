@@ -243,6 +243,7 @@ func (l *LSM) applyDecodedStateSnapshotToEmpty(snapshot lsmStateSnapshot) error 
 	}
 	l.observeCommittedSeq(snapshot.Seq)
 	l.markCommitLogAppliedLocked(snapshot.CommitLogAppliedIndex)
+	l.cdc.setStartOffset(snapshot.Seq)
 	return nil
 }
 
@@ -299,6 +300,7 @@ func (l *LSM) restoreSnapshotDataLocked(snapshot lsmStateSnapshot) error {
 		}
 	}
 	l.observeCommittedSeq(snapshot.Seq)
+	l.cdc.setStartOffset(snapshot.Seq)
 	return nil
 }
 

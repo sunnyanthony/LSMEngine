@@ -389,6 +389,7 @@ type cdcReadResponse struct {
 	FromOffset    uint64             `json:"from_offset"`
 	NextOffset    uint64             `json:"next_offset"`
 	OldestOffset  uint64             `json:"oldest_offset"`
+	StartOffset   uint64             `json:"start_offset"`
 	DroppedBefore bool               `json:"dropped_before"`
 	Events        []cdcEventResponse `json:"events"`
 }
@@ -406,6 +407,7 @@ type cdcStatusResponse struct {
 	Durable           bool                 `json:"durable"`
 	Source            string               `json:"source"`
 	ReplayOnRestart   bool                 `json:"replay_on_restart"`
+	StartOffset       uint64               `json:"start_offset"`
 	MaxEventsPerShard int                  `json:"max_events_per_shard"`
 	Shards            []lsm.CDCShardStatus `json:"shards"`
 }
@@ -493,6 +495,7 @@ func (h *handler) handleCDCEvents(w http.ResponseWriter, r *http.Request) {
 		FromOffset:    result.FromOffset,
 		NextOffset:    result.NextOffset,
 		OldestOffset:  result.OldestOffset,
+		StartOffset:   result.StartOffset,
 		DroppedBefore: result.DroppedBefore,
 		Events:        make([]cdcEventResponse, 0, len(result.Events)),
 	}
@@ -523,6 +526,7 @@ func (h *handler) handleCDCStatus(w http.ResponseWriter, r *http.Request) {
 		Durable:           status.Durable,
 		Source:            status.Source,
 		ReplayOnRestart:   status.ReplayOnRestart,
+		StartOffset:       status.StartOffset,
 		MaxEventsPerShard: status.MaxEventsPerShard,
 		Shards:            status.Shards,
 	})

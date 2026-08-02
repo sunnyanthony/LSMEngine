@@ -20,6 +20,7 @@ type cdcReadResponse struct {
 	FromOffset    uint64             `json:"from_offset"`
 	NextOffset    uint64             `json:"next_offset"`
 	OldestOffset  uint64             `json:"oldest_offset"`
+	StartOffset   uint64             `json:"start_offset"`
 	DroppedBefore bool               `json:"dropped_before"`
 	Events        []cdcEventResponse `json:"events"`
 }
@@ -36,6 +37,7 @@ type cdcStatusResponse struct {
 	Durable           bool                 `json:"durable"`
 	Source            string               `json:"source"`
 	ReplayOnRestart   bool                 `json:"replay_on_restart"`
+	StartOffset       uint64               `json:"start_offset"`
 	MaxEventsPerShard int                  `json:"max_events_per_shard"`
 	Shards            []lsm.CDCShardStatus `json:"shards"`
 }
@@ -62,7 +64,7 @@ func TestServerCDCEventsReturnsEmptyForKnownShardWithNoEvents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("decode cdc response: %v", err)
 	}
-	if out.ShardID != "default" || out.FromOffset != 7 || out.NextOffset != 7 {
+	if out.ShardID != "default" || out.FromOffset != 7 || out.NextOffset != 7 || out.StartOffset != 0 {
 		t.Fatalf("unexpected empty cdc response metadata: %+v", out)
 	}
 	if len(out.Events) != 0 {
@@ -111,6 +113,9 @@ func TestServerCDCStatusReportsMemoryRetention(t *testing.T) {
 	if out.MaxEventsPerShard != 1 {
 		t.Fatalf("expected retention 1, got %+v", out)
 	}
+	if out.StartOffset != 0 {
+		t.Fatalf("expected start offset 0, got %+v", out)
+	}
 	if len(out.Shards) != 1 || out.Shards[0].ShardID != "default" || out.Shards[0].RetainedEvents != 1 {
 		t.Fatalf("unexpected shard status: %+v", out.Shards)
 	}
@@ -130,6 +135,56 @@ func TestServerCDCStatusReportsMemoryRetention(t *testing.T) {
 	}
 	if len(events.Events) != 0 || events.NextOffset != out.Shards[0].NextOffset {
 		t.Fatalf("expected status cursor to read no duplicate events, got %+v", events)
+	}
+}
+
+func TestServerCDCEventsSignalRestartGap(t *testing.T) {
+	dir := t.TempDir()
+	store, err := lsm.New(lsm.Options{DataDir: dir})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	handler := server.NewHandler(store)
+
+	putReqBody := bytes.NewBufferString(`{"key_base64":"` + base64.StdEncoding.EncodeToString([]byte("k")) + `","value_base64":"` + base64.StdEncoding.EncodeToString([]byte("v")) + `","consistency":"local_committed"}`)
+	putReq := httptest.NewRequest(http.MethodPost, "/kv/put", putReqBody)
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected put status 200, got %d (%s)", putRec.Code, putRec.Body.String())
+	}
+	var putOut struct {
+		Seq uint64 `json:"seq"`
+	}
+	if err := json.NewDecoder(putRec.Body).Decode(&putOut); err != nil {
+		t.Fatalf("decode put response: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	restarted, err := lsm.New(lsm.Options{DataDir: dir})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer restarted.Close()
+	handler = server.NewHandler(restarted)
+
+	req := httptest.NewRequest(http.MethodGet, "/cdc/events?shard=default&offset=0&limit=10", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected cdc status 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var out cdcReadResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode cdc response: %v", err)
+	}
+	if !out.DroppedBefore || out.StartOffset != putOut.Seq || out.OldestOffset != putOut.Seq+1 {
+		t.Fatalf("expected restart gap after seq %d, got %+v", putOut.Seq, out)
+	}
+	if len(out.Events) != 0 {
+		t.Fatalf("expected no retained events after restart, got %+v", out.Events)
 	}
 }
 
