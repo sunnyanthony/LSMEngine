@@ -31,12 +31,12 @@ and CLI operator commands on the same endpoint-file contract.
 examples/docker-compose-cluster/smoke.sh
 ```
 
-The script builds the server image, waits for all three health endpoints, writes
-and deletes a key through cluster-aware `lsmctl`, waits for all nodes to apply
-the committed write/delete sequence using `wait-cluster` with
-`--min-applied-index`, requires matching compatibility versions with
-`--require-compatible`, and tears the cluster down unless `LSM_COMPOSE_KEEP=1`
-is set.
+The script builds the server image, waits for all three health endpoints,
+writes, reads, checks node-local CDC inspection output, and deletes a key
+through cluster-aware `lsmctl`. It waits for all nodes to apply the committed
+write/delete sequence using `wait-cluster` with `--min-applied-index`, requires
+matching compatibility versions with `--require-compatible`, and tears the
+cluster down unless `LSM_COMPOSE_KEEP=1` is set.
 
 Useful environment overrides:
 

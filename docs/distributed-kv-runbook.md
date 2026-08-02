@@ -36,8 +36,9 @@ examples/docker-compose-cluster/smoke.sh
 
 The script builds the server image, starts node-a/node-b/node-c, waits for
 `/healthz`, waits for cluster readiness, writes with cluster-aware
-`local_committed` routing, verifies follower reads and range reads, deletes the
-key, then tears the cluster down.
+`local_committed` routing, verifies follower reads and range reads, checks
+node-local CDC inspection output for the committed put/delete, deletes the key,
+then tears the cluster down.
 
 The Compose server configs use `raft.peer_url_file` mounted at
 `/etc/lsm/peer-urls.yaml` for peer transport. The rolling restart and
