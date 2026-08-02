@@ -312,6 +312,20 @@ just process liveness. The smoke covers point reads, range scans, committed
 writes/deletes, accepted writes/deletes, and accepted write-status lookup through
 the single gateway endpoint.
 
+The Compose gateway defaults to leader read mode, but the same smoke can run the
+gateway in any-mode adaptive reads:
+
+```bash
+LSM_GATEWAY_READ_MODE=any \
+LSM_GATEWAY_READ_BALANCE_POLICY=adaptive \
+LSM_GATEWAY_MAX_READ_APPLY_LAG=2 \
+examples/docker-compose-cluster/gateway-smoke.sh
+```
+
+The smoke waits for committed writes to apply on all three nodes before reading,
+so this validates deploy-time read policy wiring without claiming linearizable
+follower reads.
+
 ## Rolling Restart Check
 
 The integration suite covers this workflow with real `lsmctl serve` processes:
