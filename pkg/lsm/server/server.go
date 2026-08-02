@@ -28,8 +28,11 @@ func NewHandler(provider lsm.StatsProvider) http.Handler {
 
 // HandlerOptions controls server API behavior.
 type HandlerOptions struct {
-	WriteConsistencyDefault lsm.WriteConsistency
-	MaxWriteRequests        int
+	WriteConsistencyDefault     lsm.WriteConsistency
+	MaxWriteRequests            int
+	GatewayReadyMinReachable    int
+	GatewayReadyMaxReadApplyLag *uint64
+	GatewayReadyMinReadReady    int
 }
 
 type writeSeqProvider interface {
@@ -131,8 +134,11 @@ const defaultRangeLimit = 100
 const maxRangeLimit = 1000
 
 type resolvedHandlerOptions struct {
-	writeConsistencyDefault lsm.WriteConsistency
-	maxWriteRequests        int
+	writeConsistencyDefault     lsm.WriteConsistency
+	maxWriteRequests            int
+	gatewayReadyMinReachable    int
+	gatewayReadyMaxReadApplyLag *uint64
+	gatewayReadyMinReadReady    int
 }
 
 func resolveHandlerOptions(opts HandlerOptions) resolvedHandlerOptions {
@@ -144,9 +150,20 @@ func resolveHandlerOptions(opts HandlerOptions) resolvedHandlerOptions {
 	if max <= 0 {
 		max = defaultWriteRequestCapacity
 	}
+	minReachable := opts.GatewayReadyMinReachable
+	if minReachable < 0 {
+		minReachable = 0
+	}
+	minReadReady := opts.GatewayReadyMinReadReady
+	if minReadReady < 0 {
+		minReadReady = 0
+	}
 	return resolvedHandlerOptions{
-		writeConsistencyDefault: consistency,
-		maxWriteRequests:        max,
+		writeConsistencyDefault:     consistency,
+		maxWriteRequests:            max,
+		gatewayReadyMinReachable:    minReachable,
+		gatewayReadyMaxReadApplyLag: cloneUint64Ptr(opts.GatewayReadyMaxReadApplyLag),
+		gatewayReadyMinReadReady:    minReadReady,
 	}
 }
 

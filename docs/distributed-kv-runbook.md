@@ -299,6 +299,16 @@ than one read-ready node cannot succeed in that mode. When the max lag gate is e
 omitted or `0`, the wait requires at least one read-ready backend. This is an
 operator/status gate only and does not change gateway read routing.
 
+The same checks can be applied to gateway `/readyz`:
+
+```bash
+go run ./cmd/lsmctl gateway --ready-min-reachable <n> --ready-max-read-apply-lag <n> --ready-min-read-ready <n>
+```
+
+The matching `gateway_ready_*` config keys provide the same behavior, so external
+supervisors can use one healthcheck instead of a separate wait loop.
+These are operator/status gates only and do not change gateway read routing.
+
 The gateway keeps short-lived backend endpoint health state: transport failures
 and 5xx responses put an endpoint behind healthy endpoints for a cooldown
 window, while successful probes clear that state. Tune the window with

@@ -21,6 +21,9 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 	handler := &gatewayHandler{
 		gateway:                 gateway,
 		writeConsistencyDefault: resolved.writeConsistencyDefault,
+		readyMinReachable:       resolved.gatewayReadyMinReachable,
+		readyMaxReadApplyLag:    resolved.gatewayReadyMaxReadApplyLag,
+		readyMinReadReady:       resolved.gatewayReadyMinReadReady,
 	}
 	mux.HandleFunc("/healthz", handler.handleHealth)
 	mux.HandleFunc("/readyz", handler.handleReady)
@@ -37,6 +40,9 @@ func NewGatewayHandler(gateway *Gateway, opts HandlerOptions) http.Handler {
 type gatewayHandler struct {
 	gateway                 *Gateway
 	writeConsistencyDefault lsm.WriteConsistency
+	readyMinReachable       int
+	readyMaxReadApplyLag    *uint64
+	readyMinReadReady       int
 }
 
 func (h *gatewayHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +87,48 @@ func (h *gatewayHandler) handleReady(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if h.readyMinReachable > 0 && status.ReachableNodes < h.readyMinReachable {
+		writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
+			Ready:  false,
+			Reason: "gateway_reachable_nodes_below_min",
+		})
+		return
+	}
+	if h.readyMaxReadApplyLag != nil {
+		minReadReady := h.readyMinReadReady
+		if minReadReady == 0 {
+			minReadReady = 1
+		}
+		if gatewayReadReadyNodes(status.Nodes, *h.readyMaxReadApplyLag) < minReadReady {
+			writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
+				Ready:  false,
+				Reason: "gateway_read_ready_nodes_below_min",
+			})
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, lsm.Health{Ready: true})
+}
+
+func gatewayReadReadyNodes(nodes []GatewayClusterNodeStatus, maxApplyLag uint64) int {
+	count := 0
+	for _, node := range nodes {
+		if !node.OK || node.Status == nil {
+			continue
+		}
+		if !commitLogRuntimeReadReady(node.Status.CommitLogRuntime.Health) {
+			continue
+		}
+		if node.Status.CommitLogRuntime.ApplyLag <= maxApplyLag {
+			count++
+		}
+	}
+	return count
+}
+
+func commitLogRuntimeReadReady(health string) bool {
+	health = strings.TrimSpace(health)
+	return health == "ready" || health == "follower"
 }
 
 func (h *gatewayHandler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {

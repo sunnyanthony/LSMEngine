@@ -56,6 +56,9 @@ gateway_endpoint_dns_name: "lsm-cluster.lsm-cluster.svc.cluster.local"
 gateway_endpoint_dns_service: "http"
 gateway_endpoint_dns_proto: "tcp"
 gateway_endpoint_dns_scheme: "http"
+gateway_ready_min_reachable: 2
+gateway_ready_max_read_apply_lag: 4
+gateway_ready_min_read_ready: 2
 memtable_limit: 2048
 wal_max_segment_bytes: 4096
 wal_retain_archived_segments: 2
@@ -156,6 +159,15 @@ io_async_max_in_flight: 8
 	}
 	if cfg.GatewayEndpointDNSScheme != "http" {
 		t.Fatalf("expected gateway endpoint dns scheme, got %q", cfg.GatewayEndpointDNSScheme)
+	}
+	if cfg.GatewayReadyMinReachable != 2 {
+		t.Fatalf("expected gateway ready min reachable, got %d", cfg.GatewayReadyMinReachable)
+	}
+	if cfg.GatewayReadyMaxReadApplyLag == nil || *cfg.GatewayReadyMaxReadApplyLag != 4 {
+		t.Fatalf("expected gateway ready max read apply lag, got %v", cfg.GatewayReadyMaxReadApplyLag)
+	}
+	if cfg.GatewayReadyMinReadReady != 2 {
+		t.Fatalf("expected gateway ready min read ready, got %d", cfg.GatewayReadyMinReadReady)
 	}
 	if cfg.MemtableLimit != 2048 {
 		t.Fatalf("expected memtable limit, got %d", cfg.MemtableLimit)
