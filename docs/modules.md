@@ -17,7 +17,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
   - `etcd-raft`: real Raft propose/commit foundation for cluster-of-one, plus static peer bootstrap, outbound transport scaffolding, and inbound peer-message handling.
   - `factory`: optional injected provider factory (`CommitLogOptions.Factory`); custom providers must return committed entries before engine apply.
   - code layout: public contracts in `pkg/lsm/engine/commitlog_types.go`; built-in provider implementations in `internal/lsm/commitlog/*`; engine adapter/factory glue in `pkg/lsm/engine/commitlog.go` and `pkg/lsm/engine/commitlog_factory.go`.
-  - dependency boundary: etcd-raft belongs behind the commit-log provider layer. Engine code should consume committed-entry contracts, not raft internals. Peer-message transport/ingress still exposes raft protocol messages in this foundation; wrap that in an LSM-owned message type before broadening multi-node APIs. See `docs/dependency-boundaries.md`.
+  - dependency boundary: etcd-raft belongs behind the commit-log provider layer. Engine code consumes committed-entry contracts and LSM-owned peer-message envelopes, not raft internals. See `docs/dependency-boundaries.md`.
 - `pkg/lsm/engine/control_plane.go`: fixed shard map and M1 control-plane operations.
   - Exposes control status including commit-log runtime progress (`mode/index/term/leader/replicas`).
 - `pkg/lsm/server/server.go`: monitoring + control APIs + write consistency endpoints (`accepted`/`local_committed`) with async request-status tracking.

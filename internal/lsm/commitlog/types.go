@@ -1,10 +1,6 @@
 package commitlog
 
-import (
-	"context"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
-)
+import "context"
 
 type Provider string
 
@@ -17,11 +13,17 @@ type Config struct {
 	Provider  Provider
 	NodeID    string
 	Peers     []string
-	Transport RaftMessageTransport
+	Transport PeerTransport
 }
 
-type RaftMessageTransport interface {
-	Send(ctx context.Context, messages []raftpb.Message) error
+type PeerMessage struct {
+	From    uint64
+	To      uint64
+	Payload []byte
+}
+
+type PeerTransport interface {
+	Send(ctx context.Context, messages []PeerMessage) error
 }
 
 type ControlMutation struct {
@@ -65,7 +67,7 @@ type RuntimeStatus struct {
 type Consensus interface {
 	CommitControl(ctx context.Context, mutation ControlMutation) (ControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation DataMutation) (DataCommittedEntry, error)
-	HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error
+	HandlePeerMessages(ctx context.Context, messages []PeerMessage) error
 	Provider() Provider
 	RuntimeStatus() RuntimeStatus
 }

@@ -7,13 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"go.etcd.io/etcd/raft/v3/raftpb"
 	"lsmengine/pkg/lsm"
 )
 
 type noopRaftTransport struct{}
 
-func (noopRaftTransport) Send(_ context.Context, _ []raftpb.Message) error {
+func (noopRaftTransport) Send(_ context.Context, _ []lsm.CommitLogPeerMessage) error {
 	return nil
 }
 
