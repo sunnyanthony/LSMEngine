@@ -1676,8 +1676,9 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 		"node-c": nodeC.URL,
 		"node-d": nodeD.URL,
 	}, replaceNodeOptions{
-		OldNode: "node-a",
-		NewNode: "node-d",
+		OldNode:        "node-a",
+		NewNode:        "node-d",
+		CatchupTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("replace node: %v", err)
@@ -1687,6 +1688,9 @@ func TestReplaceClusterNodeRunsMembershipWorkflow(t *testing.T) {
 	}
 	if len(result.Shards) != 1 || result.Shards[0] != "users" {
 		t.Fatalf("unexpected replacement shards: %+v", result.Shards)
+	}
+	if !result.Catchup.Enabled || result.Catchup.Node != "node-d" {
+		t.Fatalf("expected replacement catchup result, got %+v", result.Catchup)
 	}
 	if raftAddCalls.Load() != 1 || addReplicaCalls.Load() != 1 || drainCalls.Load() != 1 || removeReplicaCalls.Load() != 1 || raftRemoveCalls.Load() != 1 {
 		t.Fatalf("unexpected call counts raftAdd=%d add=%d drain=%d remove=%d raftRemove=%d",
@@ -2010,6 +2014,145 @@ func TestReplaceNodeCommandArgsPreservesConfigEndpointSource(t *testing.T) {
 	}
 	if containsString(args, "node-a=http://internal-a:8080") {
 		t.Fatalf("generated command should preserve config source instead of expanding resolved endpoints: %+v", args)
+	}
+}
+
+func TestReplaceNodeCommandArgsPreservesCatchupPolicy(t *testing.T) {
+	maxLag := uint64(2)
+	args := replaceNodeCommandArgs(map[string]string{
+		"node-a": "http://internal-a:8080",
+		"node-d": "http://internal-d:8080",
+	}, replaceNodeOptions{
+		OldNode:            "node-a",
+		NewNode:            "node-d",
+		CatchupTimeout:     30 * time.Second,
+		CatchupMaxApplyLag: &maxLag,
+	})
+	for _, want := range []string{
+		"--catchup-timeout",
+		"30s",
+		"--max-catchup-apply-lag",
+		"2",
+	} {
+		if !containsString(args, want) {
+			t.Fatalf("expected generated command to contain %q: %+v", want, args)
+		}
+	}
+}
+
+func TestWaitReplacementNodeCatchupRequiresAppliedProgress(t *testing.T) {
+	var replacementStatusCalls atomic.Int32
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:       "ready",
+				Leader:       true,
+				LeaderKnown:  true,
+				AppliedIndex: 12,
+			},
+		})
+	}))
+	defer nodeA.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		call := replacementStatusCalls.Add(1)
+		applied := uint64(4)
+		applyLag := uint64(8)
+		if call >= 2 {
+			applied = 12
+			applyLag = 0
+		}
+		_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+			NodeID: "node-d",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:       "follower",
+				LeaderKnown:  true,
+				AppliedIndex: applied,
+				ApplyLag:     applyLag,
+			},
+		})
+	}))
+	defer nodeD.Close()
+
+	maxLag := uint64(0)
+	result, err := waitReplacementNodeCatchup(map[string]string{
+		"node-a": nodeA.URL,
+		"node-d": nodeD.URL,
+	}, "node-d", replacementCatchupOptions{
+		Timeout:     time.Second,
+		MaxApplyLag: &maxLag,
+	})
+	if err != nil {
+		t.Fatalf("wait catchup: %v", err)
+	}
+	if !result.Enabled || result.AppliedIndex != 12 || result.RequiredAppliedIndex != 12 || result.ApplyLag != 0 {
+		t.Fatalf("unexpected catchup result: %+v", result)
+	}
+	if replacementStatusCalls.Load() < 2 {
+		t.Fatalf("expected polling until replacement applied progress catches up")
+	}
+}
+
+func TestWaitReplacementNodeCatchupTimesOutWhenLagged(t *testing.T) {
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+			NodeID: "node-a",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:       "ready",
+				Leader:       true,
+				LeaderKnown:  true,
+				AppliedIndex: 9,
+			},
+		})
+	}))
+	defer nodeA.Close()
+
+	nodeD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/status" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(lsm.ClusterStatus{
+			NodeID: "node-d",
+			CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+				Health:       "follower",
+				LeaderKnown:  true,
+				AppliedIndex: 3,
+				ApplyLag:     6,
+			},
+		})
+	}))
+	defer nodeD.Close()
+
+	maxLag := uint64(0)
+	result, err := waitReplacementNodeCatchup(map[string]string{
+		"node-a": nodeA.URL,
+		"node-d": nodeD.URL,
+	}, "node-d", replacementCatchupOptions{
+		Timeout:     time.Millisecond,
+		MaxApplyLag: &maxLag,
+	})
+	if err == nil {
+		t.Fatalf("expected catchup timeout")
+	}
+	if !strings.Contains(err.Error(), "replacement catch-up timed out") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequiredAppliedIndex != 9 || result.AppliedIndex != 3 {
+		t.Fatalf("unexpected timeout result: %+v", result)
 	}
 }
 
