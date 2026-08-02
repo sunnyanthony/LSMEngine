@@ -32,6 +32,7 @@ Goal: make tracing and onboarding fast without flattening the layout.
 - `pkg/lsm/server/router.go`: route-aware gateway helper (metadata cache, retryable route-hint updates, refresh fallback, configurable bounded write attempts/backoff, process-local aggregate and per-backend routing counters, and basic endpoint health/cooldown policy surfaced through `/gateway/status`). Node endpoint lookup stays behind `NodeEndpointResolver`; static, reloaded file-backed, and DNS SRV resolvers live in `pkg/lsm/server/node_endpoint_*`.
   - Persists control metadata (shards/order/leader/drain) in `control_state.json`.
   - Treats missing legacy state versions as v1 and rejects unsupported future state versions at startup.
+  - Reports LSM-owned compatibility versions through cluster status so rolling upgrade tooling can detect mixed incompatible nodes before membership changes.
   - Validates shard layout and builds deterministic route index for key-to-shard lookup.
   - Tracks node-local control `revision` and applied `operation_id` fingerprints for optimistic concurrency plus bounded idempotent retry dedupe.
 - `cmd/lsmctl`: server mode, remote/local point `get` / `put` / `delete`, plus stats and health commands.

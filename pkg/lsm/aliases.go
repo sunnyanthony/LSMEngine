@@ -31,6 +31,7 @@ type ShardConfig = engine.ShardConfig
 type ReplicaStatus = engine.ReplicaStatus
 type ShardStatus = engine.ShardStatus
 type ClusterStatus = engine.ClusterStatus
+type CompatibilityStatus = engine.CompatibilityStatus
 type CDCEvent = engine.CDCEvent
 type CDCReadResult = engine.CDCReadResult
 type ControlWriteOptions = engine.ControlWriteOptions

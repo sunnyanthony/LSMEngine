@@ -505,6 +505,12 @@ func TestWriteClusterStatuses(t *testing.T) {
 					NodeID:     "node-a",
 					Revision:   4,
 					ShardCount: 1,
+					Compatibility: lsm.CompatibilityStatus{
+						ClusterStatusVersion:   1,
+						ControlStateVersion:    1,
+						StateSnapshotVersion:   1,
+						RaftPeerMessageVersion: 1,
+					},
 					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
 						Health:         "ready",
 						Leader:         true,
@@ -529,10 +535,88 @@ func TestWriteClusterStatuses(t *testing.T) {
 		"index=11",
 		"applied_index=9",
 		"apply_lag=2",
+		"compatibility=cluster_status:1,control_state:1,state_snapshot:1,raft_peer_message:1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out)
 		}
+	}
+}
+
+func TestEvaluateClusterWaitRequiresCompatibleReadyNodes(t *testing.T) {
+	result := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node: "node-a",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					Compatibility: lsm.CompatibilityStatus{
+						ClusterStatusVersion:   1,
+						ControlStateVersion:    1,
+						StateSnapshotVersion:   1,
+						RaftPeerMessageVersion: 1,
+					},
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						WriteAvailable: true,
+					},
+				},
+			},
+			{
+				Node: "node-b",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-b",
+					Compatibility: lsm.CompatibilityStatus{
+						ClusterStatusVersion:   1,
+						ControlStateVersion:    2,
+						StateSnapshotVersion:   1,
+						RaftPeerMessageVersion: 1,
+					},
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health: "follower",
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 2,
+		RequireWriteLeader: true,
+		RequireCompatible:  true,
+	})
+	if result.Ready {
+		t.Fatalf("expected compatibility mismatch to keep cluster not ready: %+v", result)
+	}
+	if result.Compatible || len(result.IncompatibleNodes) != 1 || result.IncompatibleNodes[0] != "node-b" {
+		t.Fatalf("unexpected compatibility result: %+v", result)
+	}
+}
+
+func TestEvaluateClusterWaitRequiresKnownCompatibility(t *testing.T) {
+	result := evaluateClusterWait(clusterStatusResult{
+		Nodes: []clusterStatusNodeResult{
+			{
+				Node: "node-a",
+				Status: &lsm.ClusterStatus{
+					NodeID: "node-a",
+					CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+						Health:         "ready",
+						Leader:         true,
+						WriteAvailable: true,
+					},
+				},
+			},
+		},
+	}, waitClusterOptions{
+		RequiredReadyNodes: 1,
+		RequireWriteLeader: true,
+		RequireCompatible:  true,
+	})
+	if result.Ready || result.Compatible {
+		t.Fatalf("expected unknown compatibility to keep cluster not ready: %+v", result)
+	}
+	if len(result.IncompatibleNodes) != 1 || result.IncompatibleNodes[0] != "node-a" {
+		t.Fatalf("unexpected incompatible nodes: %+v", result)
 	}
 }
 

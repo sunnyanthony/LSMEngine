@@ -71,6 +71,7 @@ type ClusterStatus struct {
 	CommitLog        string                 `json:"commit_log"`
 	CommitLogRuntime CommitLogRuntimeStatus `json:"commit_log_runtime"`
 	Raft             RaftOptions            `json:"raft"`
+	Compatibility    CompatibilityStatus    `json:"compatibility"`
 }
 
 // ControlWriteOptions carries optional optimistic concurrency and idempotency inputs.
@@ -278,13 +279,14 @@ func (c *controlPlane) status() ClusterStatus {
 	}
 	c.mu.RLock()
 	status := ClusterStatus{
-		NodeID:      c.nodeID,
-		ClusterID:   c.clusterID,
-		StorageMode: c.storageMode,
-		ShardCount:  len(c.order),
-		Draining:    c.draining,
-		Revision:    c.revision,
-		Raft:        c.raft,
+		NodeID:        c.nodeID,
+		ClusterID:     c.clusterID,
+		StorageMode:   c.storageMode,
+		ShardCount:    len(c.order),
+		Draining:      c.draining,
+		Revision:      c.revision,
+		Raft:          c.raft,
+		Compatibility: currentCompatibilityStatus(),
 	}
 	consensus := c.consensus
 	c.mu.RUnlock()
