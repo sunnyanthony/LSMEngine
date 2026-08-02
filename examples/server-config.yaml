@@ -50,7 +50,7 @@ write_consistency_default: "accepted"
 # Gateway-only option used by `lsmctl gateway --config`.
 # Valid values: "any" (default) or "leader".
 # gateway_read_mode: "any"
-# Valid values: "round_robin" (default), "ordered", or "freshest".
+# Valid values: "round_robin" (default), "ordered", "freshest", or "adaptive".
 # gateway_read_balance_policy: "round_robin"
 # Optional freshness gate for any-mode `/kv/get` and `/kv/range`; -1 disables.
 # gateway_max_read_apply_lag: -1

@@ -235,6 +235,12 @@ identified. This avoids stale follower reads for clients that want to prefer the
 node accepting committed writes, but it is not raft ReadIndex, lease-read, or a
 complete linearizable read protocol. Accepted write status lookups keep
 best-effort endpoint fallback because the request-status tracker is node-local.
+Use `--read-balance-policy adaptive` or
+`gateway_read_balance_policy: "adaptive"` when any-mode reads should prefer
+backends with fewer process-local read, status-probe, and write failures, using
+lower read-attempt counts as a tie-breaker among equally healthy endpoints. This
+policy uses only the current gateway process's counters; it is not a durable or
+cluster-wide load balancer.
 For `any` mode, `--max-read-apply-lag <n>` or
 `gateway_max_read_apply_lag: <n>` makes the gateway probe backend
 `/cluster/status` before `/kv/get` and `/kv/range`, then skip endpoints whose

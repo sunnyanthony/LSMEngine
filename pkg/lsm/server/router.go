@@ -33,6 +33,7 @@ const (
 	GatewayReadBalanceRoundRobin GatewayReadBalancePolicy = "round_robin"
 	GatewayReadBalanceOrdered    GatewayReadBalancePolicy = "ordered"
 	GatewayReadBalanceFreshest   GatewayReadBalancePolicy = "freshest"
+	GatewayReadBalanceAdaptive   GatewayReadBalancePolicy = "adaptive"
 )
 
 // GatewayOptions configures route-aware write forwarding.
@@ -226,7 +227,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		readBalancePolicy = GatewayReadBalanceRoundRobin
 	}
 	switch readBalancePolicy {
-	case GatewayReadBalanceRoundRobin, GatewayReadBalanceOrdered, GatewayReadBalanceFreshest:
+	case GatewayReadBalanceRoundRobin, GatewayReadBalanceOrdered, GatewayReadBalanceFreshest, GatewayReadBalanceAdaptive:
 	default:
 		return nil, fmt.Errorf("invalid gateway read balance policy %q", readBalancePolicy)
 	}
@@ -584,12 +585,30 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 }
 
 func (g *Gateway) readNodeEndpointIDs(endpoints map[string]string) []string {
-	return g.nodeEndpointIDs(endpoints, g.readBalancePolicy == GatewayReadBalanceRoundRobin)
+	switch g.readBalancePolicy {
+	case GatewayReadBalanceRoundRobin:
+		return g.nodeEndpointIDs(endpoints, true)
+	case GatewayReadBalanceAdaptive:
+		return g.adaptiveReadNodeEndpointIDs(endpoints)
+	default:
+		return g.nodeEndpointIDs(endpoints, false)
+	}
 }
 
 type gatewayReadTarget struct {
 	nodeID   string
 	endpoint string
+}
+
+type gatewayAdaptiveReadCandidate struct {
+	nodeID              string
+	degraded            bool
+	totalFailures       uint64
+	readFailures        uint64
+	statusProbeFailures uint64
+	writeFailures       uint64
+	readAttempts        uint64
+	order               int
 }
 
 type gatewayReadStatusTarget struct {
@@ -709,6 +728,55 @@ func (g *Gateway) nodeEndpointIDs(endpoints map[string]string, rotateHealthy boo
 	}
 	g.endpoint.mu.Unlock()
 	return append(healthy, degraded...)
+}
+
+func (g *Gateway) adaptiveReadNodeEndpointIDs(endpoints map[string]string) []string {
+	nodeIDs := sortedNodeEndpointIDs(endpoints)
+	if g == nil || len(nodeIDs) <= 1 {
+		return nodeIDs
+	}
+	candidates := make([]gatewayAdaptiveReadCandidate, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		endpoint := endpoints[nodeID]
+		stats := g.endpointRoutingStats(endpoint)
+		degraded, _ := g.endpointHealth(endpoint)
+		candidates = append(candidates, gatewayAdaptiveReadCandidate{
+			nodeID:              nodeID,
+			degraded:            degraded,
+			totalFailures:       stats.ReadFailures + stats.StatusProbeFailures + stats.WriteFailures,
+			readFailures:        stats.ReadFailures,
+			statusProbeFailures: stats.StatusProbeFailures,
+			writeFailures:       stats.WriteFailures,
+			readAttempts:        stats.ReadAttempts,
+			order:               len(candidates),
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].degraded != candidates[j].degraded {
+			return !candidates[i].degraded
+		}
+		if candidates[i].totalFailures != candidates[j].totalFailures {
+			return candidates[i].totalFailures < candidates[j].totalFailures
+		}
+		if candidates[i].readFailures != candidates[j].readFailures {
+			return candidates[i].readFailures < candidates[j].readFailures
+		}
+		if candidates[i].statusProbeFailures != candidates[j].statusProbeFailures {
+			return candidates[i].statusProbeFailures < candidates[j].statusProbeFailures
+		}
+		if candidates[i].writeFailures != candidates[j].writeFailures {
+			return candidates[i].writeFailures < candidates[j].writeFailures
+		}
+		if candidates[i].readAttempts != candidates[j].readAttempts {
+			return candidates[i].readAttempts < candidates[j].readAttempts
+		}
+		return candidates[i].order < candidates[j].order
+	})
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.nodeID)
+	}
+	return out
 }
 
 func (g *Gateway) markEndpointFailure(endpoint string) {
