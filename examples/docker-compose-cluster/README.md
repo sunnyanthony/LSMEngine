@@ -124,10 +124,11 @@ This starts node-a/node-b/node-c, writes committed values, stops node-a before
 replacement, uses `lsmctl wait-cluster --min-ready 2 --require-compatible` to
 verify the surviving compatible quorum, starts node-d with `raft.join: true`,
 runs `lsmctl replacement-plan`, then runs `lsmctl replacement-apply`, which
-includes the same replacement catch-up gate before shard membership changes. It
-waits for the node-b/node-c/node-d compatible quorum to apply the committed
-sequences from before and after node-a stopped, verifies node-d can read those
-values, then verifies the new cluster can accept and read a committed write.
+includes bounded plan/apply retry flags and the same replacement catch-up gate
+before shard membership changes. It waits for the node-b/node-c/node-d
+compatible quorum to apply the committed sequences from before and after node-a
+stopped, verifies node-d can read those values, then verifies the new cluster
+can accept and read a committed write.
 
 ## Manual commands
 

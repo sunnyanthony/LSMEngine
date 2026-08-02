@@ -466,22 +466,26 @@ One-shot supervisor/operator execution:
 ```bash
 go run ./cmd/lsmctl replacement-apply \
   --new-node node-d \
+  --retry-attempts 3 \
+  --retry-backoff 1s \
   --node-endpoint node-a=http://127.0.0.1:8080 \
   --node-endpoint node-b=http://127.0.0.1:8081 \
   --node-endpoint node-c=http://127.0.0.1:8082 \
   --node-endpoint node-d=http://127.0.0.1:8083
 ```
 
-`replacement-apply` runs the same planning step and then executes the replacement
-sequence once. After `raft-add`, it waits for the replacement node to report
-healthy commit-log status, `commit_log_runtime.apply_lag <=
---max-catchup-apply-lag` (default `0`), and `applied_index` at least as high as
-the current healthy existing replicas observed during the wait. It still rejects
-zero or multiple unavailable old-node candidates unless `--old-node` is
-provided. It is intentionally not a background repair loop; an external
-supervisor remains responsible for starting the replacement process, writing
-endpoint discovery data, choosing retry policy, and deciding when to invoke the
-command.
+`replacement-apply` runs the same planning step and then executes the
+replacement sequence. `--retry-attempts` and `--retry-backoff` provide bounded
+operator-level retries around the whole plan/apply sequence, using the same
+idempotency key prefix for committed shard mutations. After `raft-add`, it waits
+for the replacement node to report healthy commit-log status,
+`commit_log_runtime.apply_lag <= --max-catchup-apply-lag` (default `0`), and
+`applied_index` at least as high as the current healthy existing replicas
+observed during the wait. It still rejects zero or multiple unavailable old-node
+candidates unless `--old-node` is provided. It is intentionally not a background
+repair loop; an external supervisor remains responsible for starting the
+replacement process, writing endpoint discovery data, choosing retry policy, and
+deciding when to invoke the command.
 
 Manual replacement workflow:
 
