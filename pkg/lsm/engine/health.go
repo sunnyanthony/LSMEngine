@@ -57,6 +57,7 @@ type WALStats struct {
 	TotalBytes             uint64
 	CheckpointSeq          uint64
 	CheckpointLag          uint64
+	ReadyMaxCheckpointLag  uint64
 	MaxSegmentBytes        uint64
 	RetainArchivedSegments int
 	BlockSize              uint32
@@ -178,6 +179,9 @@ func (l *LSM) Health() Health {
 	if l.writeBackpressureSnapshot().active {
 		return Health{Ready: false, Reason: "backpressure"}
 	}
+	if l.walCheckpointLagOverReadyLimit() {
+		return Health{Ready: false, Reason: "wal_checkpoint_lag"}
+	}
 	return Health{Ready: true, Reason: "ok"}
 }
 
@@ -262,6 +266,7 @@ func (s *Stats) applyWALStats(l *LSM) {
 		ArchivedSegmentBytes:   stats.ArchivedSegmentBytes,
 		TotalBytes:             stats.TotalBytes,
 		CheckpointSeq:          atomic.LoadUint64(&l.lastFlush),
+		ReadyMaxCheckpointLag:  l.walReadyMaxCheckpointLag,
 		MaxSegmentBytes:        stats.MaxSegmentBytes,
 		RetainArchivedSegments: l.walRetainArchivedSegments,
 		BlockSize:              stats.BlockSize,
@@ -275,6 +280,18 @@ func (s *Stats) applyWALStats(l *LSM) {
 	if s.Seq > s.WAL.CheckpointSeq {
 		s.WAL.CheckpointLag = s.Seq - s.WAL.CheckpointSeq
 	}
+}
+
+func (l *LSM) walCheckpointLagOverReadyLimit() bool {
+	if l == nil || l.walReadyMaxCheckpointLag == 0 {
+		return false
+	}
+	seq := atomic.LoadUint64(&l.seq)
+	checkpoint := atomic.LoadUint64(&l.lastFlush)
+	if seq <= checkpoint {
+		return false
+	}
+	return seq-checkpoint > l.walReadyMaxCheckpointLag
 }
 
 func (s *Stats) applyCompactionRuntimeStats(l *LSM) {

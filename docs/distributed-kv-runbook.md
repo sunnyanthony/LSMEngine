@@ -115,7 +115,10 @@ The useful fields are:
   accumulating write-ahead log data faster than flush/compaction can keep up.
   `wal_checkpoint_seq` and `wal_checkpoint_lag` show how far the local manifest
   WAL checkpoint trails the latest committed local sequence; high checkpoint
-  lag means archived WAL may not yet be safe to prune.
+  lag means archived WAL may not yet be safe to prune. Configure
+  `wal_ready_max_checkpoint_lag` to make `/readyz` report
+  `reason=wal_checkpoint_lag` when this local retention debt exceeds the
+  supervisor threshold.
   `wal_max_segment_bytes` rotates the active WAL segment after flushed bytes
   reach the configured threshold, but archived segment retention remains a
   separate policy decision.

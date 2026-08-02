@@ -70,6 +70,7 @@ write_consistency_default: "accepted"
 # memtable_limit: 1048576
 # wal_max_segment_bytes: 67108864
 # wal_retain_archived_segments: 2
+# wal_ready_max_checkpoint_lag: 0
 # flush_queue_size: 4
 # compaction_l0_threshold: 4
 # compaction_check_interval: "30s"

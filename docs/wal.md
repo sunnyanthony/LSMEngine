@@ -45,6 +45,15 @@ Retention only removes a contiguous archived prefix after each segment has been
 fully scanned and every entry in that segment is covered by the manifest WAL
 checkpoint. The active `wal.log` is never removed by retention.
 
+## Readiness gate
+`WALReadyMaxCheckpointLag` / `wal_ready_max_checkpoint_lag` is an optional
+node-local readiness gate. When greater than zero, `Health()` and `/readyz`
+return `ready=false` with reason `wal_checkpoint_lag` once the latest local
+sequence is more than that many entries ahead of the manifest WAL checkpoint.
+This lets supervisors stop sending normal traffic to a node whose local WAL
+retention debt is growing. It does not reject raft committed apply, does not
+make CDC durable, and does not replace raft log retention or snapshots.
+
 ## Block framing
 Records are grouped into fixed-size blocks. The block size is configurable via options
 and stored in the segment header (default 64KB). Each block:

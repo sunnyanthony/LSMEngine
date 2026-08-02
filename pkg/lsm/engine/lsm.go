@@ -47,6 +47,7 @@ type Options struct {
 	WALSync                           bool
 	WALMaxSegmentBytes                uint64
 	WALRetainArchivedSegments         int
+	WALReadyMaxCheckpointLag          uint64
 	WALMaxRecord                      uint64
 	WALBlockSize                      uint32
 	WALAsync                          bool
@@ -161,6 +162,7 @@ type LSM struct {
 	flowMetrics                       *sstableconfig.FlowMetrics
 	mtLimit                           int
 	walRetainArchivedSegments         int
+	walReadyMaxCheckpointLag          uint64
 	autoRepair                        bool
 	ctx                               context.Context
 	cancel                            context.CancelFunc
