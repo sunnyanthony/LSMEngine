@@ -5,26 +5,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type recordingRaftTransport struct {
 	mu       sync.Mutex
-	messages []raftpb.Message
+	messages []CommitLogPeerMessage
 }
 
-func (r *recordingRaftTransport) Send(_ context.Context, messages []raftpb.Message) error {
+func (r *recordingRaftTransport) Send(_ context.Context, messages []CommitLogPeerMessage) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.messages = append(r.messages, messages...)
 	return nil
 }
 
-func (r *recordingRaftTransport) Messages() []raftpb.Message {
+func (r *recordingRaftTransport) Messages() []CommitLogPeerMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]raftpb.Message, len(r.messages))
+	out := make([]CommitLogPeerMessage, len(r.messages))
 	copy(out, r.messages)
 	return out
 }

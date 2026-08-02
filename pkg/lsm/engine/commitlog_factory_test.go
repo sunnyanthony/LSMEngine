@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type testCommitLogFactory struct {
@@ -40,6 +38,7 @@ type testCommitLogConsensus struct {
 	commits       []string
 	peerCalls     int
 	peerMsgCount  int
+	peerMessages  []CommitLogPeerMessage
 	provider      CommitLogProvider
 	runtimeStatus CommitLogRuntimeStatus
 }
@@ -67,11 +66,12 @@ func (c *testCommitLogConsensus) CommitData(_ context.Context, mutation CommitLo
 	}, nil
 }
 
-func (c *testCommitLogConsensus) HandlePeerMessages(_ context.Context, messages []raftpb.Message) error {
+func (c *testCommitLogConsensus) HandlePeerMessages(_ context.Context, messages []CommitLogPeerMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.peerCalls++
 	c.peerMsgCount += len(messages)
+	c.peerMessages = append(c.peerMessages, copyCommitLogPeerMessages(messages)...)
 	return nil
 }
 
@@ -111,6 +111,12 @@ func (c *testCommitLogConsensus) PeerMessageCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.peerMsgCount
+}
+
+func (c *testCommitLogConsensus) PeerMessages() []CommitLogPeerMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return copyCommitLogPeerMessages(c.peerMessages)
 }
 
 func TestCommitLogFactoryOverridesProviderSelection(t *testing.T) {
@@ -201,9 +207,9 @@ func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.HandlePeerMessages(context.Background(), []raftpb.Message{
-		{Type: raftpb.MsgHeartbeat, From: 2, To: 1, Term: 1},
-		{Type: raftpb.MsgApp, From: 2, To: 1, Term: 1},
+	if err := store.HandlePeerMessages(context.Background(), []CommitLogPeerMessage{
+		{From: 2, To: 1, Payload: []byte("heartbeat")},
+		{From: 2, To: 1, Payload: []byte("append")},
 	}); err != nil {
 		t.Fatalf("handle peer messages: %v", err)
 	}
@@ -212,5 +218,35 @@ func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
 	}
 	if got := consensus.PeerMessageCount(); got != 2 {
 		t.Fatalf("expected two peer messages, got %d", got)
+	}
+}
+
+func TestHandlePeerMessagesCopiesPayloadsBeforeProvider(t *testing.T) {
+	consensus := &testCommitLogConsensus{provider: "custom-raft"}
+	store, err := New(Options{
+		DataDir: t.TempDir(),
+		CommitLog: &CommitLogOptions{
+			Factory: &testCommitLogFactory{consensus: consensus},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer store.Close()
+
+	payload := []byte("heartbeat")
+	messages := []CommitLogPeerMessage{{From: 2, To: 1, Payload: payload}}
+	if err := store.HandlePeerMessages(context.Background(), messages); err != nil {
+		t.Fatalf("handle peer messages: %v", err)
+	}
+	payload[0] = 'X'
+	messages[0].Payload[1] = 'Y'
+
+	got := consensus.PeerMessages()
+	if len(got) != 1 {
+		t.Fatalf("expected one peer message, got %+v", got)
+	}
+	if string(got[0].Payload) != "heartbeat" {
+		t.Fatalf("expected copied payload, got %q", got[0].Payload)
 	}
 }
