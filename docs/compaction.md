@@ -79,9 +79,15 @@ control plane decoupled from IO.
   table metadata satisfies compaction policy.
 - `CompactionCheckInterval` / `compaction_check_interval` can also wake the same
   runtime periodically for long-running nodes. `0` disables periodic checks.
+- `CompactionAdaptiveCheck` / `compaction_adaptive_check` keeps the configured
+  interval as the baseline but shortens the next periodic wake when L0 table
+  pressure reaches the compaction threshold. This is a local scheduling policy;
+  it does not change planner correctness or force compaction when metadata does
+  not satisfy the configured policy.
 - `Stats()` and `/stats` report L0 table count/bytes and whether the configured
-  L0 threshold has been reached. This is currently a pressure signal for
-  operators and tests, not a complete debt scheduler.
+  L0 threshold has been reached. They also report adaptive-check enablement and
+  the pressure-adjusted effective check interval. These are pressure signals,
+  not a complete durable debt scheduler.
 - SSTable counts and bytes describe the active table set; they exclude obsolete
   files retained by snapshots, trash, WAL, and raft storage.
 - `FlushQueueDepth` counts outstanding flush work, including work in progress
@@ -105,4 +111,5 @@ control plane decoupled from IO.
   proposals and already committed entries can exceed a threshold; these settings
   are not a hard memory limit. L0 pressure only rejects writes estimated to trigger
   another flush, while the health signal reports the pressure even for smaller writes.
-- Richer debt scheduling, priority policy, and adaptive throttling remain planned.
+- Richer durable debt scheduling, priority policy, and write throttling remain
+  planned.
