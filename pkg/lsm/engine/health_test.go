@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,8 +15,9 @@ import (
 
 func TestStatsSnapshot(t *testing.T) {
 	store, err := New(Options{
-		DataDir:               t.TempDir(),
-		CompactionL0Threshold: 1,
+		DataDir:                  t.TempDir(),
+		CompactionL0Threshold:    1,
+		WALReadyMaxCheckpointLag: 128,
 	})
 	if err != nil {
 		t.Fatalf("new: %v", err)
@@ -58,8 +60,28 @@ func TestStatsSnapshot(t *testing.T) {
 	if stats.WAL.BlockSize == 0 {
 		t.Fatalf("expected wal block size, got %+v", stats.WAL)
 	}
+	if stats.WAL.ReadyMaxCheckpointLag != 128 {
+		t.Fatalf("expected wal ready checkpoint lag threshold, got %+v", stats.WAL)
+	}
 	if stats.WAL.Closed {
 		t.Fatalf("expected open wal stats, got %+v", stats.WAL)
+	}
+}
+
+func TestHealthReportsWALCheckpointLagGate(t *testing.T) {
+	store := &LSM{
+		walReadyMaxCheckpointLag: 5,
+	}
+	atomic.StoreUint64(&store.seq, 11)
+	atomic.StoreUint64(&store.lastFlush, 5)
+	health := store.Health()
+	if health.Ready || health.Reason != "wal_checkpoint_lag" {
+		t.Fatalf("expected wal checkpoint lag readiness failure, got %+v", health)
+	}
+	atomic.StoreUint64(&store.lastFlush, 6)
+	health = store.Health()
+	if !health.Ready || health.Reason != "ok" {
+		t.Fatalf("expected ready health at threshold, got %+v", health)
 	}
 }
 

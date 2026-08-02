@@ -147,6 +147,7 @@ func serveCmd(args []string) {
 		MemtableLimit:                     cfg.MemtableLimit,
 		WALMaxSegmentBytes:                cfg.WALMaxSegmentBytes,
 		WALRetainArchivedSegments:         cfg.WALRetainArchivedSegments,
+		WALReadyMaxCheckpointLag:          cfg.WALReadyMaxCheckpointLag,
 		FlushQueueSize:                    cfg.FlushQueueSize,
 		FlushBackpressureQueueThreshold:   cfg.FlushBackpressureQueueThreshold,
 		CompactionL0Threshold:             cfg.CompactionL0Threshold,
@@ -643,6 +644,7 @@ func writeStats(w io.Writer, stats lsm.Stats) {
 	fmt.Fprintf(w, "wal_archived_segment_bytes=%d\n", stats.WAL.ArchivedSegmentBytes)
 	fmt.Fprintf(w, "wal_checkpoint_seq=%d\n", stats.WAL.CheckpointSeq)
 	fmt.Fprintf(w, "wal_checkpoint_lag=%d\n", stats.WAL.CheckpointLag)
+	fmt.Fprintf(w, "wal_ready_max_checkpoint_lag=%d\n", stats.WAL.ReadyMaxCheckpointLag)
 	fmt.Fprintf(w, "wal_max_segment_bytes=%d\n", stats.WAL.MaxSegmentBytes)
 	fmt.Fprintf(w, "wal_retain_archived_segments=%d\n", stats.WAL.RetainArchivedSegments)
 	fmt.Fprintf(w, "wal_block_size=%d\n", stats.WAL.BlockSize)

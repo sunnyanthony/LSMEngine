@@ -169,7 +169,7 @@ Technical issues:
   Mitigation: check under the same lock as pointer acquisition or implement reservation.
 
 Backlog:
-- WAL: tail/truncate policy and payload caps; faster resync scanning for corrupted blocks; async writer metrics/backpressure; codec versioning; large replay + mixed corrupt/missing segment tests.
+- WAL: tail/truncate policy and payload caps; faster resync scanning for corrupted blocks; async writer metrics/backpressure beyond the current checkpoint-lag readiness gate; codec versioning; large replay + mixed corrupt/missing segment tests.
 - Memtable: streaming iterators to avoid snapshot copying; shard auto-tuning; lock contention and tail-latency benchmarks; tighter immutable/flush state machine.
 - Skiplist: arena node allocation; comparator coverage tests; iterator performance benchmarks.
 - Read path: snapshot observability (replay counts, pinned memtable metrics).
