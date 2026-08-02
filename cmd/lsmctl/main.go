@@ -928,8 +928,11 @@ type replacementPlanResult struct {
 }
 
 type replacementApplyResult struct {
-	Plan   replacementPlanResult `json:"plan"`
-	Result replaceNodeResult     `json:"result"`
+	Plan          replacementPlanResult `json:"plan"`
+	Result        replaceNodeResult     `json:"result"`
+	Attempts      int                   `json:"attempts"`
+	RetryAttempts int                   `json:"retry_attempts"`
+	RetryBackoff  string                `json:"retry_backoff,omitempty"`
 }
 
 type clusterReadOptions struct {
@@ -947,6 +950,8 @@ type replaceNodeOptions struct {
 	CatchupTimeout          time.Duration
 	CatchupMaxApplyLag      *uint64
 	CommandEndpoints        replacementCommandEndpointSource
+	ApplyRetryAttempts      int
+	ApplyRetryBackoff       time.Duration
 }
 
 type replacementCatchupOptions struct {
@@ -1585,6 +1590,9 @@ func replaceNodeCmd(args []string) {
 		CatchupMaxApplyLag:      catchupMaxApplyLag,
 	})
 	if err != nil {
+		if *jsonOut {
+			writeJSON(os.Stdout, result)
+		}
 		log.Fatal(err)
 	}
 	if *jsonOut {
@@ -1662,6 +1670,8 @@ func replacementApplyCmd(args []string) {
 	operationPrefix := fs.String("operation-prefix", "", "idempotency key prefix for committed shard mutations")
 	catchupTimeout := fs.Duration("catchup-timeout", 60*time.Second, "maximum time to wait for replacement node catch-up after raft-add; 0 disables")
 	maxCatchupApplyLag := fs.Int64("max-catchup-apply-lag", 0, "maximum replacement node apply lag after raft-add")
+	retryAttempts := fs.Int("retry-attempts", 1, "maximum replacement apply attempts; retries rerun plan/apply with the same idempotency keys")
+	retryBackoff := fs.Duration("retry-backoff", time.Second, "delay between replacement apply retry attempts")
 	var shardIDs stringListFlags
 	fs.Var(&shardIDs, "shard", "shard id to migrate; may be repeated; defaults to all shards containing selected old node")
 	var nodeEndpoints nodeEndpointFlags
@@ -1692,6 +1702,12 @@ func replacementApplyCmd(args []string) {
 	if *catchupTimeout < 0 {
 		log.Fatal("catchup-timeout must be non-negative")
 	}
+	if *retryAttempts < 1 {
+		log.Fatal("retry-attempts must be at least 1")
+	}
+	if *retryBackoff < 0 {
+		log.Fatal("retry-backoff must be non-negative")
+	}
 	result, err := applyPlannedReplacement(endpoints, replaceNodeOptions{
 		OldNode:            *oldNode,
 		NewNode:            *newNode,
@@ -1700,8 +1716,13 @@ func replacementApplyCmd(args []string) {
 		CatchupTimeout:     *catchupTimeout,
 		CatchupMaxApplyLag: catchupMaxApplyLag,
 		CommandEndpoints:   commandEndpointSource,
+		ApplyRetryAttempts: *retryAttempts,
+		ApplyRetryBackoff:  *retryBackoff,
 	})
 	if err != nil {
+		if *jsonOut {
+			writeJSON(os.Stdout, result)
+		}
 		log.Fatal(err)
 	}
 	if *jsonOut {
@@ -3390,6 +3411,38 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 }
 
 func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
+	attempts := opts.ApplyRetryAttempts
+	if attempts == 0 {
+		attempts = 1
+	}
+	if attempts < 1 {
+		return replacementApplyResult{}, fmt.Errorf("retry-attempts must be at least 1")
+	}
+	if opts.ApplyRetryBackoff < 0 {
+		return replacementApplyResult{}, fmt.Errorf("retry-backoff must be non-negative")
+	}
+	var last replacementApplyResult
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		result, err := applyPlannedReplacementOnce(endpoints, opts)
+		result.Attempts = attempt
+		result.RetryAttempts = attempts
+		if opts.ApplyRetryBackoff > 0 {
+			result.RetryBackoff = opts.ApplyRetryBackoff.String()
+		}
+		if err == nil {
+			return result, nil
+		}
+		last = result
+		lastErr = err
+		if attempt < attempts && opts.ApplyRetryBackoff > 0 {
+			time.Sleep(opts.ApplyRetryBackoff)
+		}
+	}
+	return last, lastErr
+}
+
+func applyPlannedReplacementOnce(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
 	plan, err := planReplacementNode(endpoints, replaceNodeOptions{
 		OldNode:            opts.OldNode,
 		NewNode:            opts.NewNode,
@@ -3696,6 +3749,13 @@ func writeReplacementApply(w io.Writer, result replacementApplyResult) {
 		result.Plan.OldNode,
 		result.Plan.NewNode,
 		result.Plan.Reason,
+	)
+	fmt.Fprintf(
+		w,
+		"attempts=%d retry_attempts=%d retry_backoff=%s\n",
+		result.Attempts,
+		result.RetryAttempts,
+		result.RetryBackoff,
 	)
 	writeReplaceNodeResult(w, result.Result)
 }

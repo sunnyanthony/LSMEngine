@@ -203,10 +203,13 @@ require_contains "$plan_output" "--config $LSMCTL_CONFIG"
 apply_output="$(lsmctl replacement-apply \
   --new-node node-d \
   --operation-prefix compose-failed-replace-node-a-node-d \
+  --retry-attempts 2 \
+  --retry-backoff 200ms \
   $(cluster_config_args) 2>&1)"
 require_contains "$apply_output" "planned_old_node=node-a"
 require_contains "$apply_output" "planned_new_node=node-d"
 require_contains "$apply_output" "reason=status-error"
+require_contains "$apply_output" "retry_attempts=2"
 require_contains "$apply_output" "old_node=node-a"
 require_contains "$apply_output" "new_node=node-d"
 require_contains "$apply_output" "step=raft-add"
