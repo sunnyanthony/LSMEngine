@@ -176,6 +176,17 @@ put_seq="$(seq_from_output "$put_output")"
 wait_cluster_applied "$put_seq"
 
 eventually_lsmctl_get_contains "http://127.0.0.1:8081" compose "found=true" "value=ok"
+cdc_status_output="$(lsmctl cdc-status --addr http://127.0.0.1:8081)"
+require_contains "$cdc_status_output" "source=memory"
+require_contains "$cdc_status_output" "replay_on_restart=false"
+require_contains "$cdc_status_output" "shard=users"
+
+put_cdc_offset=$((put_seq > 0 ? put_seq - 1 : 0))
+put_cdc_output="$(lsmctl cdc-events --addr http://127.0.0.1:8081 --shard users --offset "$put_cdc_offset" --limit 10)"
+require_contains "$put_cdc_output" "offset=$put_seq"
+require_contains "$put_cdc_output" "operation=put"
+require_contains "$put_cdc_output" 'key="compose"'
+require_contains "$put_cdc_output" 'value="ok"'
 
 range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
 require_contains "$range_output" "key=compose"
@@ -193,6 +204,13 @@ delete_output="$(lsmctl delete --cluster $(node_endpoint_args) --key compose)"
 require_contains "$delete_output" "state=committed"
 delete_seq="$(seq_from_output "$delete_output")"
 wait_cluster_applied "$delete_seq"
+
+delete_cdc_offset=$((delete_seq > 0 ? delete_seq - 1 : 0))
+delete_cdc_output="$(lsmctl cdc-events --addr http://127.0.0.1:8082 --shard users --offset "$delete_cdc_offset" --limit 10)"
+require_contains "$delete_cdc_output" "offset=$delete_seq"
+require_contains "$delete_cdc_output" "operation=delete"
+require_contains "$delete_cdc_output" 'key="compose"'
+require_contains "$delete_cdc_output" "tombstone=true"
 
 missing_output="$(wait_for_cluster_missing compose)"
 require_contains "$missing_output" "found=false"
