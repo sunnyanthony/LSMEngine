@@ -1278,7 +1278,9 @@ func TestSelectedGatewayReadyOptions(t *testing.T) {
 func TestWriteStatsIncludesWALStats(t *testing.T) {
 	var buf bytes.Buffer
 	writeStats(&buf, lsm.Stats{
-		CompactionCheckIntervalMS: 2500,
+		CompactionCheckIntervalMS:          2500,
+		CompactionAdaptiveCheck:            true,
+		CompactionEffectiveCheckIntervalMS: 625,
 		WAL: lsm.WALStats{
 			SegmentID:              4,
 			SegmentCount:           3,
@@ -1301,6 +1303,8 @@ func TestWriteStatsIncludesWALStats(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"compaction_check_interval_ms=2500",
+		"compaction_adaptive_check=true",
+		"compaction_effective_check_interval_ms=625",
 		"wal_segment_id=4",
 		"wal_segments=3",
 		"wal_archived_segments=2",

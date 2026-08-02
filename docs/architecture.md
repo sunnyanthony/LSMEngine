@@ -172,7 +172,7 @@ Backlog:
 - Memtable: streaming iterators to avoid snapshot copying; shard auto-tuning; lock contention and tail-latency benchmarks; tighter immutable/flush state machine.
 - Skiplist: arena node allocation; comparator coverage tests; iterator performance benchmarks.
 - Read path: snapshot observability (replay counts, pinned memtable metrics).
-- Compaction: optional flush coalescing; pluggable storage (local vs object store); output size caps + multi-output split; scheduler/backpressure/priority policy.
+- Compaction: optional flush coalescing; pluggable storage (local vs object store); output size caps + multi-output split; durable debt scheduling and priority policy beyond the current adaptive periodic wake.
 - Observability/ops: metrics and health endpoints.
 - Distributed/Replication: transport + term gating; external term manager integration; replay checkpoints to avoid resending histories.
 

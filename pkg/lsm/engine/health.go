@@ -70,38 +70,40 @@ type WALStats struct {
 
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
-	MemtableBytes             int
-	MemtableEntries           int
-	ImmutableCount            int
-	ImmutableBytes            int
-	FlushQueueDepth           int
-	FlushQueueCapacity        int
-	PinnedCount               int
-	TableCount                int
-	SSTableCount              int
-	SSTableBytes              uint64
-	SSTableLevels             []SSTableLevelStats
-	L0TableCount              int
-	L0SizeBytes               uint64
-	CompactionL0Threshold     int
-	CompactionCheckIntervalMS int64
-	CompactionPending         bool
-	PointReads                uint64
-	PointReadMemtableHits     uint64
-	PointReadImmutableHits    uint64
-	PointReadSSTableHits      uint64
-	PointReadMisses           uint64
-	PointReadSSTableProbes    uint64
-	PointReadMaxSSTableProbes uint64
-	SSTableFlow               SSTableFlowStats
-	CompactionRuntime         CompactionRuntimeStats
-	WriteBackpressure         WriteBackpressureStats
-	WAL                       WALStats
-	Seq                       uint64
-	Closing                   bool
-	Closed                    bool
-	FlushBlocked              bool
-	CompactionEnabled         bool
+	MemtableBytes                      int
+	MemtableEntries                    int
+	ImmutableCount                     int
+	ImmutableBytes                     int
+	FlushQueueDepth                    int
+	FlushQueueCapacity                 int
+	PinnedCount                        int
+	TableCount                         int
+	SSTableCount                       int
+	SSTableBytes                       uint64
+	SSTableLevels                      []SSTableLevelStats
+	L0TableCount                       int
+	L0SizeBytes                        uint64
+	CompactionL0Threshold              int
+	CompactionCheckIntervalMS          int64
+	CompactionAdaptiveCheck            bool
+	CompactionEffectiveCheckIntervalMS int64
+	CompactionPending                  bool
+	PointReads                         uint64
+	PointReadMemtableHits              uint64
+	PointReadImmutableHits             uint64
+	PointReadSSTableHits               uint64
+	PointReadMisses                    uint64
+	PointReadSSTableProbes             uint64
+	PointReadMaxSSTableProbes          uint64
+	SSTableFlow                        SSTableFlowStats
+	CompactionRuntime                  CompactionRuntimeStats
+	WriteBackpressure                  WriteBackpressureStats
+	WAL                                WALStats
+	Seq                                uint64
+	Closing                            bool
+	Closed                             bool
+	FlushBlocked                       bool
+	CompactionEnabled                  bool
 }
 
 // Health summarizes whether the engine is ready to serve traffic.
@@ -145,6 +147,10 @@ func (l *LSM) Stats() Stats {
 	}
 	out.CompactionL0Threshold = l.compactionL0Threshold
 	out.CompactionCheckIntervalMS = l.compactionCheckInterval.Milliseconds()
+	out.CompactionAdaptiveCheck = l.compactionAdaptiveCheck
+	if out.CompactionEnabled {
+		out.CompactionEffectiveCheckIntervalMS = l.currentCompactionCheckInterval().Milliseconds()
+	}
 	out.CompactionPending = out.CompactionEnabled &&
 		out.CompactionL0Threshold > 0 &&
 		out.L0TableCount >= out.CompactionL0Threshold

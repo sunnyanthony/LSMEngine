@@ -70,9 +70,11 @@ func TestStatsSSTableLevelsAndCompactionPressure(t *testing.T) {
 			{Meta: metadata.TableMeta{Path: "l0-b.sst", Level: 0, SizeBytes: 20, SeqMax: 2}},
 			{Meta: metadata.TableMeta{Path: "l1-a.sst", Level: 1, SizeBytes: 30, SeqMax: 1}},
 		}),
-		flushQueueCapacity:    7,
-		compactionL0Threshold: 2,
-		compactionSvc:         &compactionruntime.Runtime{},
+		flushQueueCapacity:      7,
+		compactionL0Threshold:   2,
+		compactionCheckInterval: 40 * time.Second,
+		compactionAdaptiveCheck: true,
+		compactionSvc:           &compactionruntime.Runtime{},
 	}
 
 	stats := store.Stats()
@@ -87,6 +89,9 @@ func TestStatsSSTableLevelsAndCompactionPressure(t *testing.T) {
 	}
 	if stats.CompactionL0Threshold != 2 || !stats.CompactionPending {
 		t.Fatalf("expected pending compaction at l0 threshold, got threshold=%d pending=%v", stats.CompactionL0Threshold, stats.CompactionPending)
+	}
+	if !stats.CompactionAdaptiveCheck || stats.CompactionCheckIntervalMS != 40000 || stats.CompactionEffectiveCheckIntervalMS != 10000 {
+		t.Fatalf("unexpected compaction check stats: %+v", stats)
 	}
 	if stats.FlushQueueCapacity != 7 {
 		t.Fatalf("expected flush queue capacity 7, got %d", stats.FlushQueueCapacity)

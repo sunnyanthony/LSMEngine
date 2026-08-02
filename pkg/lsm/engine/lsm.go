@@ -59,6 +59,7 @@ type Options struct {
 	FlushBackpressureQueueThreshold   int
 	CompactionL0Threshold             int
 	CompactionCheckInterval           time.Duration
+	CompactionAdaptiveCheck           bool
 	CompactionBackpressureL0Threshold int
 	CompactionDropTombstones          bool
 	CompactionLevelBaseBytes          uint64
@@ -171,6 +172,7 @@ type LSM struct {
 	flushBackpressureQueueThreshold   int
 	compactionL0Threshold             int
 	compactionCheckInterval           time.Duration
+	compactionAdaptiveCheck           bool
 	compactionBackpressureL0Threshold int
 	writeBackpressureRejects          atomic.Uint64
 	flushBlocked                      atomic.Bool
