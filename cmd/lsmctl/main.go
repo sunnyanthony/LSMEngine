@@ -208,7 +208,7 @@ func gatewayCmd(args []string) {
 	endpointDNSScheme := fs.String("endpoint-dns-scheme", "http", "URL scheme for DNS-discovered node endpoints")
 	writeConsistencyDefault := fs.String("write-consistency-default", "", "default write consistency (accepted|local_committed)")
 	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
-	readBalancePolicy := fs.String("read-balance-policy", "", "gateway read balance policy (round_robin|ordered|freshest)")
+	readBalancePolicy := fs.String("read-balance-policy", "", "gateway read balance policy (round_robin|ordered|freshest|adaptive)")
 	maxReadApplyLag := fs.Int64("max-read-apply-lag", -1, "maximum backend apply lag for any-mode KV reads; -1 disables")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
