@@ -143,9 +143,10 @@ seq_from_output() {
 wait_cluster_applied() {
   local seq="$1"
   local output
-  output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --min-applied-index "$seq")"
+  output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --min-applied-index "$seq" --require-compatible)"
   require_contains "$output" "ready=true"
   require_contains "$output" "ready_nodes=3"
+  require_contains "$output" "compatible=true"
 }
 
 node_endpoint_args() {
@@ -161,9 +162,13 @@ for url in "${NODE_URLS[@]}"; do
   wait_for_health "$url"
 done
 
-wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s)"
+wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --require-compatible)"
 require_contains "$wait_output" "ready=true"
 require_contains "$wait_output" "ready_nodes=3"
+require_contains "$wait_output" "compatible=true"
+
+status_output="$(lsmctl cluster-status $(node_endpoint_args))"
+require_contains "$status_output" "compatibility=cluster_status:1,control_state:1,state_snapshot:1,raft_peer_message:1"
 
 put_output="$(lsmctl put --cluster $(node_endpoint_args) --key compose --value ok)"
 require_contains "$put_output" "state=committed"

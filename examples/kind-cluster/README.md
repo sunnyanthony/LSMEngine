@@ -33,7 +33,7 @@ discovery behind the LSM-owned node endpoint resolver contract. It explicitly
 uses `--read-mode leader` so `/kv/get` and `/kv/range` proxy to the current commit-log write
 leader. Leader read mode is a routing policy, not a raft ReadIndex or lease-read
 implementation. The smoke waits for all pods to apply the committed write/delete
-sequence with `wait-cluster --min-applied-index` before reading followers, so it
+sequence with `wait-cluster --min-applied-index --require-compatible` before reading followers, so it
 checks catch-up instead of only endpoint reachability.
 These sequences map to commit-log indexes in the built-in Raft provider used by
 this example; this is not a generic custom-provider guarantee or read barrier.
@@ -41,7 +41,7 @@ Both scripts explicitly use the `kind-$LSM_KIND_CLUSTER` Kubernetes context
 (`kind-lsm-cluster` by default), including cleanup, rather than the current context.
 The smoke uses `wait-gateway --min-reachable 3`
 with `--read-mode leader` before client traffic, then waits for all pods to
-apply the committed write/delete sequence with `wait-cluster --min-applied-index`
+apply the committed write/delete sequence with `wait-cluster --min-applied-index --require-compatible`
 before reading followers, so it checks catch-up instead of only endpoint
 reachability. The manifests use short in-cluster DNS names such as
 `lsm-cluster-0.lsm-cluster` instead of assuming a specific cluster DNS suffix.
