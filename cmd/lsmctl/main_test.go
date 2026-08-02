@@ -105,6 +105,44 @@ func TestReadCDCStatusRemote(t *testing.T) {
 	}
 }
 
+func TestReadClusterCDCStatusesRecordsPartialFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cdc/status" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lsm.CDCStatus{
+			Source:            lsm.CDCSourceMemory,
+			ReplayOnRestart:   false,
+			StartOffset:       3,
+			MaxEventsPerShard: 64,
+			Shards: []lsm.CDCShardStatus{
+				{ShardID: "users", StartOffset: 3, OldestOffset: 4, NextOffset: 5, RetainedEvents: 2},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := readClusterCDCStatuses(map[string]string{
+		"node-a": "http://127.0.0.1:1",
+		"node-b": srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("read cluster cdc status: %v", err)
+	}
+	if len(got.Nodes) != 2 {
+		t.Fatalf("expected two node results, got %+v", got)
+	}
+	if got.Nodes[0].Node != "node-a" || got.Nodes[0].Error == "" {
+		t.Fatalf("expected node-a partial failure, got %+v", got.Nodes[0])
+	}
+	if got.Nodes[1].Node != "node-b" || got.Nodes[1].Status == nil {
+		t.Fatalf("expected node-b status, got %+v", got.Nodes[1])
+	}
+	if got.Nodes[1].Status.StartOffset != 3 || len(got.Nodes[1].Status.Shards) != 1 {
+		t.Fatalf("unexpected node-b cdc status: %+v", got.Nodes[1].Status)
+	}
+}
+
 func TestReadCDCEventsRemote(t *testing.T) {
 	committedAt := time.Unix(1700000000, 0).UTC()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +255,35 @@ func TestWriteCDCInspectionOutput(t *testing.T) {
 	} {
 		if !strings.Contains(eventsOut, want) {
 			t.Fatalf("expected events output to contain %q, got:\n%s", want, eventsOut)
+		}
+	}
+
+	var clusterBuf bytes.Buffer
+	writeClusterCDCStatuses(&clusterBuf, clusterCDCStatusResult{
+		Nodes: []clusterCDCStatusNodeResult{
+			{
+				Node:     "node-a",
+				Endpoint: "http://node-a:8080",
+				Status: &lsm.CDCStatus{
+					Source:            lsm.CDCSourceMemory,
+					StartOffset:       7,
+					MaxEventsPerShard: 128,
+					Shards: []lsm.CDCShardStatus{
+						{ShardID: "users", StartOffset: 7, OldestOffset: 8, NextOffset: 9, RetainedEvents: 1},
+					},
+				},
+			},
+			{Node: "node-b", Endpoint: "http://node-b:8080", Error: "unreachable"},
+		},
+	})
+	clusterOut := clusterBuf.String()
+	for _, want := range []string{
+		"node=node-a endpoint=http://node-a:8080 source=memory durable=false replay_on_restart=false start_offset=7 max_events_per_shard=128 shards=1",
+		"node=node-a shard=users start_offset=7 oldest_offset=8 next_offset=9 retained_events=1",
+		"node=node-b endpoint=http://node-b:8080 error=unreachable",
+	} {
+		if !strings.Contains(clusterOut, want) {
+			t.Fatalf("expected cluster status output to contain %q, got:\n%s", want, clusterOut)
 		}
 	}
 }

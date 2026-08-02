@@ -747,6 +747,17 @@ type cdcEventResult struct {
 	CommittedAt time.Time `json:"committed_at"`
 }
 
+type clusterCDCStatusResult struct {
+	Nodes []clusterCDCStatusNodeResult `json:"nodes"`
+}
+
+type clusterCDCStatusNodeResult struct {
+	Node     string         `json:"node"`
+	Endpoint string         `json:"endpoint"`
+	Status   *lsm.CDCStatus `json:"status,omitempty"`
+	Error    string         `json:"error,omitempty"`
+}
+
 type kvWriteRequest struct {
 	KeyBase64   string               `json:"key_base64"`
 	ValueBase64 string               `json:"value_base64,omitempty"`
@@ -1279,6 +1290,9 @@ func cdcStatusCmd(args []string) {
 	configPath := fs.String("config", "", "config file path")
 	dataDir := fs.String("data-dir", "", "data directory")
 	addr := fs.String("addr", "", "http address for server mode")
+	clusterMode := fs.Bool("cluster", false, "read CDC status from all configured cluster endpoints")
+	var nodeEndpoints nodeEndpointFlags
+	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url for --cluster; may be repeated")
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -1286,6 +1300,25 @@ func cdcStatusCmd(args []string) {
 	cfg := loadConfigOrExit(*configPath)
 	if *addr == "" {
 		*addr = cfg.Addr
+	}
+	if *clusterMode || len(nodeEndpoints) > 0 {
+		endpoints, err := clusterNodeEndpointsFromConfig(cfg, *addr, nodeEndpoints)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(endpoints) == 0 {
+			log.Fatal("cdc-status --cluster requires raft.peer_urls, raft.peer_url_file, --addr, or --node-endpoint")
+		}
+		statuses, err := readClusterCDCStatuses(endpoints)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *jsonOut {
+			writeJSON(os.Stdout, statuses)
+			return
+		}
+		writeClusterCDCStatuses(os.Stdout, statuses)
+		return
 	}
 	if *dataDir == "" {
 		*dataDir = cfg.DataDir
@@ -1942,6 +1975,29 @@ func readCDCStatus(addr, dataDir string) (lsm.CDCStatus, error) {
 	}
 	defer store.Close()
 	return store.CDCStatus(), nil
+}
+
+func readClusterCDCStatuses(endpoints map[string]string) (clusterCDCStatusResult, error) {
+	nodes := sortedEndpointNodes(endpoints)
+	result := clusterCDCStatusResult{
+		Nodes: make([]clusterCDCStatusNodeResult, 0, len(nodes)),
+	}
+	for _, nodeID := range nodes {
+		endpoint := normalizeHTTPBaseURL(endpoints[nodeID])
+		var status lsm.CDCStatus
+		err := getJSON(endpoint+"/cdc/status", &status)
+		node := clusterCDCStatusNodeResult{
+			Node:     nodeID,
+			Endpoint: endpoint,
+		}
+		if err != nil {
+			node.Error = err.Error()
+		} else {
+			node.Status = &status
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	return result, nil
 }
 
 func readCDCEvents(addr, dataDir string, shardID string, offset uint64, limit int) (cdcReadResult, error) {
@@ -4259,6 +4315,40 @@ func writeCDCStatus(w io.Writer, status lsm.CDCStatus) {
 			shard.NextOffset,
 			shard.RetainedEvents,
 		)
+	}
+}
+
+func writeClusterCDCStatuses(w io.Writer, result clusterCDCStatusResult) {
+	for _, node := range result.Nodes {
+		if node.Error != "" || node.Status == nil {
+			fmt.Fprintf(w, "node=%s endpoint=%s error=%s\n", node.Node, node.Endpoint, node.Error)
+			continue
+		}
+		status := node.Status
+		fmt.Fprintf(
+			w,
+			"node=%s endpoint=%s source=%s durable=%v replay_on_restart=%v start_offset=%d max_events_per_shard=%d shards=%d\n",
+			node.Node,
+			node.Endpoint,
+			status.Source,
+			status.Durable,
+			status.ReplayOnRestart,
+			status.StartOffset,
+			status.MaxEventsPerShard,
+			len(status.Shards),
+		)
+		for _, shard := range status.Shards {
+			fmt.Fprintf(
+				w,
+				"node=%s shard=%s start_offset=%d oldest_offset=%d next_offset=%d retained_events=%d\n",
+				node.Node,
+				shard.ShardID,
+				shard.StartOffset,
+				shard.OldestOffset,
+				shard.NextOffset,
+				shard.RetainedEvents,
+			)
+		}
 	}
 }
 

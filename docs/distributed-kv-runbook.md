@@ -136,7 +136,9 @@ The useful fields are:
   it is not a cluster-wide durability or replication health summary.
 - `lsmctl cdc-status --addr <node-url>` prints the node-local CDC source,
   durability, retention capacity, `start_offset`, and per-shard retained
-  windows. Current CDC is `source=memory`, `durable=false`, and
+  windows. Add `--cluster` with the normal `--node-endpoint` or `--config`
+  endpoint discovery flags to poll every configured node and report per-node
+  CDC status/errors. Current CDC is `source=memory`, `durable=false`, and
   `replay_on_restart=false`.
 - `lsmctl cdc-events --addr <node-url> --shard <id> --offset <n>` prints
   retained CDC events after an offset. Use `start_offset` and
@@ -160,6 +162,10 @@ go run ./cmd/lsmctl get --addr http://127.0.0.1:8081 --key user:1
 go run ./cmd/lsmctl range --addr http://127.0.0.1:8082 --start user: --end user~ --limit 10
 go run ./cmd/lsmctl delete --addr http://127.0.0.1:8080 --key user:1
 go run ./cmd/lsmctl cdc-status --addr http://127.0.0.1:8080
+go run ./cmd/lsmctl cdc-status --cluster \
+  --node-endpoint node-a=http://127.0.0.1:8080 \
+  --node-endpoint node-b=http://127.0.0.1:8081 \
+  --node-endpoint node-c=http://127.0.0.1:8082
 go run ./cmd/lsmctl cdc-events --addr http://127.0.0.1:8080 --shard default --offset 0 --limit 10
 go run ./cmd/lsmctl compact --addr http://127.0.0.1:8080
 ```
