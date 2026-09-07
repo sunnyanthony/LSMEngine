@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -32,6 +33,8 @@ type LogStore struct {
 	loaded    bool
 	state     Manifest
 	updateCnt int
+	failed    error
+	repairLog bool
 }
 
 // NewLogStore creates a log-backed manifest store.
@@ -70,9 +73,17 @@ func (s *LogStore) Load() (Manifest, error) {
 	return s.state, nil
 }
 
-func (s *LogStore) Save(m Manifest) error {
+func (s *LogStore) Save(m Manifest) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failed != nil {
+		return s.failed
+	}
+	defer func() {
+		if err != nil {
+			s.failed = err
+		}
+	}()
 	s.state = m
 	s.loaded = true
 	s.updateCnt = 0
@@ -85,14 +96,28 @@ func (s *LogStore) Save(m Manifest) error {
 	return nil
 }
 
-func (s *LogStore) Update(fn func(Manifest) Manifest) error {
+func (s *LogStore) Update(fn func(Manifest) Manifest) (err error) {
 	if fn == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if err != nil {
+			s.failed = err
+		}
+	}()
 	if err := s.loadLocked(); err != nil {
 		return err
+	}
+	if s.repairLog {
+		if err := s.writeCheckpointLocked(); err != nil {
+			return err
+		}
+		if err := s.truncateLogLocked(); err != nil {
+			return err
+		}
+		s.repairLog = false
 	}
 	s.state = fn(s.state)
 	if err := s.appendLocked(logRecord{Type: "snapshot", Manifest: s.state}); err != nil {
@@ -117,6 +142,9 @@ type logRecord struct {
 }
 
 func (s *LogStore) loadLocked() error {
+	if s.failed != nil {
+		return s.failed
+	}
 	if s.loaded {
 		return nil
 	}
@@ -160,6 +188,9 @@ func (s *LogStore) readLogLocked(state Manifest) (out Manifest, err error) {
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return Manifest{}, fmt.Errorf("manifest log read: %w", err)
+		}
 		if len(line) == 0 && err != nil {
 			break
 		}
@@ -172,12 +203,14 @@ func (s *LogStore) readLogLocked(state Manifest) (out Manifest, err error) {
 		var rec logRecord
 		if err := json.Unmarshal(trimLine(line), &rec); err != nil {
 			// Stop on corrupt tail to allow recovery.
+			s.repairLog = true
 			break
 		}
 		if rec.Type == "snapshot" {
 			out = rec.Manifest
 		}
 		if err != nil {
+			s.repairLog = true
 			break
 		}
 	}
@@ -204,16 +237,23 @@ func (s *LogStore) appendLocked(rec logRecord) error {
 	if err != nil {
 		return fmt.Errorf("manifest log open append: %w", err)
 	}
-	if _, err := f.Write(data); err != nil {
+	n, err := f.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		if cerr := f.Close(); cerr != nil {
 			return errors.Join(fmt.Errorf("manifest log append: %w", err), fmt.Errorf("manifest log close: %w", cerr))
 		}
 		return fmt.Errorf("manifest log append: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("manifest log sync: %w", err), f.Close())
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("manifest log close: %w", err)
 	}
-	return nil
+	return syncPath(s.fs, filepath.Dir(s.opts.LogPath))
 }
 
 func (s *LogStore) writeCheckpointLocked() error {
@@ -221,19 +261,14 @@ func (s *LogStore) writeCheckpointLocked() error {
 	if err != nil {
 		return fmt.Errorf("manifest checkpoint marshal: %w", err)
 	}
-	tmp := s.opts.CheckpointPath + ".tmp"
-	if err := s.fs.WriteFile(tmp, data, s.opts.CheckpointPerm); err != nil {
-		return fmt.Errorf("manifest checkpoint write: %w", err)
-	}
-	if err := s.fs.Rename(tmp, s.opts.CheckpointPath); err != nil {
-		return fmt.Errorf("manifest checkpoint rename: %w", err)
-	}
-	return nil
+	return writeDurableCheckpoint(s.fs, s.opts.CheckpointPath, data, s.opts.CheckpointPerm)
 }
 
 func (s *LogStore) truncateLogLocked() error {
 	if err := s.fs.Truncate(s.opts.LogPath, 0); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("manifest log truncate: %w", err)
+	} else if os.IsNotExist(err) {
+		return nil
 	}
-	return nil
+	return syncPath(s.fs, s.opts.LogPath)
 }

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"lsmengine/internal/lsm/iofs"
 )
 
 type Entry struct {
@@ -101,12 +103,5 @@ func (s *FileManifestStore) Save(m Manifest) error {
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write manifest tmp: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("rename manifest: %w", err)
-	}
-	return nil
+	return writeDurableCheckpoint(iofs.OSFS{}, s.path, data, 0o644)
 }

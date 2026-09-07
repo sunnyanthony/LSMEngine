@@ -91,6 +91,17 @@ func TestLogStoreIgnoresCorruptTail(t *testing.T) {
 	if got.WALSeq != 7 {
 		t.Fatalf("expected WALSeq=7, got %d", got.WALSeq)
 	}
+	if err := reopen.Update(func(m Manifest) Manifest { m.WALSeq = 8; return m }); err != nil {
+		t.Fatal(err)
+	}
+	again, err := NewLogStore(LogOptions{LogPath: logPath, CheckpointPath: cpPath, CheckpointEveryN: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = again.Load()
+	if err != nil || got.WALSeq != 8 {
+		t.Fatalf("update after corrupt-tail recovery was lost: %+v %v", got, err)
+	}
 }
 
 func TestLogStoreIgnoresCorruptCheckpointUsesLog(t *testing.T) {
