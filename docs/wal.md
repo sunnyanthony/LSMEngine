@@ -95,3 +95,19 @@ On decode failure:
 
 ## Replay behavior
 - WAL replay rehydrates memtables and flushes to SSTables once the memtable limit is reached.
+
+## Retention Safety
+
+- A completed SSTable does not by itself authorize pruning through its maximum
+  sequence. The engine caps the checkpoint below every remaining active or
+  immutable entry and removes the completed memtable by flush-job identity.
+  This covers out-of-order completion and equal sequences during snapshot reset.
+- SSTable data and directory entries are synchronized before publication.
+  Manifest appends and checkpoint replacements are synchronized before success;
+  checkpoints are durable before the manifest log is truncated. A persistence
+  failure latches the manifest store until reopen rather than accepting later
+  updates based on uncertain state.
+- The pruned-prefix marker and its directory are synchronized before archived
+  deletion. Retention passes are serialized; interrupted deletion is allowed
+  only within the recorded prefix. This does not protect against arbitrary
+  corruption or a filesystem/backend that does not honor sync semantics.

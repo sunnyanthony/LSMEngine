@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/internal/lsm/sstable"
@@ -33,8 +34,7 @@ func (s *flushService) enqueue(table memtable.Table) {
 	}
 	entries := entriesFromTable(table)
 	if len(entries) == 0 {
-		s.l.removeImmutable(table)
-		s.l.recycleMemtable(table)
+		s.l.retireMemtable(table)
 		return
 	}
 	s.l.memMu.Lock()
@@ -43,18 +43,19 @@ func (s *flushService) enqueue(table memtable.Table) {
 	if s.l.dispatch == nil {
 		return
 	}
-	if s.l.dispatch.Enqueue(entries) {
+	complete := func(t sstable.SSTable) { s.onFlushTable(t, table) }
+	if s.l.dispatch.EnqueueWithCallback(entries, complete) {
 		return
 	}
 	s.l.flushBlocked.Store(true)
-	go s.enqueueBlocking(entries)
+	go s.enqueueBlocking(entries, complete)
 }
 
-func (s *flushService) enqueueBlocking(entries []types.Entry) {
+func (s *flushService) enqueueBlocking(entries []types.Entry, complete func(sstable.SSTable)) {
 	if s.l.dispatch == nil || s.l.ctx == nil {
 		return
 	}
-	if s.l.dispatch.EnqueueBlocking(s.l.ctx, entries) {
+	if s.l.dispatch.EnqueueBlockingWithCallback(s.l.ctx, entries, complete) {
 		s.l.flushBlocked.Store(false)
 		return
 	}
@@ -62,21 +63,83 @@ func (s *flushService) enqueueBlocking(entries []types.Entry) {
 }
 
 // onFlush applies a newly flushed table to the table set and manifest.
-func (s *flushService) onFlush(t sstable.SSTable) {
+func (s *flushService) onFlushTable(t sstable.SSTable, flushed memtable.Table) {
+	s.l.commitApplyMu.Lock()
+	defer s.l.commitApplyMu.Unlock()
+	checkpoint, err := s.checkpointForFlush(t.Seq, flushed)
+	if err != nil {
+		if s.l.logger != nil {
+			s.l.logger.Printf("flush checkpoint: %v", err)
+		}
+		return
+	}
 	meta := tableedit.TableMetaFromSSTable(t, 0)
 	add := []tableset.Table{{Meta: meta, Handle: t}}
-	if err := s.editService().Apply(add, nil, t.Seq); err != nil {
+	if err := s.editService().Apply(add, nil, checkpoint); err != nil {
 		if s.l.logger != nil {
 			s.l.logger.Printf("flush apply: %v", err)
 		}
-	} else {
-		s.l.pruneArchivedWALSegments(t.Seq)
+		return
 	}
+	s.l.retireMemtable(flushed)
+	s.l.pruneArchivedWALSegments(checkpoint)
 	if s.l.compactionSvc != nil {
 		s.l.compactionSvc.Trigger()
 	}
-	flushed := s.l.popFlushedTable()
-	s.l.recycleMemtable(flushed)
+}
+
+// Called with commitApplyMu held so new mutations cannot cross the sampled prefix.
+func (s *flushService) checkpointForFlush(seq uint64, flushed memtable.Table) (uint64, error) {
+	m, err := s.l.manifest.Load()
+	if err != nil {
+		return 0, err
+	}
+	checkpoint := seq
+	for _, table := range m.Tables {
+		if table.SeqMax > checkpoint {
+			checkpoint = table.SeqMax
+		}
+	}
+	s.l.memMu.RLock()
+	defer s.l.memMu.RUnlock()
+	found := false
+	for _, table := range s.l.flushQueue {
+		if table == flushed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, fmt.Errorf("unknown flushed memtable at sequence %d", seq)
+	}
+	pending := append([]memtable.Table{s.l.mem}, s.l.immutables...)
+	for _, table := range pending {
+		if table == nil || table == flushed {
+			continue
+		}
+		min, _ := memtableSequenceBounds(table)
+		if min > 0 && min <= checkpoint {
+			checkpoint = min - 1
+		}
+	}
+	if checkpoint < m.WALSeq {
+		return 0, fmt.Errorf("unflushed sequence below durable checkpoint %d", m.WALSeq)
+	}
+	return checkpoint, nil
+}
+
+func memtableSequenceBounds(table memtable.Table) (min, max uint64) {
+	it := table.Iter()
+	for it.Next() {
+		seq := it.Entry().Seq
+		if min == 0 || seq < min {
+			min = seq
+		}
+		if seq > max {
+			max = seq
+		}
+	}
+	return min, max
 }
 
 func (s *flushService) editService() tableedit.Editor {

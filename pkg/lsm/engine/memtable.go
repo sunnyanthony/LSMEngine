@@ -74,10 +74,24 @@ func (l *LSM) unpinMemtableLocked(table memtable.Table) bool {
 }
 
 func (l *LSM) releasePinned(table memtable.Table) {
+	l.memRetireMu.Lock()
 	l.memMu.Lock()
 	shouldFlush := l.unpinMemtableLocked(table)
+	immutable, queued := false, false
+	for _, pending := range l.immutables {
+		immutable = immutable || pending == table
+	}
+	for _, pending := range l.flushQueue {
+		queued = queued || pending == table
+	}
 	l.memMu.Unlock()
-	if shouldFlush {
+	if shouldFlush && !immutable {
+		l.recycleMemtable(table)
+		l.memRetireMu.Unlock()
+		return
+	}
+	l.memRetireMu.Unlock()
+	if shouldFlush && !queued {
 		if l.ctx != nil {
 			select {
 			case <-l.ctx.Done():
@@ -90,6 +104,14 @@ func (l *LSM) releasePinned(table memtable.Table) {
 		}
 		l.flushSvc.enqueue(table)
 	}
+}
+
+// Serialize completion with the final snapshot release to recycle exactly once.
+func (l *LSM) retireMemtable(table memtable.Table) {
+	l.memRetireMu.Lock()
+	defer l.memRetireMu.Unlock()
+	l.removeImmutable(table)
+	l.recycleMemtable(table)
 }
 
 func (l *LSM) recycleMemtable(table memtable.Table) {

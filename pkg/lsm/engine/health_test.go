@@ -231,8 +231,11 @@ func TestWALRetentionPrunesArchivedSegmentsAfterFlush(t *testing.T) {
 			t.Fatalf("close reopened: %v", err)
 		}
 	}()
-	if entry, ok := reopened.Get([]byte{'t'}); !ok || string(entry.Value) != "value" {
-		t.Fatalf("expected retained value after reopen, got %q ok=%v", entry.Value, ok)
+	for i := 0; i < 20; i++ {
+		key := []byte{byte('a' + i)}
+		if entry, ok := reopened.Get(key); !ok || string(entry.Value) != "value" {
+			t.Fatalf("expected %q after retention and reopen, got %q ok=%v", key, entry.Value, ok)
+		}
 	}
 }
 

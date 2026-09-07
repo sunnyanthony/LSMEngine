@@ -158,7 +158,7 @@ func New(opts Options) (*LSM, error) {
 		)
 	}
 
-	lsm.dispatch = dispatch.NewDispatcher(opts.FlushQueueSize, eventBus, lsm.flushSvc.onFlush)
+	lsm.dispatch = dispatch.NewDispatcher(opts.FlushQueueSize, eventBus, nil)
 
 	m, tables, err := bootstrap.LoadManifestTables(lsm.manifest, lsm.sstableOpts)
 	if err != nil {

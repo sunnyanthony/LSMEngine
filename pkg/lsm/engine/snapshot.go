@@ -15,7 +15,7 @@ type Snapshot struct {
 	lsm    *LSM
 	mems   []memtable.Table
 	tables []tableset.Table
-	pinned memtable.Table
+	pinned []memtable.Table
 	closed uint32
 }
 
@@ -25,8 +25,11 @@ func (l *LSM) Snapshot() *Snapshot {
 		return nil
 	}
 	l.memMu.Lock()
-	frozen := l.freezeMemtableLocked(true)
+	l.freezeMemtableLocked(false)
 	immutables := append([]memtable.Table(nil), l.immutables...)
+	for _, table := range immutables {
+		l.pinMemtableLocked(table)
+	}
 	l.memMu.Unlock()
 
 	mems := make([]memtable.Table, len(immutables))
@@ -43,7 +46,7 @@ func (l *LSM) Snapshot() *Snapshot {
 		lsm:    l,
 		mems:   mems,
 		tables: tables,
-		pinned: frozen,
+		pinned: immutables,
 	}
 }
 
@@ -55,8 +58,8 @@ func (s *Snapshot) Close() error {
 	if !atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
 		return nil
 	}
-	if s.pinned != nil {
-		s.lsm.releasePinned(s.pinned)
+	for _, table := range s.pinned {
+		s.lsm.releasePinned(table)
 	}
 	if s.lsm.tables != nil && len(s.tables) > 0 {
 		paths := make([]string, 0, len(s.tables))

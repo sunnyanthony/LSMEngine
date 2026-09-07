@@ -146,6 +146,7 @@ type LSM struct {
 	flushQueue                        []memtable.Table
 	pinned                            map[memtable.Table]int
 	memMu                             sync.RWMutex
+	memRetireMu                       sync.Mutex
 	mtPool                            *sync.Pool
 	wal                               *wal.WAL
 	flusher                           sstable.Flusher

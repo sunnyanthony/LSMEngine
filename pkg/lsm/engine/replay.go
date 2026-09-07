@@ -71,8 +71,7 @@ func (l *LSM) flushMemtableForReplay(table memtable.Table) error {
 	}
 	entries := entriesFromTable(table)
 	if len(entries) == 0 {
-		l.removeImmutable(table)
-		l.recycleMemtable(table)
+		l.retireMemtable(table)
 		return nil
 	}
 	t, err := l.flusher.Flush(entries)
@@ -84,7 +83,6 @@ func (l *LSM) flushMemtableForReplay(table memtable.Table) error {
 	if err := l.tableEditor().Apply(add, nil, t.Seq); err != nil {
 		return err
 	}
-	l.removeImmutable(table)
-	l.recycleMemtable(table)
+	l.retireMemtable(table)
 	return nil
 }
