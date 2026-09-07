@@ -39,7 +39,7 @@ func (l *LSM) replayWAL(checkpoint uint64) error {
 			}
 			return nil
 		},
-		BumpSeq: l.bumpSeq,
+		BumpSeq: l.observeCommittedSeq,
 	})
 	if err == nil {
 		return nil

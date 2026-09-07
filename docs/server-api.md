@@ -138,6 +138,9 @@ the LSM engine. It is intentionally separate from the engine internals.
 - Local storage write admission config:
   - `memtable_limit` and `flush_queue_size` pass through to engine options when non-zero.
   - `wal_max_segment_bytes` enables local WAL segment rotation when non-zero. The active segment rotates after flushed bytes reach the threshold; archived WAL segment deletion/retention remains a separate policy.
+    The threshold includes framing/header bytes and is checked after a complete
+    block, so it is not a hard file-size limit. Zero keeps rotation disabled;
+    enabling it alone does not bound total WAL disk usage.
   - `flush_backpressure_queue_threshold` rejects new local writes before commit when the immutable flush backlog reaches the configured depth.
   - `compaction_l0_threshold` enables background L0 compaction.
   - `compaction_backpressure_l0_threshold` rejects new local writes that would force another flush while L0 table count is already at or above the configured threshold.

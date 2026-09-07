@@ -45,7 +45,7 @@ type Options struct {
 	SSTablePolicyOverride             *sstableconfig.PolicySnapshot
 	ManifestCheckpointEvery           int
 	WALSync                           bool
-	WALMaxSegmentBytes                uint64
+	WALMaxSegmentBytes                uint64 // Rotate after a flushed block reaches this size; 0 disables rotation.
 	WALMaxRecord                      uint64
 	WALBlockSize                      uint32
 	WALAsync                          bool
