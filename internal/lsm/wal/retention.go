@@ -35,6 +35,8 @@ func (w *WAL) PruneArchivedSegments(checkpoint uint64, retain int) (RetentionSta
 	if w == nil {
 		return RetentionStats{}, nil
 	}
+	w.retentionMu.Lock()
+	defer w.retentionMu.Unlock()
 	if retain < 0 {
 		return RetentionStats{}, fmt.Errorf("wal retain archived segments must be non-negative")
 	}
@@ -95,14 +97,14 @@ func (w *WAL) PruneArchivedSegments(checkpoint uint64, retain int) (RetentionSta
 	if err := segment.WritePrunedThrough(w.path, prunedThrough); err != nil {
 		return out, err
 	}
+	out.PrunedThrough = prunedThrough
 	for _, r := range ranges[:deleteCount] {
 		if err := fs.Remove(r.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return out, fmt.Errorf("remove wal segment %s: %w", r.path, err)
 		}
+		out.RemovedSegments++
+		out.RetainedSegments--
 	}
-	out.RemovedSegments = deleteCount
-	out.RetainedSegments = len(segments) - deleteCount
-	out.PrunedThrough = prunedThrough
 	return out, nil
 }
 

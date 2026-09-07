@@ -18,18 +18,19 @@ import (
 
 // WAL appends mutations for durability and supports replay.
 type WAL struct {
-	mu        sync.Mutex
-	f         iofs.File
-	fs        iofs.FS
-	path      string
-	sync      bool
-	maxBytes  uint64
-	sizeBytes uint64
-	maxRecord uint64
-	blockSize uint32
-	segmentID uint64
-	records   []codec.RecordBuffer
-	blockLen  int
+	retentionMu sync.Mutex
+	mu          sync.Mutex
+	f           iofs.File
+	fs          iofs.FS
+	path        string
+	sync        bool
+	maxBytes    uint64
+	sizeBytes   uint64
+	maxRecord   uint64
+	blockSize   uint32
+	segmentID   uint64
+	records     []codec.RecordBuffer
+	blockLen    int
 
 	async    bool
 	batchMax int

@@ -43,15 +43,12 @@ func ListSegments(path string) ([]string, bool, error) {
 	sort.Ints(nums)
 	missing := false
 	expected := 1
-	if nums[0] > 1 && uint64(nums[0]-1) <= prunedThrough {
-		expected = nums[0]
-	}
 	for _, n := range nums {
-		if n != expected {
+		if n != expected && (n < expected || uint64(n-1) > prunedThrough) {
 			missing = true
 			break
 		}
-		expected++
+		expected = n + 1
 	}
 	segs := make([]string, 0, len(nums))
 	for _, n := range nums {
@@ -97,14 +94,42 @@ func ReadPrunedThrough(path string) (uint64, error) {
 }
 
 func WritePrunedThrough(path string, segmentID uint64) error {
+	previous, err := ReadPrunedThrough(path)
+	if err != nil {
+		return err
+	}
+	if previous > segmentID {
+		segmentID = previous
+	}
 	marker := PrunedMarkerPath(path)
 	tmp := marker + ".tmp"
-	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", segmentID)), 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open pruned marker: %w", err)
+	}
+	defer os.Remove(tmp)
+	if _, err := fmt.Fprintf(f, "%d\n", segmentID); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write pruned marker: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync pruned marker: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close pruned marker: %w", err)
 	}
 	if err := os.Rename(tmp, marker); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename pruned marker: %w", err)
+	}
+	dir, err := os.Open(filepath.Dir(marker))
+	if err != nil {
+		return fmt.Errorf("open pruned marker directory: %w", err)
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync pruned marker directory: %w", err)
 	}
 	return nil
 }

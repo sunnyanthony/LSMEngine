@@ -85,6 +85,34 @@ func TestSegmentID(t *testing.T) {
 	}
 }
 
+func TestListSegmentsAcceptsPartialDeletionWithinMarkedPrefix(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "wal.log")
+	if err := WritePrunedThrough(base, 4); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{".1", ".3", ".5"} {
+		if err := os.WriteFile(base+suffix, []byte("segment"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths, missing, err := ListSegments(base)
+	if err != nil || missing || len(paths) != 3 {
+		t.Fatalf("authorized partial deletion: paths=%v missing=%v err=%v", paths, missing, err)
+	}
+	if err := WritePrunedThrough(base, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadPrunedThrough(base); err != nil || got != 4 {
+		t.Fatalf("marker regressed: %d %v", got, err)
+	}
+	if err := os.WriteFile(base+".7", []byte("segment"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, missing, err := ListSegments(base); err != nil || !missing {
+		t.Fatalf("unmarked gap must fail: missing=%v err=%v", missing, err)
+	}
+}
+
 func TestNextSegmentID(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "wal.log")
