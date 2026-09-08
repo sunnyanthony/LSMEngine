@@ -32,14 +32,31 @@ func (s *flushService) enqueue(table memtable.Table) {
 	if err := table.WaitWriters(ctx); err != nil {
 		return
 	}
+	s.l.memRetireMu.Lock()
+	s.l.memMu.RLock()
+	immutable, queued := false, false
+	for _, pending := range s.l.immutables {
+		immutable = immutable || pending == table
+	}
+	for _, pending := range s.l.flushQueue {
+		queued = queued || pending == table
+	}
+	s.l.memMu.RUnlock()
+	if !immutable || queued {
+		s.l.memRetireMu.Unlock()
+		return
+	}
 	entries := entriesFromTable(table)
 	if len(entries) == 0 {
-		s.l.retireMemtable(table)
+		s.l.removeImmutable(table)
+		s.l.recycleMemtable(table)
+		s.l.memRetireMu.Unlock()
 		return
 	}
 	s.l.memMu.Lock()
 	s.l.flushQueue = append(s.l.flushQueue, table)
 	s.l.memMu.Unlock()
+	s.l.memRetireMu.Unlock()
 	if s.l.dispatch == nil {
 		return
 	}
@@ -68,6 +85,7 @@ func (s *flushService) onFlushTable(t sstable.SSTable, flushed memtable.Table) {
 	defer s.l.commitApplyMu.Unlock()
 	checkpoint, err := s.checkpointForFlush(t.Seq, flushed)
 	if err != nil {
+		_ = t.Close()
 		if s.l.logger != nil {
 			s.l.logger.Printf("flush checkpoint: %v", err)
 		}

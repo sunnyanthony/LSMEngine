@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sync"
 	"testing"
 
 	memtable "lsmengine/internal/lsm/memtable"
@@ -56,6 +57,33 @@ func TestFlushCompletionPreservesUnflushedPrefix(t *testing.T) {
 				t.Fatalf("WAL needed by unfinished tables was removed: %v", seen)
 			}
 		}
+	}
+}
+
+func TestConcurrentEnqueueRegistersMemtableOnce(t *testing.T) {
+	store, err := New(Options{DataDir: t.TempDir(), MemtableLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Put([]byte("a"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	frozen := store.freezeMemtableIfCurrent(store.activeMem())
+	snap := store.Snapshot()
+	defer snap.Close()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); store.flushSvc.enqueue(frozen) }()
+	}
+	wg.Wait()
+	waitForStats(t, func() bool { return store.Stats().FlushQueueDepth == 0 })
+	if got := store.Stats().SSTableCount; got != 1 {
+		t.Fatalf("duplicate flush publication: %d SSTables", got)
+	}
+	if entry, ok := snap.Get([]byte("a")); !ok || string(entry.Value) != "value" {
+		t.Fatalf("snapshot lost queued table: %+v", entry)
 	}
 }
 

@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"sync/atomic"
 
 	memtable "lsmengine/internal/lsm/memtable"
@@ -30,6 +31,10 @@ func (l *LSM) Snapshot() *Snapshot {
 	for _, table := range immutables {
 		l.pinMemtableLocked(table)
 	}
+	var tables []tableset.Table
+	if l.tables != nil {
+		tables = l.tables.SnapshotAndPin()
+	}
 	l.memMu.Unlock()
 
 	mems := make([]memtable.Table, len(immutables))
@@ -37,9 +42,9 @@ func (l *LSM) Snapshot() *Snapshot {
 		mems[i] = immutables[len(immutables)-1-i]
 	}
 
-	var tables []tableset.Table
-	if l.tables != nil {
-		tables = l.tables.SnapshotAndPin()
+	for _, table := range immutables {
+		// Writers that acquired the old active table precede this snapshot.
+		_ = table.WaitWriters(context.Background())
 	}
 
 	return &Snapshot{
@@ -50,7 +55,7 @@ func (l *LSM) Snapshot() *Snapshot {
 	}
 }
 
-// Close releases the pinned memtable so it can be flushed.
+// Close releases all pinned memtables and SSTables held by this snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil || s.lsm == nil {
 		return nil
