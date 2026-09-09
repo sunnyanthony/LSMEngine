@@ -154,6 +154,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - `any` is the default and keeps best-effort healthy-endpoint read fallback.
   - `leader` sends `/kv/get` and `/kv/range` only to the current commit-log write leader; it returns unavailable instead of falling back when no leader can be identified.
   - `gateway_endpoint_failure_cooldown` maps to `lsmctl gateway --endpoint-failure-cooldown` and controls how long recent transport failures or 5xx backend responses are deprioritized behind healthy endpoints. `0` uses the gateway default.
+    An omitted flag uses config; explicit `--endpoint-failure-cooldown=0` overrides config with the five-second gateway default, not disabled cooldown. Negative durations are rejected.
 - Allow bundling an L7 proxy (Envoy/Nginx) in the same pod for TLS/mTLS, auth, and rate limits.
 - Keep the app server thin; let the proxy handle most ingress concerns.
 - End-to-end example (Envoy + kind): `examples/k8s-envoy/`.

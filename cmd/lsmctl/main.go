@@ -207,7 +207,7 @@ func gatewayCmd(args []string) {
 	readMode := fs.String("read-mode", "", "gateway read mode (any|leader)")
 	maxWriteAttempts := fs.Int("max-write-attempts", 0, "maximum route-aware write attempts; 0 uses default")
 	writeRetryBackoff := fs.Duration("write-retry-backoff", 0, "delay between retryable write attempts")
-	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; 0 uses config/default")
+	endpointFailureCooldown := fs.Duration("endpoint-failure-cooldown", 0, "cooldown for recently failed endpoints; omitted uses config, explicit 0 uses gateway default")
 	var nodeEndpoints nodeEndpointFlags
 	fs.Var(&nodeEndpoints, "node-endpoint", "node endpoint mapping node=url; may be repeated")
 	if err := fs.Parse(args); err != nil {

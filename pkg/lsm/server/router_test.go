@@ -21,6 +21,33 @@ type testNodeEndpointResolver struct {
 	endpoints map[string]string
 }
 
+func TestGatewayEndpointFailureCooldownOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   time.Duration
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "default", want: 5 * time.Second},
+		{name: "configured", value: 750 * time.Millisecond, want: 750 * time.Millisecond},
+		{name: "negative", value: -time.Second, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway, err := NewGateway(GatewayOptions{
+				BootstrapURL:            "http://node-a",
+				NodeEndpoints:           map[string]string{"node-a": "http://node-a"},
+				EndpointFailureCooldown: tc.value,
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("unexpected constructor error: %v", err)
+			}
+			if err == nil && gateway.endpointFailureCooldown != tc.want {
+				t.Fatalf("cooldown=%v, want %v", gateway.endpointFailureCooldown, tc.want)
+			}
+		})
+	}
+}
+
 func TestGatewayCanceledBackoffDoesNotCountRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
