@@ -315,6 +315,9 @@ func (g *Gateway) writeWithRetry(
 	consistency lsm.WriteConsistency,
 ) (lsm.WriteRequestStatus, error) {
 	for attempt := 1; attempt <= g.maxAttempts; attempt++ {
+		if attempt > 1 {
+			g.routing.writeRetries.Add(1)
+		}
 		g.routing.writeAttempts.Add(1)
 		status, err := g.writeOnce(ctx, operation, key, value, consistency)
 		if err == nil {
@@ -329,7 +332,6 @@ func (g *Gateway) writeWithRetry(
 			g.routing.writeFailures.Add(1)
 			return lsm.WriteRequestStatus{}, err
 		}
-		g.routing.writeRetries.Add(1)
 		if g.retryBackoff > 0 {
 			timer := time.NewTimer(g.retryBackoff)
 			select {

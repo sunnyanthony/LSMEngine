@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,38 @@ import (
 
 type testNodeEndpointResolver struct {
 	endpoints map[string]string
+}
+
+func TestGatewayCanceledBackoffDoesNotCountRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := newInMemoryHTTPClient(map[string]http.Handler{
+		"node-a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusConflict, writeErrorResponse{
+				Retryable: true,
+				Route:     &writeRouteHint{ShardID: "users", Leader: "node-a"},
+			})
+			cancel()
+		}),
+	})
+	gateway, err := NewGateway(GatewayOptions{
+		BootstrapURL:      "http://node-a",
+		NodeEndpoints:     map[string]string{"node-a": "http://node-a"},
+		HTTPClient:        client,
+		WriteRetryBackoff: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.routes.shards = []cachedRouteShard{{id: "users", leader: "node-a"}}
+	_, err = gateway.Put(ctx, []byte("a"), []byte("value"), lsm.WriteConsistencyLocalCommitted)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled backoff, got %v", err)
+	}
+	stats := gateway.RoutingStats()
+	if stats.WriteAttempts != 1 || stats.WriteRetries != 0 || stats.WriteFailures != 1 || stats.RouteHintUpdates != 1 {
+		t.Fatalf("canceled backoff counted as retry: %+v", stats)
+	}
 }
 
 func (r testNodeEndpointResolver) ResolveNodeEndpoints(_ context.Context) (map[string]string, error) {
