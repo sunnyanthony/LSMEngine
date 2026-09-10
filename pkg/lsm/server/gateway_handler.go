@@ -251,6 +251,10 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 	var firstNotFoundBody []byte
 	var lastErr error
 	for i, target := range targets {
+		if err := r.Context().Err(); err != nil {
+			lastErr = err
+			break
+		}
 		h.gateway.routing.readAttempts.Add(1)
 		if i > 0 {
 			h.gateway.routing.readFallbacks.Add(1)
@@ -302,6 +306,10 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 	var firstNotFound *getResponse
 	var lastErr error
 	for i, target := range targets {
+		if err := r.Context().Err(); err != nil {
+			lastErr = err
+			break
+		}
 		h.gateway.routing.readAttempts.Add(1)
 		if i > 0 {
 			h.gateway.routing.readFallbacks.Add(1)

@@ -15,6 +15,35 @@ import (
 	"lsmengine/pkg/lsm"
 )
 
+func TestGatewayCanceledReadDoesNotAttemptFallback(t *testing.T) {
+	for _, path := range []string{"/kv/get?key_base64=YQ==", "/kv/range", "/kv/write-status/request-1"} {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var calls atomic.Int32
+			backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				cancel()
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			})
+			gateway, err := NewGateway(GatewayOptions{
+				BootstrapURL:  "http://node-a",
+				NodeEndpoints: map[string]string{"node-a": "http://node-a", "node-b": "http://node-b"},
+				HTTPClient:    newInMemoryHTTPClient(map[string]http.Handler{"node-a": backend, "node-b": backend}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx))
+			stats := gateway.RoutingStats()
+			if calls.Load() != 1 || stats.ReadAttempts != 1 || stats.ReadFallbacks != 0 || stats.ReadFailures != 1 {
+				t.Fatalf("canceled read attempted fallback: calls=%d stats=%+v", calls.Load(), stats)
+			}
+		})
+	}
+}
+
 func TestGatewayHandlerRoutesPutToLeader(t *testing.T) {
 	var nodeBWrites atomic.Int32
 	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
