@@ -307,6 +307,14 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 			Endpoint: endpoint,
 		}
 		var status lsm.ClusterStatus
+		if err := ctx.Err(); err != nil {
+			node.Error = err.Error()
+			node.Routing = g.endpointRoutingStats(endpoint)
+			node.Degraded, node.DegradedUntil = g.endpointHealth(endpoint)
+			result.Nodes = append(result.Nodes, node)
+			lastErr = err
+			continue
+		}
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
 			g.recordEndpointStatusProbe(endpoint, false)
 			g.markEndpointRequestFailure(ctx, endpoint)
@@ -528,9 +536,12 @@ func (g *Gateway) postWrite(
 		return lsm.WriteRequestStatus{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := ctx.Err(); err != nil {
+		return lsm.WriteRequestStatus{}, err
+	}
 	resp, err := g.client.Do(req)
-	writeSucceeded := err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted)
-	g.recordEndpointWriteAttempt(endpoint, writeSucceeded)
+	writeSucceeded := false
+	defer func() { g.recordEndpointWriteAttempt(endpoint, writeSucceeded) }()
 	if err != nil {
 		g.markEndpointRequestFailure(ctx, endpoint)
 		return lsm.WriteRequestStatus{}, err
@@ -542,6 +553,7 @@ func (g *Gateway) postWrite(
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			return lsm.WriteRequestStatus{}, err
 		}
+		writeSucceeded = true
 		return out, nil
 	}
 	if resp.StatusCode >= http.StatusInternalServerError {
@@ -566,6 +578,9 @@ func (g *Gateway) currentWriteLeader(ctx context.Context, endpoints map[string]s
 	nodeIDs := g.nodeEndpointIDs(endpoints, false)
 	var lastErr error
 	for _, nodeID := range nodeIDs {
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
 		endpoint := endpoints[nodeID]
 		var status lsm.ClusterStatus
 		if err := g.getJSON(ctx, endpoint+"/cluster/status", &status); err != nil {
@@ -680,6 +695,9 @@ func (g *Gateway) statusFilteredReadTargets(ctx context.Context, endpoints map[s
 
 func (g *Gateway) backendStatus(ctx context.Context, endpoint string) (lsm.ClusterStatus, error) {
 	var status lsm.ClusterStatus
+	if err := ctx.Err(); err != nil {
+		return status, err
+	}
 	var data json.RawMessage
 	if err := g.getJSON(ctx, endpoint+"/cluster/status", &data); err != nil {
 		g.recordEndpointStatusProbe(endpoint, false)

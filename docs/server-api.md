@@ -126,6 +126,16 @@ the LSM engine. It is intentionally separate from the engine internals.
   uses the existing local-directory helper, not a virtual filesystem listing.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
+Backend routing counters are process-local and keyed by normalized endpoint.
+Attempts are recorded with their outcome, not as an in-flight request gauge;
+requests skipped after cancellation do not increment them. A write success
+requires a decodable HTTP 200/202 response, but does not itself prove apply or
+quorum durability (202 may only acknowledge acceptance). Read failures include
+not-found results when the gateway continues searching another backend, and
+status probes include monitoring requests from gateway status/metrics.
+Changing an endpoint starts a different counter history; restarting the gateway
+resets all of these counters.
+
 ## Config and deployment
 - Provide a minimal YAML config for server mode (addr, data dir, timeouts, auth hooks).
 - Example config: `examples/server-config.yaml`.

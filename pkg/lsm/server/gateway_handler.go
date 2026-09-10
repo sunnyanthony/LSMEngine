@@ -405,7 +405,6 @@ func (h *gatewayHandler) proxyClusterRead(w http.ResponseWriter, r *http.Request
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
-			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			lastErr = err
 			continue
 		}
@@ -465,7 +464,6 @@ func (h *gatewayHandler) proxyClusterGet(w http.ResponseWriter, r *http.Request,
 		endpoint := target.endpoint
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
-			h.gateway.recordEndpointReadAttempt(endpoint, false)
 			lastErr = err
 			continue
 		}

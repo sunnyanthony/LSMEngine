@@ -41,6 +41,10 @@ func TestGatewayCanceledReadDoesNotAttemptFallback(t *testing.T) {
 			if calls.Load() != 1 || stats.ReadAttempts != 1 || stats.ReadFallbacks != 0 || stats.ReadFailures != 1 {
 				t.Fatalf("canceled read attempted fallback: calls=%d stats=%+v", calls.Load(), stats)
 			}
+			a, b := gateway.endpointRoutingStats("http://node-a"), gateway.endpointRoutingStats("http://node-b")
+			if a.ReadAttempts != 1 || a.ReadFailures != 1 || b.ReadAttempts != 0 {
+				t.Fatalf("canceled read backend counters: a=%+v b=%+v", a, b)
+			}
 		})
 	}
 }
