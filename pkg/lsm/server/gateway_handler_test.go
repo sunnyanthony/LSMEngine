@@ -45,6 +45,36 @@ func TestGatewayCanceledReadDoesNotAttemptFallback(t *testing.T) {
 	}
 }
 
+type unavailableMetricsResolver struct{}
+
+func (unavailableMetricsResolver) ResolveNodeEndpoints(context.Context) (map[string]string, error) {
+	return nil, fmt.Errorf("discovery unavailable")
+}
+
+func TestGatewayMetricsPreservesCountersOnDiscoveryFailure(t *testing.T) {
+	gateway, err := NewGateway(GatewayOptions{BootstrapURL: "http://node-a", NodeEndpointResolver: unavailableMetricsResolver{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.routing.readAttempts.Add(7)
+	rec := httptest.NewRecorder()
+	NewGatewayHandler(gateway, HandlerOptions{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/gateway/metrics", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "lsm_gateway_routing_read_attempts_total 7\n") {
+		t.Fatalf("discovery failure reset counters: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayMetricsOmitsUnknownLag(t *testing.T) {
+	var out bytes.Buffer
+	writeGatewayMetrics(&out, GatewayClusterStatus{Nodes: []GatewayClusterNodeStatus{{Node: "unreachable"}}})
+	if strings.Contains(out.String(), "lsm_gateway_backend_apply_lag{") {
+		t.Fatalf("unknown lag reported as known sample: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "lsm_gateway_backend_up{node=\"unreachable\"} 0\n") {
+		t.Fatal("missing backend availability signal")
+	}
+}
+
 func TestGatewayHandlerRoutesPutToLeader(t *testing.T) {
 	var nodeBWrites atomic.Int32
 	handlerA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

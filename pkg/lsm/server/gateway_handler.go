@@ -164,13 +164,11 @@ func writeGatewayMetrics(w io.Writer, status GatewayClusterStatus) {
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_up", labels, boolMetric(node.OK))
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_degraded", labels, boolMetric(node.Degraded))
 		writeAvailable := false
-		applyLag := uint64(0)
 		if node.Status != nil {
 			writeAvailable = node.Status.CommitLogRuntime.WriteAvailable
-			applyLag = node.Status.CommitLogRuntime.ApplyLag
+			writeMetricGaugeWithLabels(w, "lsm_gateway_backend_apply_lag", labels, float64(node.Status.CommitLogRuntime.ApplyLag))
 		}
 		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_write_available", labels, boolMetric(writeAvailable))
-		writeMetricGaugeWithLabels(w, "lsm_gateway_backend_apply_lag", labels, float64(applyLag))
 	}
 }
 

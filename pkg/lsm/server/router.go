@@ -249,8 +249,11 @@ func (g *Gateway) ClusterStatus(ctx context.Context) (GatewayClusterStatus, erro
 	endpoints, err := g.endpointResolver.ResolveNodeEndpoints(ctx)
 	if err != nil {
 		return GatewayClusterStatus{
-			Ready:  false,
-			Reason: err.Error(),
+			Ready:             false,
+			Reason:            err.Error(),
+			ReadMode:          string(g.readMode),
+			ReadBalancePolicy: string(g.readBalancePolicy),
+			Routing:           g.RoutingStats(),
 		}, err
 	}
 	nodeIDs := sortedUniqueNodeEndpointIDs(endpoints)
