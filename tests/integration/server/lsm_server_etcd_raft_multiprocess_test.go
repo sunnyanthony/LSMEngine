@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"lsmengine/pkg/lsm"
+	lsmserver "lsmengine/pkg/lsm/server"
 )
 
 func TestEtcdRaftThreeProcessSmoke(t *testing.T) {
@@ -131,8 +132,22 @@ func TestEtcdRaftThreeProcessLeaderRestartSmoke(t *testing.T) {
 	processes[raftLeader].stop(t)
 	processes[raftLeader] = nil
 	remainingPeers := peersExcept(peers, raftLeader)
-	duringRestartWriteNode := eventuallyPostKVPut(t, urls, remainingPeers, []byte("while-leader-down"), []byte("quorum-survived"), 10*time.Second)
-	t.Logf("committed while-leader-down write through %s", duringRestartWriteNode)
+	gateway, err := lsmserver.NewGateway(lsmserver.GatewayOptions{
+		BootstrapURL:  urls[remainingPeers[0]],
+		NodeEndpoints: urlsForPeers(remainingPeers, urls),
+		HTTPClient:    &http.Client{Timeout: 2 * time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Election need not choose the shard leader selected before the shutdown.
+	// Exercise the client-facing route-aware path, not a lucky direct-node write.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	eventually(t, 10*time.Second, func() bool {
+		status, err := gateway.Put(ctx, []byte("while-leader-down"), []byte("quorum-survived"), lsm.WriteConsistencyLocalCommitted)
+		return err == nil && status.State == lsm.WriteRequestCommitted
+	})
 	for _, nodeID := range remainingPeers {
 		nodeID := nodeID
 		t.Run("during-restart-"+nodeID, func(t *testing.T) {

@@ -377,6 +377,13 @@ follower reads.
 
 ## Rolling Restart Check
 
+After a Raft leader election, the elected node need not match the shard leader
+chosen before shutdown. Use the route-aware gateway (or cluster-aware client)
+for failover writes so shard leadership can be aligned with the current Raft
+write leader. Retrying direct node writes alone does not perform this repair.
+The multi-process leader restart smoke uses this gateway path, then verifies
+both surviving replicas and the restarted node's catch-up.
+
 The integration suite covers this workflow with real `lsmctl serve` processes:
 
 ```bash
