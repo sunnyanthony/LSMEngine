@@ -127,6 +127,12 @@ the LSM engine. It is intentionally separate from the engine internals.
   uses the existing local-directory helper, not a virtual filesystem listing.
 - Deferred CLI work: callback/webhook configuration flags are not exposed yet.
 
+Readiness lag gates in leader read mode count only the selected write-leader
+endpoint; healthy followers cannot mask its lag, and a minimum above one cannot
+be satisfied. A strict raw lag bound may leave an empty cluster unready until
+its first committed mutation applies, because bootstrap/no-op entries contribute
+to the reported distance. Readiness does not provide a Raft read barrier.
+
 Backend routing counters are process-local and keyed by normalized endpoint.
 Attempts are recorded with their outcome, not as an in-flight request gauge;
 requests skipped after cancellation do not increment them. A write success

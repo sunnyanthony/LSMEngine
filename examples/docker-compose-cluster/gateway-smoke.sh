@@ -224,8 +224,6 @@ require_contains "$wait_output" "ready=true"
 
 compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
-wait_for_ready "$GATEWAY_URL"
-wait_for_gateway_container_health
 wait_for_gateway_status startup
 
 gateway_status_output="$(lsmctl gateway-status --addr "$GATEWAY_URL")"
@@ -238,6 +236,8 @@ require_contains "$put_output" "state=committed"
 put_seq="$(seq_from_output "$put_output")"
 wait_cluster_applied "$put_seq"
 wait_for_gateway_status
+wait_for_ready "$GATEWAY_URL"
+wait_for_gateway_container_health
 
 get_output="$(lsmctl get --addr "$GATEWAY_URL" --key gateway-smoke)"
 require_contains "$get_output" "found=true"

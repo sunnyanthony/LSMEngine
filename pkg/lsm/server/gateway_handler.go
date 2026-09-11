@@ -99,7 +99,7 @@ func (h *gatewayHandler) handleReady(w http.ResponseWriter, r *http.Request) {
 		if minReadReady == 0 {
 			minReadReady = 1
 		}
-		if gatewayReadReadyNodes(status.Nodes, *h.readyMaxReadApplyLag) < minReadReady {
+		if gatewayReadReadyNodes(status, *h.readyMaxReadApplyLag) < minReadReady {
 			writeJSON(w, http.StatusServiceUnavailable, lsm.Health{
 				Ready:  false,
 				Reason: "gateway_read_ready_nodes_below_min",
@@ -110,9 +110,13 @@ func (h *gatewayHandler) handleReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lsm.Health{Ready: true})
 }
 
-func gatewayReadReadyNodes(nodes []GatewayClusterNodeStatus, maxApplyLag uint64) int {
+func gatewayReadReadyNodes(status GatewayClusterStatus, maxApplyLag uint64) int {
 	count := 0
-	for _, node := range nodes {
+	for _, node := range status.Nodes {
+		if status.ReadMode == string(GatewayReadModeLeader) &&
+			(status.WriteLeaderEndpoint == "" || node.Endpoint != status.WriteLeaderEndpoint) {
+			continue
+		}
 		if !node.OK || node.Status == nil {
 			continue
 		}
@@ -121,6 +125,9 @@ func gatewayReadReadyNodes(nodes []GatewayClusterNodeStatus, maxApplyLag uint64)
 		}
 		if node.Status.CommitLogRuntime.ApplyLag <= maxApplyLag {
 			count++
+			if status.ReadMode == string(GatewayReadModeLeader) {
+				return count
+			}
 		}
 	}
 	return count
