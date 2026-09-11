@@ -404,7 +404,8 @@ func TestTriggerCompactionRequestsRuntimeRun(t *testing.T) {
 	}
 	waitForStats(t, func() bool {
 		stats := store.Stats().CompactionRuntime
-		return stats.Runs > before.Runs && (stats.Triggers > before.Triggers || stats.CoalescedTriggers > before.CoalescedTriggers)
+		return stats.Runs > before.Runs && stats.Steps > before.Steps && !stats.Running &&
+			(stats.Triggers > before.Triggers || stats.CoalescedTriggers > before.CoalescedTriggers)
 	})
 }
 
