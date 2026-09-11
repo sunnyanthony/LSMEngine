@@ -83,6 +83,9 @@ more than one readable leader cannot be required. Override that smoke gate with 
 The smoke then checks accepted write-status lookup through the same gateway
 endpoint. It also exercises range scans and `async-delete` through gateway.
 
+In any-mode the three-node smoke accepts `LSM_GATEWAY_READ_READY_MIN=0..3`
+(zero means at least one); use 3 to require all backends within the lag bound.
+
 ## Rolling restart smoke
 
 ```bash

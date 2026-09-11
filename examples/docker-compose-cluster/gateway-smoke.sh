@@ -14,12 +14,21 @@ GATEWAY_MAX_READ_APPLY_LAG="${LSM_GATEWAY_MAX_READ_APPLY_LAG:--1}"
 GATEWAY_READ_READY_MIN="${LSM_GATEWAY_READ_READY_MIN:-1}"
 GATEWAY_READ_READY_MAX_LAG="${LSM_GATEWAY_READ_READY_MAX_LAG:-2}"
 
+case "$GATEWAY_READ_MODE" in
+  any|leader) ;;
+  *) echo "LSM_GATEWAY_READ_MODE must be any or leader" >&2; exit 1 ;;
+esac
+
 if [[ "$GATEWAY_READ_READY_MAX_LAG" != "-1" ]]; then
   if [[ ! "$GATEWAY_READ_READY_MAX_LAG" =~ ^[0-9]+$ ]]; then
     echo "LSM_GATEWAY_READ_READY_MAX_LAG must be -1 or a non-negative integer" >&2
     exit 1
   fi
-  if [[ "$GATEWAY_READ_READY_MIN" != "0" && "$GATEWAY_READ_READY_MIN" != "1" ]]; then
+  if [[ ! "$GATEWAY_READ_READY_MIN" =~ ^[0-3]$ ]]; then
+    echo "three-node smoke requires LSM_GATEWAY_READ_READY_MIN=0, 1, 2 or 3" >&2
+    exit 1
+  fi
+  if [[ "$GATEWAY_READ_MODE" == "leader" && "$GATEWAY_READ_READY_MIN" != "0" && "$GATEWAY_READ_READY_MIN" != "1" ]]; then
     echo "leader-mode smoke requires LSM_GATEWAY_READ_READY_MIN=0 or 1" >&2
     exit 1
   fi
