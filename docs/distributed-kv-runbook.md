@@ -266,6 +266,13 @@ backends with fewer process-local read, status-probe, and write failures, using
 lower read-attempt counts as a tie-breaker among equally healthy endpoints. This
 policy uses only the current gateway process's counters; it is not a durable or
 cluster-wide load balancer.
+Adaptive scores use lifetime counts, not failure rates or a sliding window.
+Cooldown takes precedence, but expiry does not erase the historical score:
+a recovered endpoint can remain behind a lower-failure endpoint indefinitely.
+Not-found fallbacks and failed caller-canceled attempts are included in the
+diagnostic failure counts, so the score is not purely backend health. It does
+not measure latency or in-flight load. Leader-only KV routing and configured
+apply-lag filtering still take precedence over adaptive preferences.
 For `any` mode, `--max-read-apply-lag <n>` or
 `gateway_max_read_apply_lag: <n>` makes the gateway probe backend
 `/cluster/status` before `/kv/get` and `/kv/range`, then skip endpoints whose
