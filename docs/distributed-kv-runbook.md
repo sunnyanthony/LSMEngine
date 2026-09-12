@@ -536,11 +536,18 @@ go run ./cmd/lsmctl replacement-apply \
 `replacement-apply` runs the same planning step and then executes the
 replacement sequence. `--retry-attempts` and `--retry-backoff` provide bounded
 operator-level retries around the whole plan/apply sequence, using the same
-idempotency key prefix for committed shard mutations. After `raft-add`, it waits
+idempotency key prefix for committed shard mutations. Once a plan is selected,
+retries retain its old/new identities and shard set. Within that invocation,
+already-removed old replicas are accepted only if the selected replacement is
+present; endpoint identity and healthy-majority checks are still repeated.
+This is not a durable workflow checkpoint: after CLI process loss, do not assume
+automatic candidate selection can reconstruct a partially completed plan.
+After `raft-add`, it waits
 for the replacement node to report healthy commit-log status,
-`commit_log_runtime.apply_lag <= --max-catchup-apply-lag` (default `0`), and
+`state_machine_apply_lag <= --max-catchup-apply-lag` (default `0`, falling
+back to raw `apply_lag` only when unavailable), and
 `applied_index` at least as high as the current healthy existing replicas
-observed during the wait. It still rejects zero or multiple unavailable old-node
+observed during the wait. Initial planning rejects zero or multiple unavailable old-node
 candidates unless `--old-node` is provided. It is intentionally not a background
 repair loop; an external supervisor remains responsible for starting the
 replacement process, writing endpoint discovery data, choosing retry policy, and

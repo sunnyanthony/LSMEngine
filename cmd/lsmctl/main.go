@@ -952,6 +952,7 @@ type replaceNodeOptions struct {
 	CommandEndpoints        replacementCommandEndpointSource
 	ApplyRetryAttempts      int
 	ApplyRetryBackoff       time.Duration
+	resumeSelectedPlan      bool
 }
 
 type replacementCatchupOptions struct {
@@ -3088,7 +3089,12 @@ func preflightReplaceClusterNode(endpoints map[string]string, opts replaceNodeOp
 	if err != nil {
 		return replaceNodePlan{}, err
 	}
-	shardIDs, err := replacementShardIDs(shards, oldNode, opts.ShardIDs)
+	var shardIDs []string
+	if opts.resumeSelectedPlan {
+		shardIDs, err = replacementResumeShardIDs(shards, oldNode, newNode, opts.ShardIDs)
+	} else {
+		shardIDs, err = replacementShardIDs(shards, oldNode, opts.ShardIDs)
+	}
 	if err != nil {
 		return replaceNodePlan{}, err
 	}
@@ -3368,6 +3374,7 @@ func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (
 		}
 	}
 	plan, err := preflightReplaceClusterNode(endpoints, replaceNodeOptions{
+		resumeSelectedPlan: opts.resumeSelectedPlan,
 		OldNode:            oldNode,
 		NewNode:            newNode,
 		ShardIDs:           opts.ShardIDs,
@@ -3425,6 +3432,13 @@ func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOption
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		result, err := applyPlannedReplacementOnce(endpoints, opts)
+		if result.Plan.OldNode != "" {
+			// Once execution has a plan, retries must not select another repair.
+			opts.OldNode = result.Plan.OldNode
+			opts.NewNode = result.Plan.NewNode
+			opts.ShardIDs = append([]string(nil), result.Plan.Shards...)
+			opts.resumeSelectedPlan = true
+		}
 		result.Attempts = attempt
 		result.RetryAttempts = attempts
 		if opts.ApplyRetryBackoff > 0 {
@@ -3444,6 +3458,7 @@ func applyPlannedReplacement(endpoints map[string]string, opts replaceNodeOption
 
 func applyPlannedReplacementOnce(endpoints map[string]string, opts replaceNodeOptions) (replacementApplyResult, error) {
 	plan, err := planReplacementNode(endpoints, replaceNodeOptions{
+		resumeSelectedPlan: opts.resumeSelectedPlan,
 		OldNode:            opts.OldNode,
 		NewNode:            opts.NewNode,
 		ShardIDs:           opts.ShardIDs,
@@ -3457,9 +3472,10 @@ func applyPlannedReplacementOnce(endpoints map[string]string, opts replaceNodeOp
 		return replacementApplyResult{}, err
 	}
 	result, err := replaceClusterNode(endpoints, replaceNodeOptions{
+		resumeSelectedPlan:      opts.resumeSelectedPlan,
 		OldNode:                 plan.OldNode,
 		NewNode:                 plan.NewNode,
-		ShardIDs:                opts.ShardIDs,
+		ShardIDs:                plan.Shards,
 		OperationPrefix:         opts.OperationPrefix,
 		AllowUnavailableOldNode: true,
 		CatchupTimeout:          opts.CatchupTimeout,
@@ -3610,6 +3626,26 @@ func readShards(endpoint string) ([]lsm.ShardStatus, error) {
 		return nil, err
 	}
 	return shards, nil
+}
+
+func replacementResumeShardIDs(shards []lsm.ShardStatus, oldNode, newNode string, requested []string) ([]string, error) {
+	if len(requested) == 0 {
+		return nil, fmt.Errorf("resuming replacement requires the selected shard set")
+	}
+	byID := make(map[string]lsm.ShardStatus, len(shards))
+	for _, shard := range shards {
+		byID[shard.ID] = shard
+	}
+	for _, id := range requested {
+		shard, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("selected replacement shard %q no longer exists", id)
+		}
+		if !hasShardReplica(shard, oldNode) && !hasShardReplica(shard, newNode) {
+			return nil, fmt.Errorf("selected shard %q has neither old nor replacement replica", id)
+		}
+	}
+	return append([]string(nil), requested...), nil
 }
 
 func replacementShardIDs(shards []lsm.ShardStatus, oldNode string, requested []string) ([]string, error) {
