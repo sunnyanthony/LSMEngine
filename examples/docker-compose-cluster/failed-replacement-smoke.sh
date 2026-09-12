@@ -188,10 +188,13 @@ compose --profile replacement up -d --build node-d
 wait_for_health "$(url_for_service node-d)"
 wait_cluster_ready 2
 
-plan_output="$(lsmctl replacement-plan \
+if ! plan_output="$(lsmctl replacement-plan \
   --new-node node-d \
   --operation-prefix compose-failed-replace-node-a-node-d \
-  $(cluster_config_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"; then
+  printf '%s\n' "$plan_output" >&2
+  exit 1
+fi
 require_contains "$plan_output" "old_node=node-a"
 require_contains "$plan_output" "new_node=node-d"
 require_contains "$plan_output" "reason=status-error"
@@ -200,12 +203,17 @@ require_contains "$plan_output" "dry_run_command="
 require_contains "$plan_output" "apply_command="
 require_contains "$plan_output" "--config $LSMCTL_CONFIG"
 
-apply_output="$(lsmctl replacement-apply \
+if ! apply_output="$(lsmctl replacement-apply \
   --new-node node-d \
   --operation-prefix compose-failed-replace-node-a-node-d \
   --retry-attempts 2 \
   --retry-backoff 200ms \
-  $(cluster_config_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"; then
+  printf '%s\n' "$apply_output" >&2
+  lsmctl cluster-status $(cluster_config_args) >&2 || true
+  compose --profile replacement logs --tail=100 >&2 || true
+  exit 1
+fi
 require_contains "$apply_output" "planned_old_node=node-a"
 require_contains "$apply_output" "planned_new_node=node-d"
 require_contains "$apply_output" "reason=status-error"
