@@ -176,23 +176,31 @@ compose --profile replacement up -d --build node-d
 wait_for_health "$(url_for_service node-d)"
 wait_cluster_ready 3
 
-dry_run_output="$(lsmctl replace-node \
+if ! dry_run_output="$(lsmctl replace-node \
   --old-node node-a \
   --new-node node-d \
   --operation-prefix compose-replace-node-a-node-d \
   --dry-run \
-  $(cluster_config_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"; then
+  printf '%s\n' "$dry_run_output" >&2
+  exit 1
+fi
 require_contains "$dry_run_output" "preflight=ok"
 require_contains "$dry_run_output" "dry_run=true"
 require_contains "$dry_run_output" "write_leader="
 require_contains "$dry_run_output" "old_endpoint=http://127.0.0.1:8080"
 require_contains "$dry_run_output" "new_endpoint=http://127.0.0.1:8083"
 
-replace_output="$(lsmctl replace-node \
+if ! replace_output="$(lsmctl replace-node \
   --old-node node-a \
   --new-node node-d \
   --operation-prefix compose-replace-node-a-node-d \
-  $(cluster_config_args) 2>&1)"
+  $(cluster_config_args) 2>&1)"; then
+  printf '%s\n' "$replace_output" >&2
+  lsmctl cluster-status $(cluster_config_args) >&2 || true
+  compose --profile replacement logs --tail=50 >&2 || true
+  exit 1
+fi
 require_contains "$replace_output" "old_node=node-a"
 require_contains "$replace_output" "new_node=node-d"
 require_contains "$replace_output" "step=raft-add"
