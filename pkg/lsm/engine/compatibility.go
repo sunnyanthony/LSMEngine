@@ -7,6 +7,8 @@ const (
 
 // CompatibilityStatus reports LSMEngine-owned wire and persisted contract
 // versions that operators can compare during rolling upgrades.
+// Matching versions are diagnostic declarations, not a negotiated upgrade
+// protocol or proof that every mixed-version operation is supported.
 type CompatibilityStatus struct {
 	ClusterStatusVersion   int `json:"cluster_status_version"`
 	ControlStateVersion    int `json:"control_state_version"`

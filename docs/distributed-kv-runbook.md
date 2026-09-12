@@ -89,6 +89,11 @@ the provider guarantees that mapping. This gate is not a linearizable read barri
 
 Use `--require-compatible` to require counted ready nodes to report identical,
 known LSM-owned compatibility versions. Equality does not prove rolling-upgrade safety.
+Only nodes counted as ready participate; with a reduced `--min-ready`, offline
+or lag-excluded nodes are not certified. Missing or nonpositive version fields
+fail the compatibility check for an otherwise-ready node. This gate compares
+peer declarations, not the CLI's supported-version range, and does not negotiate
+wire formats or migrate persisted data.
 
 The useful fields are:
 
