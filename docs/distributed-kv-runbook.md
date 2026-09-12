@@ -565,6 +565,14 @@ accepted replacement-node lag. Use `--allow-unavailable-old-node` only for
 failed-node replacement; ordinary maintenance drains should keep waiting for the
 target node to report `draining=true`.
 
+The catch-up timeout includes status HTTP requests and polling waits. The gate
+retains the highest applied index observed from healthy existing nodes during
+this wait; subsequent lower samples cannot reduce that requirement. At least
+one healthy existing node must still be observable before passing. This is a
+sampled catch-up check, not a barrier against concurrent writes or a replacement
+for membership quorum safety. A timeout leaves the already-added Raft voter in
+place, but does not continue to shard changes or old-node removal.
+
 Use the Compose replacement smoke for a repeatable local check:
 
 ```bash

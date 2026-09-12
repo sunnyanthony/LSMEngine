@@ -2069,6 +2069,10 @@ func currentClusterWriteLeader(endpoints map[string]string) (string, string, err
 }
 
 func readClusterStatuses(endpoints map[string]string) (clusterStatusResult, error) {
+	return readClusterStatusesContext(context.Background(), endpoints)
+}
+
+func readClusterStatusesContext(ctx context.Context, endpoints map[string]string) (clusterStatusResult, error) {
 	nodes := sortedEndpointNodes(endpoints)
 	result := clusterStatusResult{
 		Nodes: make([]clusterStatusNodeResult, 0, len(nodes)),
@@ -2076,9 +2080,12 @@ func readClusterStatuses(endpoints map[string]string) (clusterStatusResult, erro
 	successes := 0
 	var lastErr error
 	for _, nodeID := range nodes {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		endpoint := endpoints[nodeID]
 		var status lsm.ClusterStatus
-		err := getJSON(endpoint+"/cluster/status", &status)
+		err := getJSONContext(ctx, endpoint+"/cluster/status", &status)
 		node := clusterStatusNodeResult{
 			Node:     nodeID,
 			Endpoint: endpoint,
@@ -3176,15 +3183,19 @@ func waitReplacementNodeCatchup(
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	var lastErr error
 	for {
-		statuses, err := readClusterStatuses(endpoints)
+		statuses, err := readClusterStatusesContext(ctx, endpoints)
 		if err != nil {
 			lastErr = err
 		} else {
-			requiredApplied := replacementRequiredAppliedIndex(statuses, nodeID)
-			result.RequiredAppliedIndex = requiredApplied
+			requiredApplied, observed := replacementRequiredAppliedIndex(statuses, nodeID)
+			if requiredApplied > result.RequiredAppliedIndex {
+				result.RequiredAppliedIndex = requiredApplied
+			}
+			requiredApplied = result.RequiredAppliedIndex
 			if target := statusNodeByName(statuses, nodeID); target != nil {
 				result.Endpoint = target.Endpoint
 				if target.Status != nil {
@@ -3194,12 +3205,12 @@ func waitReplacementNodeCatchup(
 					result.ApplyLag = runtime.ApplyLag
 				}
 				maxLag := maxApplyLag
-				if clusterNodeReadyForWait(*target, &maxLag, &requiredApplied) {
+				if observed && ctx.Err() == nil && clusterNodeReadyForWait(*target, &maxLag, &requiredApplied) {
 					return result, nil
 				}
 			}
 		}
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil {
 			message := fmt.Sprintf(
 				"replacement catch-up timed out for node %q: applied_index=%d required_applied_index=%d apply_lag=%d max_apply_lag=%d health=%q",
 				nodeID,
@@ -3212,15 +3223,21 @@ func waitReplacementNodeCatchup(
 			if lastErr != nil {
 				message = message + ": " + lastErr.Error()
 			}
-			return result, errors.New(message)
+			return result, fmt.Errorf("%s: %w", message, ctx.Err())
 		}
-		time.Sleep(200 * time.Millisecond)
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }
 
-func replacementRequiredAppliedIndex(statuses clusterStatusResult, replacementNode string) uint64 {
+func replacementRequiredAppliedIndex(statuses clusterStatusResult, replacementNode string) (uint64, bool) {
 	replacementNode = strings.TrimSpace(replacementNode)
 	var required uint64
+	var observed bool
 	for _, node := range statuses.Nodes {
 		nodeID := strings.TrimSpace(node.Node)
 		if node.Status != nil && strings.TrimSpace(node.Status.NodeID) != "" {
@@ -3230,11 +3247,12 @@ func replacementRequiredAppliedIndex(statuses clusterStatusResult, replacementNo
 			continue
 		}
 		applied := node.Status.CommitLogRuntime.AppliedIndex
+		observed = true
 		if applied > required {
 			required = applied
 		}
 	}
-	return required
+	return required, observed
 }
 
 func planReplacementNode(endpoints map[string]string, opts replaceNodeOptions) (replacementPlanResult, error) {
@@ -3411,9 +3429,7 @@ func replaceNodeCommandArgs(endpoints map[string]string, opts replaceNodeOptions
 	if prefix := strings.TrimSpace(opts.OperationPrefix); prefix != "" {
 		args = append(args, "--operation-prefix", prefix)
 	}
-	if opts.CatchupTimeout != 0 {
-		args = append(args, "--catchup-timeout", opts.CatchupTimeout.String())
-	}
+	args = append(args, "--catchup-timeout", opts.CatchupTimeout.String())
 	if opts.CatchupMaxApplyLag != nil {
 		args = append(args, "--max-catchup-apply-lag", strconv.FormatUint(*opts.CatchupMaxApplyLag, 10))
 	}
@@ -3727,8 +3743,16 @@ func openLocal(dataDir string) (*lsm.LSM, error) {
 }
 
 func getJSON(url string, out any) error {
+	return getJSONContext(context.Background(), url, out)
+}
+
+func getJSONContext(ctx context.Context, url string, out any) error {
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(normalizeHTTPBaseURL(url))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeHTTPBaseURL(url), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

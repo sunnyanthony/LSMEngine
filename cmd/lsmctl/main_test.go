@@ -2543,7 +2543,7 @@ func TestWaitReplacementNodeCatchupTimesOutWhenLagged(t *testing.T) {
 		"node-a": nodeA.URL,
 		"node-d": nodeD.URL,
 	}, "node-d", replacementCatchupOptions{
-		Timeout:     time.Millisecond,
+		Timeout:     50 * time.Millisecond,
 		MaxApplyLag: &maxLag,
 	})
 	if err == nil {
