@@ -561,11 +561,17 @@ drains the old node, removes the old shard replicas, and removes the old raft
 voter. Use repeated `--shard` flags to constrain the replacement to specific
 shards. `--catchup-timeout` controls the post-`raft-add` wait and `0` disables
 it for explicit emergency operation; `--max-catchup-apply-lag` controls the
-accepted replacement-node lag. Use `--allow-unavailable-old-node` only for
+accepted replacement-node state-machine lag when reported, falling back to raw
+apply lag for older/custom providers. Use `--allow-unavailable-old-node` only for
 failed-node replacement; ordinary maintenance drains should keep waiting for the
 target node to report `draining=true`.
 
 The catch-up timeout includes status HTTP requests and polling waits. The gate
+uses `state_machine_apply_lag` to exclude provider-only configuration/no-op
+entries; raw `apply_lag` remains unchanged for diagnostics. A snapshot is a
+conservative state-machine boundary until applied. These distances are index
+distances, not counts of pending records.
+The gate
 retains the highest applied index observed from healthy existing nodes during
 this wait; subsequent lower samples cannot reduce that requirement. At least
 one healthy existing node must still be observable before passing. This is a

@@ -60,3 +60,26 @@ func TestReplacementCommandPreservesDisabledCatchup(t *testing.T) {
 		t.Fatalf("disabled catchup not preserved: %v", args)
 	}
 }
+
+func TestReplacementCatchupUsesStateMachineLagWhenAvailable(t *testing.T) {
+	zero, pending := uint64(0), uint64(1)
+	for _, tc := range []struct {
+		name string
+		lag  *uint64
+		pass bool
+	}{{"configuration-only", &zero, true}, {"pending-mutation", &pending, false}, {"legacy-raw-lag", nil, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(lsm.ClusterStatus{CommitLogRuntime: lsm.CommitLogRuntimeStatus{
+					Health: "follower", LeaderKnown: true, AppliedIndex: 6, Index: 7, ApplyLag: 1,
+					StateMachineApplyLag: tc.lag,
+				}})
+			}))
+			defer node.Close()
+			_, err := waitReplacementNodeCatchup(map[string]string{"node-a": node.URL, "node-d": node.URL}, "node-d", replacementCatchupOptions{Timeout: 50 * time.Millisecond})
+			if (err == nil) != tc.pass {
+				t.Fatalf("pass=%v err=%v", tc.pass, err)
+			}
+		})
+	}
+}

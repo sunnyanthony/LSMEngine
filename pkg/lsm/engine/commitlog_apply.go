@@ -147,6 +147,14 @@ func (l *LSM) applyCommitLogRuntimeProgress(status CommitLogRuntimeStatus) Commi
 		}
 	}
 	status.AppliedIndex = applied
+	status.StateMachineApplyLag = nil
+	if status.StateMachineIndex != nil {
+		lag := uint64(0)
+		if *status.StateMachineIndex > applied {
+			lag = *status.StateMachineIndex - applied
+		}
+		status.StateMachineApplyLag = &lag
+	}
 	status.ApplyLag = 0
 	if status.Index > applied {
 		status.ApplyLag = status.Index - applied

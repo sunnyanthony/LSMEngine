@@ -272,6 +272,9 @@ func TestEtcdRaftConsensusPersistsLogAcrossRestart(t *testing.T) {
 	}
 	cleanupEtcdRaftConsensus(t, restarted)
 	status := restarted.RuntimeStatus()
+	if status.StateMachineIndex == nil || *status.StateMachineIndex != firstEntry.Commit.Index {
+		t.Fatalf("restored state-machine boundary lost: %+v", status)
+	}
 	if status.Index < firstEntry.Commit.Index {
 		t.Fatalf("expected restored index >= %d, got %d", firstEntry.Commit.Index, status.Index)
 	}
@@ -457,6 +460,35 @@ func TestEtcdRaftConsensusAppliesIncomingSnapshotData(t *testing.T) {
 	status := consensus.RuntimeStatus()
 	if status.SnapshotIndex != snapshot.Metadata.Index || status.Index != snapshot.Metadata.Index {
 		t.Fatalf("expected runtime snapshot/index %d, got %+v", snapshot.Metadata.Index, status)
+	}
+	if status.StateMachineIndex == nil || *status.StateMachineIndex != snapshot.Metadata.Index {
+		t.Fatalf("snapshot state-machine boundary lost: %+v", status)
+	}
+}
+
+func TestStateMachineBoundaryExcludesProviderOnlyEntries(t *testing.T) {
+	c, err := newEtcdRaftConsensus(Config{Provider: ProviderEtcdRaft, DataDir: t.TempDir(), NodeID: "node-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupEtcdRaftConsensus(t, c)
+	status := c.RuntimeStatus()
+	if status.StateMachineIndex == nil || *status.StateMachineIndex != 0 || status.Index == 0 {
+		t.Fatalf("bootstrap incorrectly requires mutation apply: %+v", status)
+	}
+	entry, err := c.CommitData(context.Background(), DataMutation{Kind: "put", Key: []byte("k"), Value: []byte("v")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	err = c.applyCommittedEntryLocked(raftpb.Entry{Type: raftpb.EntryNormal, Index: entry.Commit.Index + 1, Term: entry.Commit.Term})
+	c.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status = c.RuntimeStatus()
+	if *status.StateMachineIndex != entry.Commit.Index || status.Index != entry.Commit.Index+1 {
+		t.Fatalf("no-op changed state-machine boundary: %+v", status)
 	}
 }
 

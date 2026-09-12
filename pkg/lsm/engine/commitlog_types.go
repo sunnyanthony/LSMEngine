@@ -117,20 +117,25 @@ type CommitLogMembershipChange struct {
 
 // CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
 type CommitLogRuntimeStatus struct {
-	Mode           string     `json:"mode"`
-	Index          uint64     `json:"index"`
-	Term           uint64     `json:"term"`
-	SnapshotIndex  uint64     `json:"snapshot_index,omitempty"`
-	AppliedIndex   uint64     `json:"applied_index"`
-	ApplyLag       uint64     `json:"apply_lag"`
-	Leader         bool       `json:"leader"`
-	Replicas       int        `json:"replicas"`
-	WriteAvailable bool       `json:"write_available"`
-	LeaderKnown    bool       `json:"leader_known"`
-	Health         string     `json:"health"`
-	LastErrorCode  string     `json:"last_error_code,omitempty"`
-	LastError      string     `json:"last_error,omitempty"`
-	LastErrorAt    *time.Time `json:"last_error_at,omitempty"`
+	// StateMachineIndex is the committed boundary requiring engine apply.
+	// Nil means unavailable. Snapshots are conservative apply boundaries.
+	StateMachineIndex *uint64 `json:"state_machine_index,omitempty"`
+	// StateMachineApplyLag excludes provider-only configuration/no-op progress.
+	StateMachineApplyLag *uint64    `json:"state_machine_apply_lag,omitempty"`
+	Mode                 string     `json:"mode"`
+	Index                uint64     `json:"index"`
+	Term                 uint64     `json:"term"`
+	SnapshotIndex        uint64     `json:"snapshot_index,omitempty"`
+	AppliedIndex         uint64     `json:"applied_index"`
+	ApplyLag             uint64     `json:"apply_lag"`
+	Leader               bool       `json:"leader"`
+	Replicas             int        `json:"replicas"`
+	WriteAvailable       bool       `json:"write_available"`
+	LeaderKnown          bool       `json:"leader_known"`
+	Health               string     `json:"health"`
+	LastErrorCode        string     `json:"last_error_code,omitempty"`
+	LastError            string     `json:"last_error,omitempty"`
+	LastErrorAt          *time.Time `json:"last_error_at,omitempty"`
 }
 
 // CommitLogConsensus is the provider contract for commit-log implementations.

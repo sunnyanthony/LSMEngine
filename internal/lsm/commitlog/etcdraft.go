@@ -39,21 +39,22 @@ type pendingRaftProposal struct {
 type etcdRaftConsensus struct {
 	mu sync.Mutex
 
-	nodeID          uint64
-	rawNode         *raft.RawNode
-	storage         *raftPersistentStorage
-	transport       PeerTransport
-	observer        CommittedEntryObserver
-	snapshotter     StateSnapshotter
-	snapshotApplier StateSnapshotApplier
-	proposalSeq     uint64
-	pending         map[uint64]*pendingRaftProposal
-	committed       []raftCommittedProposal
-	index           uint64
-	term            uint64
-	snapshotPolicy  SnapshotPolicy
-	snapshotIndex   uint64
-	replicas        int
+	nodeID            uint64
+	rawNode           *raft.RawNode
+	storage           *raftPersistentStorage
+	transport         PeerTransport
+	observer          CommittedEntryObserver
+	snapshotter       StateSnapshotter
+	snapshotApplier   StateSnapshotApplier
+	proposalSeq       uint64
+	pending           map[uint64]*pendingRaftProposal
+	committed         []raftCommittedProposal
+	index             uint64
+	stateMachineIndex uint64
+	term              uint64
+	snapshotPolicy    SnapshotPolicy
+	snapshotIndex     uint64
+	replicas          int
 
 	lastErrorCode string
 	lastError     string
@@ -142,6 +143,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	}
 	if snapshot, err := storage.Snapshot(); err == nil && !raft.IsEmptySnap(snapshot) {
 		c.snapshotIndex = snapshot.Metadata.Index
+		c.stateMachineIndex = snapshot.Metadata.Index
 	} else if err != nil && !errors.Is(err, raft.ErrSnapshotTemporarilyUnavailable) {
 		return nil, fmt.Errorf("read raft restored snapshot: %w", err)
 	}
@@ -354,6 +356,8 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 		LastError:     c.lastError,
 		LastErrorAt:   c.lastErrorAt,
 	}
+	stateMachineIndex := c.stateMachineIndex
+	status.StateMachineIndex = &stateMachineIndex
 	if c.closed || c.rawNode == nil || c.storage == nil {
 		status.Health = "unavailable"
 		return status
@@ -692,6 +696,9 @@ func (c *etcdRaftConsensus) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot
 		return fmt.Errorf("raft storage apply snapshot: %w", err)
 	}
 	c.snapshotIndex = snapshot.Metadata.Index
+	if snapshot.Metadata.Index > c.stateMachineIndex {
+		c.stateMachineIndex = snapshot.Metadata.Index
+	}
 	if snapshot.Metadata.Index > c.index {
 		c.index = snapshot.Metadata.Index
 	}
@@ -758,6 +765,9 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 	case raftpb.EntryNormal:
 		if len(entry.Data) == 0 {
 			return nil
+		}
+		if entry.Index > c.stateMachineIndex {
+			c.stateMachineIndex = entry.Index
 		}
 		var proposal raftCommitProposal
 		if err := json.Unmarshal(entry.Data, &proposal); err != nil {

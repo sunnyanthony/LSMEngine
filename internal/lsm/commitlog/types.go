@@ -109,18 +109,21 @@ type DataCommittedEntry struct {
 }
 
 type RuntimeStatus struct {
-	Mode           string
-	Index          uint64
-	Term           uint64
-	SnapshotIndex  uint64
-	Leader         bool
-	Replicas       int
-	WriteAvailable bool
-	LeaderKnown    bool
-	Health         string
-	LastErrorCode  string
-	LastError      string
-	LastErrorAt    time.Time
+	// StateMachineIndex excludes entries that require no state-machine apply.
+	// Nil means the provider cannot report this boundary.
+	StateMachineIndex *uint64
+	Mode              string
+	Index             uint64
+	Term              uint64
+	SnapshotIndex     uint64
+	Leader            bool
+	Replicas          int
+	WriteAvailable    bool
+	LeaderKnown       bool
+	Health            string
+	LastErrorCode     string
+	LastError         string
+	LastErrorAt       time.Time
 }
 
 type Consensus interface {

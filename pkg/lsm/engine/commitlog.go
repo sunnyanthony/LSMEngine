@@ -307,6 +307,10 @@ func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRunti
 		LastErrorCode:  s.LastErrorCode,
 		LastError:      s.LastError,
 	}
+	if s.StateMachineIndex != nil {
+		index := *s.StateMachineIndex
+		status.StateMachineIndex = &index
+	}
 	if !s.LastErrorAt.IsZero() {
 		lastErrorAt := s.LastErrorAt
 		status.LastErrorAt = &lastErrorAt

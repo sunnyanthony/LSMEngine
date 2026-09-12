@@ -3203,9 +3203,12 @@ func waitReplacementNodeCatchup(
 					result.Health = runtime.Health
 					result.AppliedIndex = runtime.AppliedIndex
 					result.ApplyLag = runtime.ApplyLag
+					if runtime.StateMachineApplyLag != nil {
+						result.ApplyLag = *runtime.StateMachineApplyLag
+					}
 				}
 				maxLag := maxApplyLag
-				if observed && ctx.Err() == nil && clusterNodeReadyForWait(*target, &maxLag, &requiredApplied) {
+				if observed && ctx.Err() == nil && result.ApplyLag <= maxLag && clusterNodeReadyForWait(*target, nil, &requiredApplied) {
 					return result, nil
 				}
 			}
