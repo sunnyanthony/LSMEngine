@@ -180,7 +180,7 @@ wait_cluster_applied() {
   output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --min-applied-index "$seq" --require-compatible)"
   require_contains "$output" "ready=true"
   require_contains "$output" "ready_nodes=3"
-  require_contains "$output" "compatible=true"
+  require_contains "$output" " compatible=true "
 }
 
 request_id_from_output() {
@@ -222,7 +222,7 @@ wait_for_health "http://127.0.0.1:8082"
 
 wait_output="$(lsmctl wait-cluster $(node_endpoint_args) --timeout 60s --require-compatible)"
 require_contains "$wait_output" "ready=true"
-require_contains "$wait_output" "compatible=true"
+require_contains "$wait_output" " compatible=true "
 
 compose --profile gateway up -d --build gateway
 wait_for_health "$GATEWAY_URL"
