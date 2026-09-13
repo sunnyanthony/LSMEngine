@@ -132,21 +132,41 @@ func TestEtcdRaftThreeProcessLeaderRestartSmoke(t *testing.T) {
 	processes[raftLeader].stop(t)
 	processes[raftLeader] = nil
 	remainingPeers := peersExcept(peers, raftLeader)
+	newRaftLeader := eventuallyCommitLogLeader(t, urls, remainingPeers, 10*time.Second)
+	mismatchedShardLeader := firstPeerExcept(t, remainingPeers, newRaftLeader)
+	eventuallyPostShardTransferLeader(t, urls, remainingPeers, "users", mismatchedShardLeader, 10*time.Second)
+	eventually(t, 5*time.Second, func() bool {
+		leader, err := getRouteLeader(urls[newRaftLeader], "users")
+		return err == nil && leader == mismatchedShardLeader
+	})
 	gateway, err := lsmserver.NewGateway(lsmserver.GatewayOptions{
-		BootstrapURL:  urls[remainingPeers[0]],
-		NodeEndpoints: urlsForPeers(remainingPeers, urls),
-		HTTPClient:    &http.Client{Timeout: 2 * time.Second},
+		BootstrapURL:     urls[remainingPeers[0]],
+		NodeEndpoints:    urlsForPeers(remainingPeers, urls),
+		HTTPClient:       &http.Client{Timeout: 2 * time.Second},
+		AlignWriteLeader: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Election need not choose the shard leader selected before the shutdown.
 	// Exercise the client-facing route-aware path, not a lucky direct-node write.
+	var lastGatewayResult string
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("last post-failover gateway result: %s", lastGatewayResult)
+			logStartedProcesses(t, processes)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	eventually(t, 10*time.Second, func() bool {
 		status, err := gateway.Put(ctx, []byte("while-leader-down"), []byte("quorum-survived"), lsm.WriteConsistencyLocalCommitted)
+		lastGatewayResult = fmt.Sprintf("status=%+v error=%v", status, err)
 		return err == nil && status.State == lsm.WriteRequestCommitted
+	})
+	eventually(t, 5*time.Second, func() bool {
+		leader, err := getRouteLeader(urls[newRaftLeader], "users")
+		return err == nil && leader == newRaftLeader
 	})
 	for _, nodeID := range remainingPeers {
 		nodeID := nodeID
