@@ -88,6 +88,9 @@ control plane decoupled from IO.
   L0 threshold has been reached. They also report adaptive-check enablement and
   the pressure-adjusted effective check interval. These are pressure signals,
   not a complete durable debt scheduler.
+- The effective interval is recomputed from the same L0 sample reported in
+  Stats. It describes the pressure-adjusted delay, not the remaining time on
+  an already armed timer; pressure changes take effect at the next timer reset.
 - SSTable counts and bytes describe the active table set; they exclude obsolete
   files retained by snapshots, trash, WAL, and raft storage.
 - `FlushQueueDepth` counts outstanding flush work, including work in progress

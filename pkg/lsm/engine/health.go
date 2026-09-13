@@ -151,7 +151,10 @@ func (l *LSM) Stats() Stats {
 	out.CompactionCheckIntervalMS = l.compactionCheckInterval.Milliseconds()
 	out.CompactionAdaptiveCheck = l.compactionAdaptiveCheck
 	if out.CompactionEnabled {
-		out.CompactionEffectiveCheckIntervalMS = l.currentCompactionCheckInterval().Milliseconds()
+		out.CompactionEffectiveCheckIntervalMS = compactionAdaptiveCheckDelay(
+			l.compactionCheckInterval, l.compactionAdaptiveCheck,
+			out.L0TableCount, l.compactionL0Threshold,
+		).Milliseconds()
 	}
 	out.CompactionPending = out.CompactionEnabled &&
 		out.CompactionL0Threshold > 0 &&

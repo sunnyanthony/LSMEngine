@@ -55,7 +55,7 @@ func compactionAdaptiveCheckDelay(base time.Duration, adaptive bool, l0Tables in
 		return base
 	}
 	divisor := int64(4)
-	if l0Tables >= threshold*2 {
+	if l0Tables/threshold >= 2 {
 		divisor = 8
 	}
 	next := base / time.Duration(divisor)

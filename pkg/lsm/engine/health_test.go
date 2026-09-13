@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,42 @@ import (
 	"lsmengine/internal/lsm/tableset"
 	"lsmengine/pkg/lsm/errs"
 )
+
+func TestAdaptiveStatsUsesOneTableSetSample(t *testing.T) {
+	low := []tableset.Table{{Meta: metadata.TableMeta{Path: "a", Level: 0}}}
+	high := append(append([]tableset.Table(nil), low...),
+		tableset.Table{Meta: metadata.TableMeta{Path: "b", Level: 0}},
+		tableset.Table{Meta: metadata.TableMeta{Path: "c", Level: 0}},
+		tableset.Table{Meta: metadata.TableMeta{Path: "d", Level: 0}})
+	store := &LSM{tables: tableset.NewSet(low), compactionSvc: &compactionruntime.Runtime{},
+		compactionCheckInterval: 40 * time.Second, compactionAdaptiveCheck: true, compactionL0Threshold: 2}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tables := low
+			if i%2 == 0 {
+				tables = high
+			}
+			store.tables.Apply(tableset.Edit{RemovePath: []string{"a", "b", "c", "d"}, Add: tables})
+			runtime.Gosched()
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	for i := 0; i < 1000; i++ {
+		stats := store.Stats()
+		want := compactionAdaptiveCheckDelay(40*time.Second, true, stats.L0TableCount, 2).Milliseconds()
+		if stats.CompactionEffectiveCheckIntervalMS != want {
+			t.Fatalf("effective interval does not match reported L0 sample: %+v", stats)
+		}
+		runtime.Gosched()
+	}
+}
 
 func TestStatsSnapshot(t *testing.T) {
 	store, err := New(Options{
