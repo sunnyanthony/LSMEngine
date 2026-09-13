@@ -6,6 +6,9 @@ small static distributed key/value cluster.
 It describes what is usable now, how to verify it, and which production
 responsibilities are still outside the current foundation.
 
+See [validation results](distributed-kv-validation.md) for the tested runtime
+revision, deployment scenarios, and remaining acceptance scope.
+
 ## Current Contract
 
 The supported distributed shape is a static three-node cluster:

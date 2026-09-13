@@ -96,7 +96,9 @@ put_until_committed() {
   local output pod
   while (( SECONDS < deadline )); do
     for pod in "${pods[@]}"; do
-      if output="$(kubectl_lsm "$pod" put --addr "$(addr_for_pod "$pod")" --key "$key" --value "$value" 2>&1)" &&
+      if output="$(kubectl_lsm "$pod" put --cluster \
+        $(node_endpoint_args) \
+        --addr "$(addr_for_pod "$pod")" --key "$key" --value "$value" 2>&1)" &&
         [[ "$output" == *"state=committed"* ]]; then
         printf '%s\n' "$output"
         return 0
@@ -105,6 +107,7 @@ put_until_committed() {
     sleep 1
   done
   echo "timed out writing $key=$value through any pod" >&2
+  echo "last write attempt: $output" >&2
   dump_diagnostics
   return 1
 }

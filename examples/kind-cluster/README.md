@@ -61,7 +61,9 @@ examples/kind-cluster/restart-smoke.sh
 
 This uses the same StatefulSet, writes a committed value, deletes each pod one
 at a time, waits for Kubernetes to recreate it with the same PVC, and verifies
-the restarted pod applies and reads the committed value.
+the restarted pod applies and reads the committed value. The initial write uses
+`put --cluster` with all three node endpoints, so it does not require the elected
+Raft leader to match the manifest's initial shard leader.
 
 Useful environment overrides:
 
