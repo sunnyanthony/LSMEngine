@@ -50,12 +50,26 @@ type StateSnapshotter interface {
 	CaptureStateSnapshot(index uint64) ([]byte, error)
 }
 
+// BoundaryStateSnapshotter captures state at a committed log boundary whose
+// final mutation is stateMachineIndex. The provider must prove no intervening
+// mutation is unapplied. A false ready result defers capture until engine apply;
+// payloads must still encode index, not stateMachineIndex, as their boundary.
+type BoundaryStateSnapshotter interface {
+	CaptureStateSnapshotBoundary(index, stateMachineIndex uint64) (data []byte, ready bool, err error)
+}
+
 type StateSnapshotterSetter interface {
 	SetStateSnapshotter(snapshotter StateSnapshotter) error
 }
 
 type StateSnapshotApplier interface {
 	ApplyStateSnapshot(index uint64, data []byte) error
+}
+
+// StateSnapshotRestorer installs the persisted base before committed-tail
+// replay, preserving independently durable engine state newer than that base.
+type StateSnapshotRestorer interface {
+	RestoreStateSnapshot(index uint64, data []byte) error
 }
 
 type StateSnapshotApplierSetter interface {

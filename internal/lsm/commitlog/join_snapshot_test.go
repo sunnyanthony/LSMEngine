@@ -79,11 +79,9 @@ func TestJoinSnapshotRequiresRecipientMembership(t *testing.T) {
 	}
 }
 
-// This characterizes the replacement blocker: membership-only progress does
-// not produce a fresh engine snapshot, leaving a compacted joiner unable to use
-// the snapshot that the leader has available. Replace this expectation with a
-// catch-up assertion when ordered membership snapshot boundaries are supported.
-func TestMembershipChangeLeavesPreJoinSnapshotAvailable(t *testing.T) {
+// Legacy snapshotters cannot certify a configuration-only tail. Keep the old
+// snapshot intact rather than attach future membership to its historical index.
+func TestLegacySnapshotterPreservesPreJoinSnapshot(t *testing.T) {
 	consensus, err := newEtcdRaftConsensus(Config{
 		Provider: ProviderEtcdRaft, DataDir: t.TempDir(), NodeID: "node-a",
 		Transport: &recordingRaftTransport{}, SnapshotPolicy: SnapshotPolicy{AppliedEntries: 1},
@@ -124,5 +122,97 @@ func TestMembershipChangeLeavesPreJoinSnapshotAvailable(t *testing.T) {
 		if voter == joiner {
 			t.Fatal("pre-membership snapshot unexpectedly includes future joiner")
 		}
+	}
+}
+
+type recordingBoundarySnapshotter struct {
+	recordingStateSnapshotter
+	stateMachineIndex uint64
+}
+
+func (s *recordingBoundarySnapshotter) CaptureStateSnapshotBoundary(index, stateMachineIndex uint64) ([]byte, bool, error) {
+	s.stateMachineIndex = stateMachineIndex
+	data, err := s.CaptureStateSnapshot(index)
+	return data, true, err
+}
+
+func TestMembershipSnapshotWaitsForEveryLocalApplyAndUnblocksJoiner(t *testing.T) {
+	leader, err := newEtcdRaftConsensus(Config{
+		Provider: ProviderEtcdRaft, DataDir: t.TempDir(), NodeID: "node-a",
+		Transport: &recordingRaftTransport{}, SnapshotPolicy: SnapshotPolicy{AppliedEntries: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupEtcdRaftConsensus(t, leader)
+	snapshotter := &recordingBoundarySnapshotter{}
+	if err := leader.SetStateSnapshotter(snapshotter); err != nil {
+		t.Fatal(err)
+	}
+	commit := func() DataCommittedEntry {
+		t.Helper()
+		entry, err := leader.CommitData(context.Background(), DataMutation{Kind: "put", Key: []byte("key"), Value: []byte("value")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	initial := commit()
+	leader.ObserveCommittedIndex(initial.Commit.Index)
+	older, newer := commit(), commit()
+	// Membership refresh must bypass the usual snapshot interval, but not an
+	// outstanding local apply, even when a newer mutation was acknowledged.
+	leader.mu.Lock()
+	leader.snapshotPolicy.AppliedEntries = 1000
+	leader.mu.Unlock()
+	if err := leader.ChangeMembership(context.Background(), MembershipChange{Type: MembershipChangeAddNode, NodeID: "node-d"}); err != nil {
+		t.Fatal(err)
+	}
+	leader.ObserveCommittedIndex(newer.Commit.Index)
+	if status := leader.RuntimeStatus(); status.SnapshotIndex != initial.Commit.Index {
+		t.Fatalf("snapshot crossed unacknowledged local mutation: %+v", status)
+	}
+	leader.ObserveCommittedIndex(older.Commit.Index)
+	leader.mu.Lock()
+	snapshot, err := leader.storage.Snapshot()
+	boundary, term := leader.index, leader.term
+	leader.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Metadata.Index != boundary || boundary <= newer.Commit.Index || snapshotter.stateMachineIndex != newer.Commit.Index {
+		t.Fatalf("expected fresh membership boundary: snapshot=%+v boundary=%d mutation=%d", snapshot.Metadata, boundary, snapshotter.stateMachineIndex)
+	}
+	joinConfig := Config{Provider: ProviderEtcdRaft, DataDir: t.TempDir(), NodeID: "node-d",
+		Peers: []string{"node-a", "node-d"}, Transport: &recordingRaftTransport{}, Join: true}
+	joiner, err := newEtcdRaftConsensus(joinConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupEtcdRaftConsensus(t, joiner)
+	applier := &recordingStateSnapshotApplier{}
+	if err := joiner.SetStateSnapshotApplier(applier); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := encodeRaftPeerMessages([]raftpb.Message{{Type: raftpb.MsgSnap, From: leader.nodeID, To: joiner.nodeID, Term: term, Snapshot: snapshot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := joiner.HandlePeerMessages(context.Background(), messages); err != nil {
+		t.Fatal(err)
+	}
+	if status := joiner.RuntimeStatus(); status.Index != boundary || len(applier.indexes) != 1 || applier.indexes[0] != boundary {
+		t.Fatalf("joiner did not apply membership snapshot: %+v applied=%v", status, applier.indexes)
+	}
+	if err := joiner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := newEtcdRaftConsensus(joinConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupEtcdRaftConsensus(t, restarted)
+	if status := restarted.RuntimeStatus(); status.Index != boundary || status.SnapshotIndex != boundary || status.Replicas != 2 {
+		t.Fatalf("restart lost membership snapshot: %+v", status)
 	}
 }

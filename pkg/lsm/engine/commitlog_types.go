@@ -27,8 +27,9 @@ type CommitLogOptions struct {
 //
 // AppliedEntries disables automatic provider snapshots when zero. RetainEntries
 // keeps a tail of recent raft log entries after each snapshot. For the builtin
-// etcd-raft provider, snapshot data is captured through the engine after the
-// matching commit index has been applied locally.
+// etcd-raft provider, snapshot data is captured after all preceding mutations
+// apply locally. A configuration-only tail may extend the snapshot boundary;
+// membership changes refresh existing snapshots even below AppliedEntries.
 type CommitLogSnapshotPolicy struct {
 	AppliedEntries uint64 `json:"applied_entries" yaml:"applied_entries"`
 	RetainEntries  uint64 `json:"retain_entries" yaml:"retain_entries"`

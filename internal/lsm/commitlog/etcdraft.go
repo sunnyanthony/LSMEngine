@@ -48,9 +48,11 @@ type etcdRaftConsensus struct {
 	snapshotApplier   StateSnapshotApplier
 	proposalSeq       uint64
 	pending           map[uint64]*pendingRaftProposal
+	awaitingApply     map[uint64]struct{}
 	committed         []raftCommittedProposal
 	index             uint64
 	stateMachineIndex uint64
+	membershipIndex   uint64
 	term              uint64
 	snapshotPolicy    SnapshotPolicy
 	snapshotIndex     uint64
@@ -131,6 +133,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		transport:      transport,
 		snapshotPolicy: cfg.SnapshotPolicy,
 		pending:        make(map[uint64]*pendingRaftProposal),
+		awaitingApply:  make(map[uint64]struct{}),
 		replicas:       len(peerIDs),
 		stopCh:         make(chan struct{}),
 		doneCh:         make(chan struct{}),
@@ -144,6 +147,7 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	if snapshot, err := storage.Snapshot(); err == nil && !raft.IsEmptySnap(snapshot) {
 		c.snapshotIndex = snapshot.Metadata.Index
 		c.stateMachineIndex = snapshot.Metadata.Index
+		c.membershipIndex = snapshot.Metadata.Index
 	} else if err != nil && !errors.Is(err, raft.ErrSnapshotTemporarilyUnavailable) {
 		return nil, fmt.Errorf("read raft restored snapshot: %w", err)
 	}
@@ -403,6 +407,27 @@ func (c *etcdRaftConsensus) SetStateSnapshotApplier(applier StateSnapshotApplier
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.snapshotApplier = applier
+	if applier == nil || c.storage == nil {
+		return nil
+	}
+	// Engine installs the applier before the committed-tail observer. Restore
+	// the persisted base first, including configuration-only snapshot progress.
+	snapshot, err := c.storage.Snapshot()
+	if err != nil {
+		return fmt.Errorf("read raft state snapshot for engine restore: %w", err)
+	}
+	if !raft.IsEmptySnap(snapshot) && len(snapshot.Data) > 0 {
+		data := append([]byte(nil), snapshot.Data...)
+		var err error
+		if restorer, ok := applier.(StateSnapshotRestorer); ok {
+			err = restorer.RestoreStateSnapshot(snapshot.Metadata.Index, data)
+		} else {
+			err = applier.ApplyStateSnapshot(snapshot.Metadata.Index, data)
+		}
+		if err != nil {
+			return fmt.Errorf("restore raft state snapshot data: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -696,6 +721,7 @@ func (c *etcdRaftConsensus) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot
 		return fmt.Errorf("raft storage apply snapshot: %w", err)
 	}
 	c.snapshotIndex = snapshot.Metadata.Index
+	c.membershipIndex = snapshot.Metadata.Index
 	if snapshot.Metadata.Index > c.stateMachineIndex {
 		c.stateMachineIndex = snapshot.Metadata.Index
 	}
@@ -709,6 +735,11 @@ func (c *etcdRaftConsensus) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot
 	data := append([]byte(nil), snapshot.Data...)
 	if err := c.snapshotApplier.ApplyStateSnapshot(snapshot.Metadata.Index, data); err != nil {
 		return fmt.Errorf("apply raft state snapshot data: %w", err)
+	}
+	for index := range c.awaitingApply {
+		if index <= snapshot.Metadata.Index {
+			delete(c.awaitingApply, index)
+		}
 	}
 	return nil
 }
@@ -779,6 +810,12 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 		}
 		c.committed = append(c.committed, committed)
 		if pending, ok := c.pending[proposal.ID]; ok {
+			if c.snapshotter != nil {
+				if c.awaitingApply == nil {
+					c.awaitingApply = make(map[uint64]struct{})
+				}
+				c.awaitingApply[entry.Index] = struct{}{}
+			}
 			pending.control = committed.Control
 			pending.data = committed.Data
 			pending.done = true
@@ -799,7 +836,8 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 		}
 		c.rawNode.ApplyConfChange(cc)
 		c.updateReplicaCountLocked()
-		return nil
+		c.membershipIndex = entry.Index
+		return c.maybeMembershipSnapshotLocked()
 	case raftpb.EntryConfChangeV2:
 		var cc raftpb.ConfChangeV2
 		if err := cc.Unmarshal(entry.Data); err != nil {
@@ -807,7 +845,8 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 		}
 		c.rawNode.ApplyConfChange(cc)
 		c.updateReplicaCountLocked()
-		return nil
+		c.membershipIndex = entry.Index
+		return c.maybeMembershipSnapshotLocked()
 	default:
 		return nil
 	}
@@ -816,6 +855,7 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 func (c *etcdRaftConsensus) ObserveCommittedIndex(index uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	delete(c.awaitingApply, index)
 	if c.snapshotter == nil {
 		return
 	}
@@ -827,15 +867,45 @@ func (c *etcdRaftConsensus) ObserveCommittedIndex(index uint64) {
 	}
 }
 
+func (c *etcdRaftConsensus) maybeMembershipSnapshotLocked() error {
+	if _, ok := c.snapshotter.(BoundaryStateSnapshotter); !ok || c.snapshotIndex == 0 {
+		return nil
+	}
+	return c.maybeSnapshotLocked(c.index)
+}
+
 func (c *etcdRaftConsensus) maybeSnapshotLocked(appliedIndex uint64) error {
 	policy := c.snapshotPolicy
 	if policy.AppliedEntries == 0 || appliedIndex == 0 {
 		return nil
 	}
-	if appliedIndex <= c.snapshotIndex || appliedIndex-c.snapshotIndex < policy.AppliedEntries {
+	if c.snapshotter == nil {
+		snapshot, err := c.storage.Snapshot()
+		if err != nil {
+			return fmt.Errorf("read raft snapshot before compaction: %w", err)
+		}
+		// Startup replays raft before the engine is attached. Do not replace a
+		// durable engine payload with a metadata-only snapshot during that gap.
+		if len(snapshot.Data) > 0 {
+			return nil
+		}
+	}
+	boundarySnapshotter, hasBoundary := c.snapshotter.(BoundaryStateSnapshotter)
+	snapshotIndex := appliedIndex
+	if hasBoundary {
+		snapshotIndex = c.index
+	}
+	refreshMembership := c.snapshotIndex > 0 && c.membershipIndex > c.snapshotIndex
+	if snapshotIndex <= c.snapshotIndex || (!refreshMembership && snapshotIndex-c.snapshotIndex < policy.AppliedEntries) {
 		return nil
 	}
-	snapshotIndex := appliedIndex
+	// Local proposers apply after Commit returns, outside the provider lock.
+	// A later applied index alone cannot certify those earlier entries.
+	for index := range c.awaitingApply {
+		if index <= snapshotIndex {
+			return nil
+		}
+	}
 	compactIndex := snapshotIndex
 	var data []byte
 	if c.snapshotter != nil {
@@ -845,7 +915,20 @@ func (c *etcdRaftConsensus) maybeSnapshotLocked(appliedIndex uint64) error {
 			}
 			compactIndex = snapshotIndex - policy.RetainEntries
 		}
-		payload, err := c.snapshotter.CaptureStateSnapshot(snapshotIndex)
+		if snapshotIndex < c.membershipIndex {
+			return nil
+		}
+		var payload []byte
+		var err error
+		if hasBoundary {
+			var ready bool
+			payload, ready, err = boundarySnapshotter.CaptureStateSnapshotBoundary(snapshotIndex, c.stateMachineIndex)
+			if err == nil && !ready {
+				return nil
+			}
+		} else {
+			payload, err = c.snapshotter.CaptureStateSnapshot(snapshotIndex)
+		}
 		if err != nil {
 			return fmt.Errorf("capture raft state snapshot: %w", err)
 		}
@@ -858,6 +941,9 @@ func (c *etcdRaftConsensus) maybeSnapshotLocked(appliedIndex uint64) error {
 		compactIndex = snapshotIndex
 	}
 	if snapshotIndex <= c.snapshotIndex {
+		return nil
+	}
+	if snapshotIndex < c.membershipIndex {
 		return nil
 	}
 	confState := c.raftConfStateLocked()

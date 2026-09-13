@@ -30,12 +30,20 @@ type commitLogStateSnapshotter interface {
 	CaptureStateSnapshot(index uint64) ([]byte, error)
 }
 
+type commitLogBoundaryStateSnapshotter interface {
+	CaptureStateSnapshotBoundary(index, stateMachineIndex uint64) ([]byte, bool, error)
+}
+
 type commitLogStateSnapshotterSetter interface {
 	SetStateSnapshotter(snapshotter commitLogStateSnapshotter) error
 }
 
 type commitLogStateSnapshotApplier interface {
 	ApplyStateSnapshot(index uint64, data []byte) error
+}
+
+type commitLogStateSnapshotRestorer interface {
+	RestoreStateSnapshot(index uint64, data []byte) error
 }
 
 type commitLogStateSnapshotApplierSetter interface {
@@ -186,11 +194,29 @@ type internalStateSnapshotApplier struct {
 	applier commitLogStateSnapshotApplier
 }
 
+func (a internalStateSnapshotApplier) RestoreStateSnapshot(index uint64, data []byte) error {
+	if restorer, ok := a.applier.(commitLogStateSnapshotRestorer); ok {
+		return restorer.RestoreStateSnapshot(index, append([]byte(nil), data...))
+	}
+	return a.ApplyStateSnapshot(index, data)
+}
+
 func (s internalStateSnapshotter) CaptureStateSnapshot(index uint64) ([]byte, error) {
 	if s.snapshotter == nil {
 		return nil, nil
 	}
 	return s.snapshotter.CaptureStateSnapshot(index)
+}
+
+func (s internalStateSnapshotter) CaptureStateSnapshotBoundary(index, stateMachineIndex uint64) ([]byte, bool, error) {
+	if snapshotter, ok := s.snapshotter.(commitLogBoundaryStateSnapshotter); ok {
+		return snapshotter.CaptureStateSnapshotBoundary(index, stateMachineIndex)
+	}
+	if index != stateMachineIndex {
+		return nil, false, nil
+	}
+	data, err := s.CaptureStateSnapshot(index)
+	return data, err == nil, err
 }
 
 func (a internalStateSnapshotApplier) ApplyStateSnapshot(index uint64, data []byte) error {
