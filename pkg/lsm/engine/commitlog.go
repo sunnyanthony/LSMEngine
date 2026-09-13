@@ -169,6 +169,9 @@ func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (com
 		}
 		if opts.CommitLog.Transport != nil {
 			cfg.Transport = internalPeerTransport{transport: opts.CommitLog.Transport}
+			if transport, ok := opts.CommitLog.Transport.(CommitLogReportingPeerTransport); ok {
+				cfg.Transport = internalReportingPeerTransport{transport: transport}
+			}
 		}
 	}
 	consensus, err := internalcommitlog.NewBuiltin(cfg)
@@ -180,6 +183,18 @@ func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (com
 
 type internalPeerTransport struct {
 	transport CommitLogPeerTransport
+}
+
+type internalReportingPeerTransport struct {
+	transport CommitLogReportingPeerTransport
+}
+
+func (t internalReportingPeerTransport) Send(ctx context.Context, messages []internalcommitlog.PeerMessage) error {
+	return t.transport.Send(ctx, fromInternalPeerMessages(messages))
+}
+
+func (t internalReportingPeerTransport) SendWithResult(ctx context.Context, messages []internalcommitlog.PeerMessage, report func(uint64, error)) error {
+	return t.transport.SendWithResult(ctx, fromInternalPeerMessages(messages), report)
 }
 
 type internalCommittedEntryObserver struct {

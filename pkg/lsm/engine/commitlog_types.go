@@ -52,6 +52,14 @@ type CommitLogPeerTransport interface {
 	Send(ctx context.Context, messages []CommitLogPeerMessage) error
 }
 
+// CommitLogReportingPeerTransport optionally reports delivery once per target
+// in an accepted batch, synchronously or asynchronously. A non-nil return rejects
+// the entire batch without reports. Success is delivery, not quorum commitment.
+type CommitLogReportingPeerTransport interface {
+	CommitLogPeerTransport
+	SendWithResult(ctx context.Context, messages []CommitLogPeerMessage, report func(peerID uint64, err error)) error
+}
+
 // RaftMessageTransport is kept as a compatibility alias for earlier foundation
 // branches. New code should use CommitLogPeerTransport.
 type RaftMessageTransport = CommitLogPeerTransport

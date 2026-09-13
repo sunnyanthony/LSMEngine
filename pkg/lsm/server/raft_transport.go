@@ -53,6 +53,18 @@ func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, er
 
 // Send groups messages by target raft id and dispatches them to peer endpoints.
 func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.CommitLogPeerMessage) error {
+	return t.send(ctx, messages, nil)
+}
+
+// SendWithResult reports each target's HTTP delivery outcome independently.
+func (t *RaftHTTPTransport) SendWithResult(ctx context.Context, messages []lsm.CommitLogPeerMessage, report func(uint64, error)) error {
+	if report == nil {
+		return fmt.Errorf("raft delivery result callback is required")
+	}
+	return t.send(ctx, messages, report)
+}
+
+func (t *RaftHTTPTransport) send(ctx context.Context, messages []lsm.CommitLogPeerMessage, report func(uint64, error)) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -66,21 +78,32 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.CommitLogPe
 		}
 		grouped[message.To] = append(grouped[message.To], message)
 	}
+	var firstError error
 	for peerID, peerMessages := range grouped {
 		endpoint, err := t.resolver.ResolveRaftPeer(ctx, peerID)
 		if err != nil {
-			return err
+			if report != nil {
+				report(peerID, err)
+				t.reportError(err)
+			} else if firstError == nil {
+				firstError = err
+			}
+			continue
 		}
 		cloned := cloneCommitLogPeerMessages(peerMessages)
 		go func(peerID uint64, endpoint string, messages []lsm.CommitLogPeerMessage) {
 			sendCtx, cancel := detachedRaftSendContext(ctx, 3*time.Second)
 			defer cancel()
-			if err := t.sendToPeer(sendCtx, peerID, endpoint, messages); err != nil {
+			err := t.sendToPeer(sendCtx, peerID, endpoint, messages)
+			if report != nil {
+				report(peerID, err)
+			}
+			if err != nil {
 				t.reportError(err)
 			}
 		}(peerID, endpoint, cloned)
 	}
-	return nil
+	return firstError
 }
 
 func (t *RaftHTTPTransport) reportError(err error) {
@@ -131,7 +154,7 @@ func (t *RaftHTTPTransport) sendToPeer(
 		return fmt.Errorf("post raft peer messages: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return fmt.Errorf("post raft peer messages to %d failed: http %d: %s", peerID, resp.StatusCode, strings.TrimSpace(string(body)))
 	}

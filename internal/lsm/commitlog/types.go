@@ -37,6 +37,14 @@ type PeerTransport interface {
 	Send(ctx context.Context, messages []PeerMessage) error
 }
 
+// ReportingPeerTransport reports delivery once per target in an accepted batch.
+// report may run synchronously or asynchronously. A non-nil return rejects the
+// entire batch without reports. Delivery success is not a commit acknowledgement.
+type ReportingPeerTransport interface {
+	PeerTransport
+	SendWithResult(ctx context.Context, messages []PeerMessage, report func(peerID uint64, err error)) error
+}
+
 type CommittedEntryObserver interface {
 	ObserveCommittedControl(entry ControlCommittedEntry) error
 	ObserveCommittedData(entry DataCommittedEntry) error

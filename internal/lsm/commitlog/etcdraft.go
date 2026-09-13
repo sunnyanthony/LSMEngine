@@ -43,6 +43,9 @@ type etcdRaftConsensus struct {
 	rawNode           *raft.RawNode
 	storage           *raftPersistentStorage
 	transport         PeerTransport
+	delivery          peerDeliveryQueue
+	deliverySeq       uint64
+	snapshotSends     map[uint64]uint64
 	observer          CommittedEntryObserver
 	snapshotter       StateSnapshotter
 	snapshotApplier   StateSnapshotApplier
@@ -281,10 +284,12 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 		c.recordRuntimeErrorLocked(ErrNotLeader)
 		return ErrNotLeader
 	default:
-		if err := c.rawNode.Campaign(); err != nil {
-			err := fmt.Errorf("raft campaign membership change: %w", err)
-			c.recordRuntimeErrorLocked(err)
-			return err
+		if status.RaftState != raft.StateCandidate && status.RaftState != raft.StatePreCandidate {
+			if err := c.rawNode.Campaign(); err != nil {
+				err := fmt.Errorf("raft campaign membership change: %w", err)
+				c.recordRuntimeErrorLocked(err)
+				return err
+			}
 		}
 		if err := c.waitForLeaderLocked(runCtx); err != nil {
 			c.recordRuntimeErrorLocked(err)
@@ -296,7 +301,10 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 		c.recordRuntimeErrorLocked(err)
 		return err
 	}
-	for step := 0; step < etcdRaftAdvanceMaxStep; step++ {
+	for {
+		if c.closed {
+			return fmt.Errorf("%w: etcd raft commit log is closed", ErrUnavailable)
+		}
 		if err := c.advanceUntilStableLocked(runCtx); err != nil {
 			if c.membershipChangeAppliedLocked(cc) {
 				return nil
@@ -315,7 +323,6 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 			c.recordRuntimeErrorLocked(err)
 			return err
 		}
-		c.rawNode.Tick()
 		c.mu.Unlock()
 		select {
 		case <-runCtx.Done():
@@ -330,9 +337,6 @@ func (c *etcdRaftConsensus) ChangeMembership(ctx context.Context, change Members
 			c.mu.Lock()
 		}
 	}
-	err := fmt.Errorf("%w: raft membership change did not apply", ErrUnavailable)
-	c.recordRuntimeErrorLocked(err)
-	return err
 }
 
 func (c *etcdRaftConsensus) Provider() Provider {
@@ -435,6 +439,7 @@ func (c *etcdRaftConsensus) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.delivery.close()
 	if c.stopCh == nil || c.doneCh == nil {
 		c.mu.Lock()
 		c.closed = true
@@ -547,9 +552,6 @@ func (c *etcdRaftConsensus) commitMutation(
 			c.mu.Unlock()
 			return nil, err
 		}
-		if !pending.done {
-			c.rawNode.Tick()
-		}
 		c.mu.Unlock()
 		select {
 		case <-runCtx.Done():
@@ -575,8 +577,10 @@ func (c *etcdRaftConsensus) ensureLeader(ctx context.Context) error {
 	if status.Lead != 0 {
 		return ErrNotLeader
 	}
-	if err := c.rawNode.Campaign(); err != nil {
-		return fmt.Errorf("raft campaign: %w", err)
+	if status.RaftState != raft.StateCandidate && status.RaftState != raft.StatePreCandidate {
+		if err := c.rawNode.Campaign(); err != nil {
+			return fmt.Errorf("raft campaign: %w", err)
+		}
 	}
 	return c.waitForLeaderLocked(ctx)
 }
@@ -612,8 +616,15 @@ func runtimeErrorCode(err error) string {
 
 func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 	for {
-		if c.rawNode.Status().Lead == c.nodeID {
+		if c.closed {
+			return fmt.Errorf("%w: etcd raft commit log is closed", ErrUnavailable)
+		}
+		status := c.rawNode.Status()
+		if status.Lead == c.nodeID {
 			return nil
+		}
+		if status.Lead != 0 {
+			return ErrNotLeader
 		}
 		select {
 		case <-ctx.Done():
@@ -626,7 +637,6 @@ func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 		if c.rawNode.Status().Lead == c.nodeID {
 			return nil
 		}
-		c.rawNode.Tick()
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -639,6 +649,7 @@ func (c *etcdRaftConsensus) waitForLeaderLocked(ctx context.Context) error {
 }
 
 func (c *etcdRaftConsensus) advanceUntilStableLocked(ctx context.Context) error {
+	c.applyDeliveryResultsLocked()
 	steps := 0
 	for c.rawNode.HasReady() {
 		select {
@@ -691,15 +702,8 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		if c.transport == nil {
 			return fmt.Errorf("raft transport is not configured for peer messages")
 		}
-		encoded, err := encodeRaftPeerMessages(outbound)
-		if err != nil {
+		if err := c.sendPeerMessagesLocked(ctx, outbound); err != nil {
 			return err
-		}
-		sendCtx, cancel := withDefaultTimeout(ctx, etcdRaftSendTimeout)
-		err = c.transport.Send(sendCtx, encoded)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("raft transport send: %w", err)
 		}
 	}
 	for _, entry := range rd.CommittedEntries {
