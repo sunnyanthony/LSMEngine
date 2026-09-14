@@ -216,7 +216,7 @@ func TestWriteCDCInspectionOutput(t *testing.T) {
 	eventsOut := eventsBuf.String()
 	for _, want := range []string{
 		"shard=default from_offset=0 next_offset=8 oldest_offset=8 start_offset=7 dropped_before=false events=1",
-		"offset=8 operation=put key=k value=v tombstone=false",
+		`offset=8 operation=put key="k" value="v" tombstone=false`,
 	} {
 		if !strings.Contains(eventsOut, want) {
 			t.Fatalf("expected events output to contain %q, got:\n%s", want, eventsOut)

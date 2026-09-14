@@ -4432,12 +4432,12 @@ func writeCDCEvent(w io.Writer, event cdcEventResult) {
 	value, valueOK := decodeBase64Text(event.ValueBase64)
 	fmt.Fprintf(w, "offset=%d operation=%s", event.Offset, event.Operation)
 	if keyOK {
-		fmt.Fprintf(w, " key=%s", key)
+		fmt.Fprintf(w, " key=%q", key)
 	} else if event.KeyBase64 != "" {
 		fmt.Fprintf(w, " key_base64=%s", event.KeyBase64)
 	}
 	if valueOK {
-		fmt.Fprintf(w, " value=%s", value)
+		fmt.Fprintf(w, " value=%q", value)
 	} else if event.ValueBase64 != "" {
 		fmt.Fprintf(w, " value_base64=%s", event.ValueBase64)
 	}
