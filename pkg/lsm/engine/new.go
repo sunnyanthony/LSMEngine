@@ -244,5 +244,6 @@ func New(opts Options) (*LSM, error) {
 		lsm.compactionSvc.Trigger()
 	}
 
+	lsm.writer.flushWALPressure()
 	return lsm, nil
 }

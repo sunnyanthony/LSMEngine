@@ -49,21 +49,32 @@ checkpoint. The active `wal.log` is never removed by retention.
 `WALReadyMaxCheckpointLag` / `wal_ready_max_checkpoint_lag` is an optional
 node-local readiness gate. When greater than zero, `Health()` and `/readyz`
 return `ready=false` with reason `wal_checkpoint_lag` once the latest local
-sequence is more than that many entries ahead of the manifest WAL checkpoint.
+sequence is more than that sequence distance ahead of the manifest WAL checkpoint.
 This lets supervisors stop sending normal traffic to a node whose local WAL
 retention debt is growing. It does not reject raft committed apply, does not
 make CDC durable, and does not replace raft log retention or snapshots.
+Applying a write above this limit also schedules the current partial memtable
+for flush, so readiness can recover even if the supervisor stops new traffic.
 
 ## Write-admission backpressure
 `WALBackpressureMaxCheckpointLag` / `wal_backpressure_max_checkpoint_lag` is
 an optional local write-admission gate. When greater than zero, new local writes
 are rejected with `ErrBackpressure` before commit-log proposal once the latest
-local sequence is more than that many entries ahead of the manifest WAL
+local sequence is more than that sequence distance ahead of the manifest WAL
 checkpoint.
 
 This is intentionally scoped to local write admission. Committed raft entries
 still apply locally even while this gate is active, so a lagged node can catch up
 instead of rejecting already-committed data.
+When this gate rejects a write, it schedules already applied data in a nonempty
+active memtable for flush. The rejected mutation is not proposed or applied.
+Recovery still requires successful flush and manifest publication; neither gate
+advances the checkpoint itself. Sequence distance is not bytes or record count,
+and sparse/custom sequences can cross a small limit in a single write.
+After recovery, startup also schedules a partial memtable flush when either
+configured WAL gate is exceeded, without waiting for incoming traffic. Very
+small thresholds can produce frequent small SSTables and additional compaction
+work; these settings are local pressure policies, not hard storage bounds.
 
 ## Block framing
 Records are grouped into fixed-size blocks. The block size is configurable via options

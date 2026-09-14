@@ -266,6 +266,11 @@ func (s *Stats) applyWALStats(l *LSM) {
 		return
 	}
 	stats := l.wal.Stats()
+	checkpoint := atomic.LoadUint64(&l.lastFlush)
+	var lag uint64
+	if s.Seq > checkpoint {
+		lag = s.Seq - checkpoint
+	}
 	s.WAL = WALStats{
 		SegmentID:                    stats.SegmentID,
 		SegmentCount:                 stats.SegmentCount,
@@ -273,8 +278,8 @@ func (s *Stats) applyWALStats(l *LSM) {
 		ActiveSegmentBytes:           stats.ActiveSegmentBytes,
 		ArchivedSegmentBytes:         stats.ArchivedSegmentBytes,
 		TotalBytes:                   stats.TotalBytes,
-		CheckpointSeq:                atomic.LoadUint64(&l.lastFlush),
-		CheckpointLag:                l.walCheckpointLag(),
+		CheckpointSeq:                checkpoint,
+		CheckpointLag:                lag,
 		ReadyMaxCheckpointLag:        l.walReadyMaxCheckpointLag,
 		BackpressureMaxCheckpointLag: l.walBackpressureMaxCheckpointLag,
 		MaxSegmentBytes:              stats.MaxSegmentBytes,

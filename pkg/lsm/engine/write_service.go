@@ -173,7 +173,7 @@ func (s *writeService) appendPutToLocalStore(key []byte, value []byte, seq uint6
 	}
 	s.l.observeCommittedSeq(entry.Seq)
 	s.l.applyEntryOwned(mem, entry)
-	shouldFlush := mem.Size() >= s.l.mtLimit
+	shouldFlush := mem.Size() >= s.l.mtLimit || s.l.walCheckpointLagOverReadyLimit()
 	mem.DecWriter()
 	if shouldFlush {
 		s.triggerFlush(mem)
@@ -198,7 +198,7 @@ func (s *writeService) appendDeleteToLocalStore(key []byte, seq uint64) (uint64,
 	}
 	s.l.observeCommittedSeq(entry.Seq)
 	s.l.applyEntryOwned(mem, entry)
-	shouldFlush := mem.Size() >= s.l.mtLimit
+	shouldFlush := mem.Size() >= s.l.mtLimit || s.l.walCheckpointLagOverReadyLimit()
 	mem.DecWriter()
 	if shouldFlush {
 		s.triggerFlush(mem)

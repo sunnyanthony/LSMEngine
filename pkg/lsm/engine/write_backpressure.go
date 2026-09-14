@@ -29,9 +29,29 @@ func (s *writeService) admitWrite(delta int) error {
 	}
 	if reason := s.l.writeAdmissionBackpressureReason(delta); reason != "" {
 		s.l.writeBackpressureRejects.Add(1)
+		if reason == writeBackpressureReasonWAL {
+			s.flushWALPressure()
+		}
 		return errs.ErrBackpressure
 	}
 	return nil
+}
+
+func (s *writeService) flushWALPressure() {
+	s.l.commitApplyMu.Lock()
+	defer s.l.commitApplyMu.Unlock()
+	lag := s.l.walCheckpointLag()
+	admission := s.l.walBackpressureMaxCheckpointLag
+	readiness := s.l.walReadyMaxCheckpointLag
+	if s.l.isClosing() || !((admission > 0 && lag > admission) || (readiness > 0 && lag > readiness)) {
+		return
+	}
+	// Rejected writes cannot fill the active memtable. Flush already applied
+	// data so the durable checkpoint can advance without another admitted write.
+	mem := s.l.activeMem()
+	if mem != nil && mem.Size() > 0 {
+		s.triggerFlush(mem)
+	}
 }
 
 func (l *LSM) writeBackpressureSnapshot() writeBackpressureSnapshot {
