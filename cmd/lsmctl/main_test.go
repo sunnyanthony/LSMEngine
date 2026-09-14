@@ -1572,6 +1572,17 @@ func TestStateSnapshotRestoreRejectsNonEmptyTarget(t *testing.T) {
 	if _, err := restoreStateSnapshotFile(targetDir, snapshotPath); err == nil {
 		t.Fatalf("expected restore to reject non-empty target")
 	}
+	reopened, err := openLocal(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if entry, ok := reopened.Get([]byte("existing")); !ok || string(entry.Value) != "value" {
+		t.Fatal("rejected restore changed existing data")
+	}
+	if _, ok := reopened.Get([]byte("snapshot")); ok {
+		t.Fatal("rejected restore partially applied snapshot data")
+	}
 }
 
 func TestWriteKVStatusPrintsCommittedSeq(t *testing.T) {

@@ -641,6 +641,11 @@ before and after the old node failed.
 For offline embedded or single-node recovery workflows, export the local
 LSM-owned state-machine payload while no other process owns the data directory:
 
+Export publishes a synced, mode-0600 file from a temporary file in the output
+directory. Existing paths are rejected unless `--force` is supplied; forced
+replacement replaces a symlink itself, not its target. A directory-sync error
+can be reported after publication, so inspect the output before retrying.
+
 ```bash
 go run ./cmd/lsmctl snapshot-export --data-dir ./data --out ./state-snapshot.json
 ```

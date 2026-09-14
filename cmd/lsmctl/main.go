@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -4025,23 +4026,44 @@ func restoreStateSnapshotFile(dataDir string, path string) (stateSnapshotFileRes
 }
 
 func writeStateSnapshotFile(path string, data []byte, force bool) error {
-	flag := os.O_WRONLY | os.O_CREATE
-	if force {
-		flag |= os.O_TRUNC
-	} else {
-		flag |= os.O_EXCL
-	}
-	file, err := os.OpenFile(path, flag, 0o600)
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, ".lsm-snapshot-*")
 	if err != nil {
 		return err
 	}
+	defer os.Remove(file.Name())
 	n, writeErr := file.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
 	closeErr := file.Close()
 	if writeErr != nil {
 		return writeErr
 	}
-	if n != len(data) {
-		return io.ErrShortWrite
+	if closeErr != nil {
+		return closeErr
+	}
+	// Publish only a complete file. Link preserves exclusive creation without
+	// a check-then-rename race; rename replaces a symlink instead of its target.
+	if force {
+		err = os.Rename(file.Name(), path)
+	} else {
+		err = os.Link(file.Name(), path)
+	}
+	if err != nil {
+		return err
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr = directory.Close()
+	if syncErr != nil {
+		return syncErr
 	}
 	return closeErr
 }
