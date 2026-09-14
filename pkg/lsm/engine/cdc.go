@@ -93,6 +93,7 @@ func (s *cdcStreamStore) status(knownShards []string) CDCStatus {
 			continue
 		}
 		out.Shards = append(out.Shards, CDCShardStatus{ShardID: shardID})
+		seen[shardID] = struct{}{}
 	}
 	sort.Slice(out.Shards, func(i, j int) bool {
 		return out.Shards[i].ShardID < out.Shards[j].ShardID

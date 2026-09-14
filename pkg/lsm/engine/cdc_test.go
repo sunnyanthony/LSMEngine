@@ -77,7 +77,7 @@ func TestCDCStatusReportsRetainedWindows(t *testing.T) {
 	store.append(CDCEvent{Offset: 2, ShardID: "users", Operation: "put", Key: []byte("b"), Value: []byte("2"), CommittedAt: time.Now().UTC()})
 	store.append(CDCEvent{Offset: 3, ShardID: "users", Operation: "delete", Key: []byte("b"), Tombstone: true, CommittedAt: time.Now().UTC()})
 
-	status := store.status([]string{"orders", "users"})
+	status := store.status([]string{"orders", "users", " orders ", "", "users"})
 	if status.Durable || status.ReplayOnRestart || status.Source != CDCSourceMemory {
 		t.Fatalf("expected in-memory non-durable status, got %+v", status)
 	}
