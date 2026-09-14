@@ -134,6 +134,9 @@ func TestLSMWALAutoRepairPersistsTailTruncation(t *testing.T) {
 	if _, ok := store.Get([]byte("tail")); ok {
 		t.Fatalf("expected truncated tail record to be absent")
 	}
+	if err := store.Put([]byte("after-repair"), []byte("new-value")); err != nil {
+		t.Fatalf("append after tail repair: %v", err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close repaired store: %v", err)
 	}
@@ -152,6 +155,9 @@ func TestLSMWALAutoRepairPersistsTailTruncation(t *testing.T) {
 	}
 	if _, ok := restarted.Get([]byte("tail")); ok {
 		t.Fatalf("expected restarted tail record to remain absent")
+	}
+	if got, ok := restarted.Get([]byte("after-repair")); !ok || string(got.Value) != "new-value" || got.Seq <= 1 {
+		t.Fatalf("post-repair append did not survive with advanced sequence: %+v, found=%v", got, ok)
 	}
 }
 
