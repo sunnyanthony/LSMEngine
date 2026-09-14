@@ -104,6 +104,15 @@ func TestSnapshotRestoreCompletesPartialMaterializationAtEqualSeq(t *testing.T) 
 	if _, ok := db.Get([]byte("stale")); ok || db.commitLogApplied() != 8 {
 		t.Fatal("snapshot restore did not remove stale data or install boundary")
 	}
+	status := db.CDCStatus()
+	if status.StartOffset != 7 {
+		t.Fatalf("snapshot CDC baseline must use data sequence, not raft boundary: %+v", status)
+	}
+	for _, shard := range status.Shards {
+		if shard.RetainedEvents != 0 {
+			t.Fatalf("snapshot restore retained obsolete CDC events: %+v", shard)
+		}
+	}
 }
 
 func TestSnapshotRestorePreservesNewerDataAndControl(t *testing.T) {
