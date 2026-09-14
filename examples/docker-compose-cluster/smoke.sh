@@ -217,4 +217,13 @@ require_contains "$missing_output" "found=false"
 
 eventually_lsmctl_get_contains "http://127.0.0.1:8082" compose "found=false"
 
+compose restart node-c
+wait_for_health "http://127.0.0.1:8082"
+wait_cluster_applied "$delete_seq"
+restart_cdc_output="$(lsmctl cdc-events --addr http://127.0.0.1:8082 --shard users --offset "$delete_cdc_offset" --limit 10)"
+require_contains "$restart_cdc_output" "start_offset=$delete_seq"
+require_contains "$restart_cdc_output" "dropped_before=true"
+require_contains "$restart_cdc_output" "events=0"
+eventually_lsmctl_get_contains "http://127.0.0.1:8082" compose "found=false"
+
 echo "compose cluster smoke passed"
