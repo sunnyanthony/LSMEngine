@@ -193,6 +193,9 @@ require_contains "$put_cdc_output" "offset=$put_seq"
 require_contains "$put_cdc_output" "operation=put"
 require_contains "$put_cdc_output" 'key="compose"'
 require_contains "$put_cdc_output" 'value="ok"'
+for node in node-a node-b node-c; do
+  require_contains "$put_cdc_output" "node=$node offset=$put_seq operation=put key=\"compose\" value=\"ok\" tombstone=false"
+done
 
 range_output="$(lsmctl range --addr http://127.0.0.1:8081 --start compose --end composf --limit 1)"
 require_contains "$range_output" "key=compose"
@@ -220,6 +223,9 @@ require_contains "$delete_cdc_output" "offset=$delete_seq"
 require_contains "$delete_cdc_output" "operation=delete"
 require_contains "$delete_cdc_output" 'key="compose"'
 require_contains "$delete_cdc_output" "tombstone=true"
+for node in node-a node-b node-c; do
+  require_contains "$delete_cdc_output" "node=$node offset=$delete_seq operation=delete key=\"compose\" tombstone=true"
+done
 
 missing_output="$(wait_for_cluster_missing compose)"
 require_contains "$missing_output" "found=false"

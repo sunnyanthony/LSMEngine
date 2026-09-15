@@ -368,7 +368,7 @@ func TestWriteCDCInspectionOutput(t *testing.T) {
 	clusterEventsOut := clusterEventsBuf.String()
 	for _, want := range []string{
 		"node=node-a endpoint=http://node-a:8080 shard=users from_offset=7 next_offset=8 oldest_offset=8 start_offset=0 dropped_before=false events=1",
-		"node=node-a offset=8 operation=put key=k value=v tombstone=false",
+		`node=node-a offset=8 operation=put key="k" value="v" tombstone=false`,
 		"node=node-b endpoint=http://node-b:8080 error=unreachable",
 	} {
 		if !strings.Contains(clusterEventsOut, want) {
