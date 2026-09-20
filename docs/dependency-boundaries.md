@@ -25,14 +25,15 @@ kernel-assisted IO behavior.
   committed control/data entries, commit positions, runtime status, shard
   metadata, and state-machine snapshot payloads.
 
-## Current Exceptions
+## Boundary Status
 
-- The raft peer-message foundation still exposes etcd `raftpb.Message` through
-  `CommitLogOptions.Transport` and `HandlePeerMessages`. Treat this as
-  temporary foundation debt, not as the long-term API pattern. Before widening
-  the multi-node surface, wrap peer transport and ingress in an LSM-owned
-  message/envelope type and keep raftpb encoding/decoding inside the provider
-  adapter.
+- Raft peer-message transport and ingress use the LSM-owned
+  `CommitLogPeerMessage` envelope. The payload remains provider-defined and
+  opaque to engine/server callers; the builtin etcd-raft provider owns raftpb
+  encoding and decoding internally.
+- Future raft hardening should keep ConfChange, raft storage, snapshot policy,
+  and catch-up details behind the same provider boundary before widening
+  operator or public APIs.
 
 ## Checklist For New Dependencies
 
@@ -45,7 +46,7 @@ Before adding or expanding a third-party core dependency:
 4. Keep persisted and wire-visible formats expressed in LSM-owned terms.
 5. Add adapter-boundary tests that prove callers observe LSM semantics rather
    than dependency-specific behavior.
-6. Document replacement requirements and any temporary boundary exceptions.
+6. Document replacement requirements and any boundary exceptions.
 
 If a call site would make the dependency hard to replace without API churn,
 tighten the adapter before adding that call site.

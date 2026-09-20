@@ -1,10 +1,6 @@
 package engine
 
-import (
-	"context"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
-)
+import "context"
 
 // CommitLogProvider selects the commit-log backend.
 type CommitLogProvider string
@@ -16,18 +12,31 @@ const (
 
 // CommitLogOptions controls commit-log provider selection and injection.
 type CommitLogOptions struct {
-	Provider  CommitLogProvider    `json:"provider" yaml:"provider"`
-	Transport RaftMessageTransport `json:"-" yaml:"-"`
-	Factory   CommitLogFactory     `json:"-" yaml:"-"`
+	Provider  CommitLogProvider      `json:"provider" yaml:"provider"`
+	Transport CommitLogPeerTransport `json:"-" yaml:"-"`
+	Factory   CommitLogFactory       `json:"-" yaml:"-"`
 }
 
-// RaftMessageTransport sends raft protocol messages to peer nodes.
-//
-// This transport is outbound from the local raft node. Inbound delivery is
-// handled via CommitLogConsensus.HandlePeerMessages.
-type RaftMessageTransport interface {
-	Send(ctx context.Context, messages []raftpb.Message) error
+// CommitLogPeerMessage is the LSM-owned envelope used to move commit-log peer
+// messages between nodes. Payload is provider-defined and must be treated as
+// opaque by engine/server callers.
+type CommitLogPeerMessage struct {
+	From    uint64 `json:"from" yaml:"from"`
+	To      uint64 `json:"to" yaml:"to"`
+	Payload []byte `json:"payload" yaml:"payload"`
 }
+
+// CommitLogPeerTransport sends commit-log peer messages to peer nodes.
+//
+// This transport is outbound from the local commit-log provider. Inbound
+// delivery is handled via CommitLogConsensus.HandlePeerMessages.
+type CommitLogPeerTransport interface {
+	Send(ctx context.Context, messages []CommitLogPeerMessage) error
+}
+
+// RaftMessageTransport is kept as a compatibility alias for earlier foundation
+// branches. New code should use CommitLogPeerTransport.
+type RaftMessageTransport = CommitLogPeerTransport
 
 // CommitLogControlMutation is a control-plane state mutation that must go
 // through the commit-log correctness path.
@@ -81,7 +90,7 @@ type CommitLogRuntimeStatus struct {
 type CommitLogConsensus interface {
 	CommitControl(ctx context.Context, mutation CommitLogControlMutation) (CommitLogControlCommittedEntry, error)
 	CommitData(ctx context.Context, mutation CommitLogDataMutation) (CommitLogDataCommittedEntry, error)
-	HandlePeerMessages(ctx context.Context, messages []raftpb.Message) error
+	HandlePeerMessages(ctx context.Context, messages []CommitLogPeerMessage) error
 	Provider() CommitLogProvider
 	RuntimeStatus() CommitLogRuntimeStatus
 }

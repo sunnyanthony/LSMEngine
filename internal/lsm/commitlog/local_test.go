@@ -3,19 +3,12 @@ package commitlog
 import (
 	"context"
 	"testing"
-
-	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestLocalConsensusHandlePeerMessagesNoop(t *testing.T) {
 	consensus := newLocalConsensus()
-	if err := consensus.HandlePeerMessages(context.Background(), []raftpb.Message{
-		{
-			Type: raftpb.MsgApp,
-			From: 1,
-			To:   1,
-			Term: 1,
-		},
+	if err := consensus.HandlePeerMessages(context.Background(), []PeerMessage{
+		{From: 1, To: 1, Payload: []byte("ignored")},
 	}); err != nil {
 		t.Fatalf("handle peer messages: %v", err)
 	}
