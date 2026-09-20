@@ -96,7 +96,7 @@ func (s *raftPersistentStorage) Persist() error {
 	if err != nil {
 		return fmt.Errorf("encode raft state: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := ensureDurableRaftDir(filepath.Dir(s.path), syncDir); err != nil {
 		return fmt.Errorf("create raft state dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
@@ -111,6 +111,26 @@ func (s *raftPersistentStorage) Persist() error {
 		return fmt.Errorf("sync raft state dir: %w", err)
 	}
 	return nil
+}
+
+func ensureDurableRaftDir(path string, syncDirectory func(string) error) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return err
+	}
+	// Sync every ancestor even on retry: an existing directory may have been
+	// created by an earlier attempt whose parent sync failed.
+	for current := abs; ; current = filepath.Dir(current) {
+		if err := syncDirectory(current); err != nil {
+			return fmt.Errorf("sync directory %s: %w", current, err)
+		}
+		if filepath.Dir(current) == current {
+			return nil
+		}
+	}
 }
 
 func writeSyncedFile(path string, data []byte, perm os.FileMode) error {
