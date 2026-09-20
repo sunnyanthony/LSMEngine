@@ -221,8 +221,19 @@ func TestCommitLogFactoryConsensusHandlesPeerMessages(t *testing.T) {
 	}
 }
 
+type retainingPeerConsensus struct {
+	testCommitLogConsensus
+	received []CommitLogPeerMessage
+}
+
+func (c *retainingPeerConsensus) HandlePeerMessages(_ context.Context, messages []CommitLogPeerMessage) error {
+	// Deliberately retain the exact input to test the engine's ownership boundary.
+	c.received = messages
+	return nil
+}
+
 func TestHandlePeerMessagesCopiesPayloadsBeforeProvider(t *testing.T) {
-	consensus := &testCommitLogConsensus{provider: "custom-raft"}
+	consensus := &retainingPeerConsensus{}
 	store, err := New(Options{
 		DataDir: t.TempDir(),
 		CommitLog: &CommitLogOptions{
@@ -241,12 +252,18 @@ func TestHandlePeerMessagesCopiesPayloadsBeforeProvider(t *testing.T) {
 	}
 	payload[0] = 'X'
 	messages[0].Payload[1] = 'Y'
+	messages[0].From = 99
+	messages[0].To = 98
+	messages[0].Payload = []byte("replacement")
 
-	got := consensus.PeerMessages()
+	got := consensus.received
 	if len(got) != 1 {
 		t.Fatalf("expected one peer message, got %+v", got)
 	}
 	if string(got[0].Payload) != "heartbeat" {
 		t.Fatalf("expected copied payload, got %q", got[0].Payload)
+	}
+	if got[0].From != 2 || got[0].To != 1 {
+		t.Fatalf("expected copied envelope, got %+v", got[0])
 	}
 }
