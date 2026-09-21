@@ -36,7 +36,7 @@ func New(opts Options) (*LSM, error) {
 		return nil, err
 	}
 	autoRepair, missingPolicy := walRepairPolicy(opts)
-	strictRaftReplay := opts.CommitLog != nil && opts.CommitLog.Provider == CommitLogProviderEtcdRaft
+	strictRaftReplay := control.consensus.Provider() == CommitLogProviderEtcdRaft
 	if strictRaftReplay {
 		// Resynchronization can skip committed writes. Never erase that evidence.
 		autoRepair = false

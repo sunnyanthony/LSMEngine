@@ -15,7 +15,16 @@ import (
 )
 
 func TestRaftCorruptWALCannotAdvanceRecoveryCheckpoint(t *testing.T) {
-	opts := Options{DataDir: t.TempDir(), NodeID: "node-a", CommitLog: &CommitLogOptions{Provider: CommitLogProviderEtcdRaft}}
+	for _, provider := range []CommitLogProvider{CommitLogProviderEtcdRaft, " etcd-raft "} {
+		t.Run(string(provider), func(t *testing.T) {
+			testRaftCorruptWALCannotAdvanceRecoveryCheckpoint(t, provider)
+		})
+	}
+}
+
+func testRaftCorruptWALCannotAdvanceRecoveryCheckpoint(t *testing.T, provider CommitLogProvider) {
+	t.Helper()
+	opts := Options{DataDir: t.TempDir(), NodeID: "node-a", CommitLog: &CommitLogOptions{Provider: provider}}
 	db, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
