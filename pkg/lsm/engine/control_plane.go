@@ -108,7 +108,6 @@ type controlPlane struct {
 	commitMu              sync.Mutex
 	commitErr             error
 	commitLogAppliedIndex uint64
-	recoveringEntry       *controlCommittedEntry
 	mu                    sync.RWMutex
 	nodeID                string
 	clusterID             string
@@ -376,27 +375,7 @@ func (c *controlPlane) transferLeaderWithOptions(shardID, target string, opts Co
 			if mutation.Kind != "transfer-leader" || mutation.ShardID != shardID || mutation.Target != target {
 				return fmt.Errorf("committed control mutation mismatch")
 			}
-			shard, ok := c.shards[shardID]
-			if !ok {
-				return errs.ErrShardNotFound
-			}
-			if !hasReplica(shard.Replicas, target) {
-				shard.Replicas = append(shard.Replicas, ReplicaStatus{
-					NodeID:  target,
-					Role:    "follower",
-					Healthy: true,
-				})
-			}
-			shard.Leader = target
-			for i := range shard.Replicas {
-				if shard.Replicas[i].NodeID == target {
-					shard.Replicas[i].Role = "leader"
-					continue
-				}
-				shard.Replicas[i].Role = "follower"
-			}
-			c.shards[shardID] = shard
-			return nil
+			return c.applyTransferLeaderPayloadLocked(mutation)
 		},
 	)
 }
@@ -426,38 +405,7 @@ func (c *controlPlane) triggerSplitWithOptions(shardID string, splitKey []byte, 
 			if mutation.Kind != "split" || mutation.ShardID != shardID || !bytes.Equal(mutation.Split, splitKey) {
 				return fmt.Errorf("committed control mutation mismatch")
 			}
-			shard, ok := c.shards[shardID]
-			if !ok {
-				return errs.ErrShardNotFound
-			}
-			if !keyInRange(splitKey, shard.StartKey, shard.EndKey) {
-				return fmt.Errorf("split key outside shard range")
-			}
-			if (len(shard.StartKey) > 0 && bytes.Equal(splitKey, shard.StartKey)) ||
-				(len(shard.EndKey) > 0 && bytes.Equal(splitKey, shard.EndKey)) {
-				return fmt.Errorf("split key must be inside range")
-			}
-
-			left := shard
-			right := shard
-			left.ID = c.uniqueShardID(shardID + "-a")
-			right.ID = c.uniqueShardID(shardID + "-b")
-			left.EndKey = append([]byte(nil), splitKey...)
-			right.StartKey = append([]byte(nil), splitKey...)
-			delete(c.shards, shardID)
-			c.shards[left.ID] = left
-			c.shards[right.ID] = right
-
-			nextOrder := make([]string, 0, len(c.order)+1)
-			for _, id := range c.order {
-				if id == shardID {
-					nextOrder = append(nextOrder, left.ID, right.ID)
-					continue
-				}
-				nextOrder = append(nextOrder, id)
-			}
-			c.order = nextOrder
-			return c.rebuildRoutesLocked()
+			return c.applySplitPayloadLocked(mutation)
 		},
 	)
 }
@@ -497,42 +445,7 @@ func (c *controlPlane) prepareDrainWithOptions(nodeID string, opts ControlWriteO
 			if mutation.Kind != "prepare-drain" || mutation.NodeID != nodeID {
 				return fmt.Errorf("committed control mutation mismatch")
 			}
-			targets := make(map[string]string)
-			for _, id := range c.order {
-				shard := c.shards[id]
-				if shard.Leader != nodeID {
-					continue
-				}
-				target := ""
-				for _, replica := range shard.Replicas {
-					if replica.NodeID != nodeID && replica.Healthy {
-						target = replica.NodeID
-						break
-					}
-				}
-				if target == "" {
-					return fmt.Errorf("cannot drain: shard %q has no alternate healthy replica", id)
-				}
-				targets[id] = target
-			}
-			for _, id := range c.order {
-				target, ok := targets[id]
-				if !ok {
-					continue
-				}
-				shard := c.shards[id]
-				shard.Leader = target
-				for i := range shard.Replicas {
-					if shard.Replicas[i].NodeID == target {
-						shard.Replicas[i].Role = "leader"
-						continue
-					}
-					shard.Replicas[i].Role = "follower"
-				}
-				c.shards[id] = shard
-			}
-			c.draining = true
-			return nil
+			return c.applyDrainPayloadLocked(mutation)
 		},
 	)
 }
@@ -595,13 +508,8 @@ func (c *controlPlane) applyControlMutation(
 	if err != nil || applied {
 		return err
 	}
-	var entry controlCommittedEntry
 	mutation.OperationID = strings.TrimSpace(opts.OperationID)
-	if c.recoveringEntry != nil {
-		entry = *c.recoveringEntry
-	} else {
-		entry, err = c.consensus.CommitControl(context.Background(), mutation)
-	}
+	entry, err := c.consensus.CommitControl(context.Background(), mutation)
 	if err != nil {
 		if c.consensus.Provider() == CommitLogProviderEtcdRaft {
 			c.commitErr = err
@@ -635,6 +543,13 @@ func (c *controlPlane) applyCommittedControlMutation(
 		return err
 	}
 	if appliedLocked {
+		previous := c.snapshotStateLocked()
+		if entry.Commit.Index > c.commitLogAppliedIndex {
+			c.commitLogAppliedIndex = entry.Commit.Index
+			if err := c.saveLockedWithRollback(previous); err != nil {
+				return err
+			}
+		}
 		return errControlNoop
 	}
 	previous := c.snapshotStateLocked()

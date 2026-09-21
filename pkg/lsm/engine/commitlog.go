@@ -37,19 +37,7 @@ func (c *controlPlane) recoverCommittedControl(entry controlCommittedEntry) erro
 	if entry.Commit.Index <= c.commitLogAppliedIndex {
 		return nil
 	}
-	c.recoveringEntry = &entry
-	defer func() { c.recoveringEntry = nil }()
-	opts := ControlWriteOptions{OperationID: entry.Mutation.OperationID}
-	switch m := entry.Mutation; m.Kind {
-	case "transfer-leader":
-		return c.transferLeaderWithOptions(m.ShardID, m.Target, opts)
-	case "split":
-		return c.triggerSplitWithOptions(m.ShardID, m.Split, opts)
-	case "prepare-drain":
-		return c.prepareDrainWithOptions(m.NodeID, opts)
-	default:
-		return fmt.Errorf("unknown committed control mutation %q", m.Kind)
-	}
+	return c.applyCommittedControlFromLog(entry)
 }
 
 type builtinCommitLogConsensus struct {
