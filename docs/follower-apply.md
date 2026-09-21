@@ -34,6 +34,16 @@ to its LSM. Restart recovery is not a substitute for live application.
 
 ## Verification Before Merge
 
+Initial independent review confirmed the gap and identified these implementation
+constraints: revision preconditions must have identical committed outcomes on all
+replicas; drain routing changes apply everywhere while only the target enters
+local draining state; a data failure must block later control application too;
+CDC emission belongs inside the ordered application step. The startup-only
+`recoverCommittedControl` path cannot be reused by a worker because it reacquires
+the proposal mutex. Shutdown must quiesce application before the final flush.
+HTTP assertions use a shared shard map and bounded eventual follower visibility;
+leader `local_committed` completion does not itself promise follower visibility.
+
 1. Real HTTP peers: leader put, overwrite, delete are visible on followers with
    matching committed sequences, without restarting the follower.
 2. Duplicate inbound delivery does not duplicate CDC or control revisions.

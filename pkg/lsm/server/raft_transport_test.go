@@ -31,6 +31,7 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 			DataDir: t.TempDir(), NodeID: node,
 			CommitLog: &lsm.CommitLogOptions{Provider: lsm.CommitLogProviderEtcdRaft, Transport: transport},
 			Raft:      &lsm.RaftOptions{Peers: []string{"node-a", "node-b"}},
+			ShardMap:  []lsm.ShardConfig{{ID: "shared", Leader: "node-a", Replicas: []string{"node-a", "node-b"}}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -51,10 +52,17 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("leader did not apply committed value")
 	}
-	follower, ok := stores[1].Get([]byte("key"))
-	if !ok || string(follower.Value) != "value" || follower.Seq != leader.Seq {
-		t.Fatalf("follower did not apply committed entry: found=%v value=%q seq=%d; leader seq=%d, follower commit=%d",
-			ok, follower.Value, follower.Seq, leader.Seq, stores[1].ClusterStatus().CommitLogRuntime.Index)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		follower, ok := stores[1].Get([]byte("key"))
+		if ok && string(follower.Value) == "value" && follower.Seq == leader.Seq {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("follower did not apply committed entry: found=%v value=%q seq=%d; leader seq=%d, follower commit=%d",
+				ok, follower.Value, follower.Seq, leader.Seq, stores[1].ClusterStatus().CommitLogRuntime.Index)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

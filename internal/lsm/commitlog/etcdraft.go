@@ -58,10 +58,20 @@ const (
 )
 
 func (c *etcdRaftConsensus) RecoveredEntries() []RecoveredEntry {
+	return c.CommittedEntriesAfter(0)
+}
+
+func (c *etcdRaftConsensus) CommittedEntriesAfter(index uint64) []RecoveredEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]RecoveredEntry, 0, len(c.committed))
 	for _, committed := range c.committed {
+		if committed.Control != nil && committed.Control.Commit.Index <= index {
+			continue
+		}
+		if committed.Data != nil && committed.Data.Commit.Index <= index {
+			continue
+		}
 		var entry RecoveredEntry
 		if committed.Control != nil {
 			control := *committed.Control

@@ -69,6 +69,13 @@ type RecoverySource interface {
 	RecoveredEntries() []RecoveredEntry
 }
 
+// CommittedEntrySource returns owned mutations in commit order, strictly after
+// the supplied index. Reading does not acknowledge or discard entries: callers
+// advance their cursor only after successful application.
+type CommittedEntrySource interface {
+	CommittedEntriesAfter(index uint64) []RecoveredEntry
+}
+
 type RuntimeStatus struct {
 	Mode     string
 	Index    uint64
