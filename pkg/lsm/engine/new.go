@@ -13,6 +13,7 @@ import (
 	"lsmengine/internal/lsm/dispatch"
 	"lsmengine/internal/lsm/logging"
 	"lsmengine/internal/lsm/manifest"
+	"lsmengine/internal/lsm/memory"
 	"lsmengine/internal/lsm/sstable"
 	"lsmengine/internal/lsm/tableedit"
 	"lsmengine/internal/lsm/tableset"
@@ -35,6 +36,11 @@ func New(opts Options) (*LSM, error) {
 		return nil, err
 	}
 	autoRepair, missingPolicy := walRepairPolicy(opts)
+	strictRaftReplay := opts.CommitLog != nil && opts.CommitLog.Provider == CommitLogProviderEtcdRaft
+	if strictRaftReplay {
+		// Resynchronization can skip committed writes. Never erase that evidence.
+		autoRepair = false
+	}
 
 	logger := opts.Logger
 	var logCloser io.Closer
@@ -60,6 +66,16 @@ func New(opts Options) (*LSM, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if strictRaftReplay {
+		// Validate before replay can flush a later sequence into the manifest.
+		if err := w.ReplayViews(func(memory.EntryView) error { return nil }); err != nil {
+			_ = w.Close()
+			if logCloser != nil {
+				_ = logCloser.Close()
+			}
+			return nil, fmt.Errorf("validate raft WAL recovery prefix: %w", err)
+		}
 	}
 	sstOpts, flowMetrics := buildSSTableOptions(opts)
 	flusher, err := sstable.NewSSTableWriter(sstOpts)
@@ -168,6 +184,12 @@ func New(opts Options) (*LSM, error) {
 	}
 	if observer, ok := lsm.commitLog.(commitLogIndexObserver); ok {
 		observer.ObserveCommittedIndex(lsm.seq)
+	}
+	if builtin, ok := lsm.commitLog.(*builtinCommitLogConsensus); ok {
+		if err := builtin.recoverEngine(lsm); err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 
 	lsm.bg.Add(1)

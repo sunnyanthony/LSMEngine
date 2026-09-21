@@ -57,6 +57,28 @@ const (
 	etcdRaftSendTimeout    = 2 * time.Second
 )
 
+func (c *etcdRaftConsensus) RecoveredEntries() []RecoveredEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]RecoveredEntry, 0, len(c.committed))
+	for _, committed := range c.committed {
+		var entry RecoveredEntry
+		if committed.Control != nil {
+			control := *committed.Control
+			control.Mutation.Split = append([]byte(nil), control.Mutation.Split...)
+			entry.Control = &control
+		}
+		if committed.Data != nil {
+			data := *committed.Data
+			data.Mutation.Key = append([]byte(nil), data.Mutation.Key...)
+			data.Mutation.Value = append([]byte(nil), data.Mutation.Value...)
+			entry.Data = &data
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	nodeName := strings.TrimSpace(cfg.NodeID)
 	if nodeName == "" {

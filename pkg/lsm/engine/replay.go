@@ -4,6 +4,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 
 	"lsmengine/internal/lsm/bootstrap"
 	"lsmengine/internal/lsm/memory"
@@ -13,6 +14,30 @@ import (
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
 )
+
+// Recovery runs before the dispatcher starts, so full tables flush synchronously.
+func (l *LSM) recoverCommittedData(committed dataCommittedEntry) error {
+	m := committed.Mutation
+	if committed.Seq == 0 || committed.Commit.Index == 0 || committed.Commit.Term == 0 {
+		return fmt.Errorf("invalid recovered committed entry")
+	}
+	if m.Kind != "put" && m.Kind != "delete" {
+		return fmt.Errorf("invalid recovered data mutation %q", m.Kind)
+	}
+	mem := l.activeMem()
+	entry := l.entryBuilder(mem).Build(m.Key, m.Value, m.Kind == "delete", committed.Seq)
+	if err := l.wal.AppendOwned(entry); err != nil {
+		return err
+	}
+	l.applyEntryOwned(mem, entry)
+	l.observeCommittedSeq(entry.Seq)
+	if l.mtLimit > 0 && mem.Size() >= l.mtLimit {
+		if frozen := l.freezeMemtableIfCurrent(mem); frozen != nil {
+			return l.flushMemtableForReplay(frozen)
+		}
+	}
+	return nil
+}
 
 // replayWAL loads entries above the checkpoint sequence into the memtable.
 func (l *LSM) replayWAL(checkpoint uint64) error {
@@ -39,7 +64,7 @@ func (l *LSM) replayWAL(checkpoint uint64) error {
 			}
 			return nil
 		},
-		BumpSeq: l.bumpSeq,
+		BumpSeq: l.observeCommittedSeq,
 	})
 	if err == nil {
 		return nil

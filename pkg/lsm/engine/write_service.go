@@ -4,14 +4,18 @@ package engine
 
 import (
 	"context"
+	"sync"
 
 	memtable "lsmengine/internal/lsm/memtable"
 	"lsmengine/pkg/lsm/bus"
 	"lsmengine/pkg/lsm/errs"
+	"lsmengine/pkg/lsm/types"
 )
 
 type writeService struct {
-	l *LSM
+	l         *LSM
+	commitMu  sync.Mutex
+	commitErr error
 }
 
 func newWriteService(l *LSM) *writeService {
@@ -76,6 +80,14 @@ func (s *writeService) Delete(key []byte) error {
 }
 
 func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
+	if err := s.l.wal.ValidateEntry(types.Entry{Key: key, Value: value}); err != nil {
+		return 0, err
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	if s.commitErr != nil {
+		return 0, s.commitErr
+	}
 	if s.l == nil || s.l.commitLog == nil {
 		return 0, errs.ErrBackpressure
 	}
@@ -85,12 +97,23 @@ func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
 		Value: append([]byte(nil), value...),
 	})
 	if err != nil {
+		s.latchCommitError(err)
 		return 0, err
 	}
-	return s.applyCommittedData(entry)
+	seq, err := s.applyCommittedData(entry)
+	s.latchCommitError(err)
+	return seq, err
 }
 
 func (s *writeService) commitDelete(key []byte) (uint64, error) {
+	if err := s.l.wal.ValidateEntry(types.Entry{Key: key, Tombstone: true}); err != nil {
+		return 0, err
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	if s.commitErr != nil {
+		return 0, s.commitErr
+	}
 	if s.l == nil || s.l.commitLog == nil {
 		return 0, errs.ErrBackpressure
 	}
@@ -99,9 +122,18 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 		Key:  append([]byte(nil), key...),
 	})
 	if err != nil {
+		s.latchCommitError(err)
 		return 0, err
 	}
-	return s.applyCommittedData(entry)
+	seq, err := s.applyCommittedData(entry)
+	s.latchCommitError(err)
+	return seq, err
+}
+
+func (s *writeService) latchCommitError(err error) {
+	if s.l.commitLog.Provider() == CommitLogProviderEtcdRaft {
+		s.commitErr = err
+	}
 }
 
 func (s *writeService) applyCommittedData(entry dataCommittedEntry) (uint64, error) {
