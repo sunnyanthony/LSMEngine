@@ -47,6 +47,15 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	if !stores[0].ClusterStatus().CommitLogRuntime.Leader {
 		t.Fatal("node-a failed to elect")
 	}
+	leader, ok := stores[0].Get([]byte("key"))
+	if !ok {
+		t.Fatal("leader did not apply committed value")
+	}
+	follower, ok := stores[1].Get([]byte("key"))
+	if !ok || string(follower.Value) != "value" || follower.Seq != leader.Seq {
+		t.Fatalf("follower did not apply committed entry: found=%v value=%q seq=%d; leader seq=%d, follower commit=%d",
+			ok, follower.Value, follower.Seq, leader.Seq, stores[1].ClusterStatus().CommitLogRuntime.Index)
+	}
 }
 
 func TestRaftHTTPTransportRejectsRedirectsAndFailures(t *testing.T) {
