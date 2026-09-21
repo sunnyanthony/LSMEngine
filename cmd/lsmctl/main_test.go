@@ -53,3 +53,33 @@ func TestToRaftOptionsIncludesPeers(t *testing.T) {
 		t.Fatalf("expected node-c peer, got %q", got.Peers[2])
 	}
 }
+
+func TestToCommitLogOptionsBuildsRaftHTTPTransport(t *testing.T) {
+	got, err := toCommitLogOptions(
+		serverconfig.CommitLogConfig{Provider: string(lsm.CommitLogProviderEtcdRaft)},
+		serverconfig.RaftConfig{
+			PeerURLs: map[string]string{"node-b": "http://127.0.0.1:9091"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("to commit log options: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected commit log options")
+	}
+	if got.Provider != lsm.CommitLogProviderEtcdRaft {
+		t.Fatalf("expected etcd raft provider, got %q", got.Provider)
+	}
+	if got.Transport == nil {
+		t.Fatalf("expected raft http transport")
+	}
+}
+
+func TestToRaftPeerURLMapUsesStablePeerIDs(t *testing.T) {
+	got := toRaftPeerURLMap(map[string]string{
+		"node-b": "http://127.0.0.1:9091",
+	})
+	if got[lsm.RaftPeerID("node-b")] != "http://127.0.0.1:9091" {
+		t.Fatalf("expected node-b url keyed by stable raft id")
+	}
+}

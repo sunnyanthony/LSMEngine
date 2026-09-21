@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"lsmengine/internal/lsm/raftid"
 )
 
 type raftCommitProposal struct {
@@ -138,6 +138,8 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), etcdRaftApplyTimeout)
 	defer cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.advanceUntilStableLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -356,19 +358,15 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 			return fmt.Errorf("raft step self message: %w", err)
 		}
 	}
+	var encoded []PeerMessage
 	if len(outbound) > 0 {
 		if c.transport == nil {
 			return fmt.Errorf("raft transport is not configured for peer messages")
 		}
-		encoded, err := encodeRaftPeerMessages(outbound)
+		var err error
+		encoded, err = encodeRaftPeerMessages(outbound)
 		if err != nil {
 			return err
-		}
-		sendCtx, cancel := withDefaultTimeout(ctx, etcdRaftSendTimeout)
-		err = c.transport.Send(sendCtx, encoded)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("raft transport send: %w", err)
 		}
 	}
 	for _, entry := range rd.CommittedEntries {
@@ -377,6 +375,18 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		}
 	}
 	c.rawNode.Advance(rd)
+	if len(encoded) > 0 {
+		// Finish Ready before allowing replies to Step the node. Network I/O
+		// cannot hold mu: the peer may synchronously send a reply back here.
+		sendCtx, cancel := withDefaultTimeout(ctx, etcdRaftSendTimeout)
+		c.mu.Unlock()
+		err := c.transport.Send(sendCtx, encoded)
+		c.mu.Lock()
+		cancel()
+		if err != nil {
+			return fmt.Errorf("raft transport send: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -500,13 +510,7 @@ func (p raftCommitProposal) committedEntry(commit Commit) (raftCommittedProposal
 }
 
 func stableRaftNodeID(nodeID string) uint64 {
-	hasher := fnv.New64a()
-	_, _ = hasher.Write([]byte(nodeID))
-	id := hasher.Sum64()
-	if id == 0 {
-		return 1
-	}
-	return id
+	return raftid.StableNodeID(nodeID)
 }
 
 func resolveRaftPeerIDs(nodeName string, peers []string) ([]uint64, error) {

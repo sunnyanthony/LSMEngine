@@ -10,6 +10,11 @@ raft:
   election_timeout: "2s"
   heartbeat_interval: "500ms"
   peers: ["node-a", "node-b", "node-c"]
+  # peer_urls is only required when commitlog.provider is "etcd-raft"
+  # and raft.peers contains more than one node.
+  # peer_urls:
+  #   node-b: "http://127.0.0.1:8081"
+  #   node-c: "http://127.0.0.1:8082"
 shards:
   # shards are ordered by key-range routing; keep non-overlapping ranges.
   - id: "users-a-m"
