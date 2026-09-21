@@ -41,11 +41,13 @@ type RaftMessageTransport = CommitLogPeerTransport
 // CommitLogControlMutation is a control-plane state mutation that must go
 // through the commit-log correctness path.
 type CommitLogControlMutation struct {
-	Kind    string
-	ShardID string
-	Target  string
-	Split   []byte
-	NodeID  string
+	// OperationID preserves request deduplication across committed-entry recovery.
+	OperationID string
+	Kind        string
+	ShardID     string
+	Target      string
+	Split       []byte
+	NodeID      string
 }
 
 // CommitLogDataMutation is a data-plane mutation that must go through the

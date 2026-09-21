@@ -11,6 +11,7 @@ const (
 
 type Config struct {
 	Provider  Provider
+	DataDir   string
 	NodeID    string
 	Peers     []string
 	Transport PeerTransport
@@ -27,11 +28,12 @@ type PeerTransport interface {
 }
 
 type ControlMutation struct {
-	Kind    string
-	ShardID string
-	Target  string
-	Split   []byte
-	NodeID  string
+	OperationID string
+	Kind        string
+	ShardID     string
+	Target      string
+	Split       []byte
+	NodeID      string
 }
 
 type DataMutation struct {
@@ -54,6 +56,17 @@ type DataCommittedEntry struct {
 	Commit   Commit
 	Mutation DataMutation
 	Seq      uint64
+}
+
+// RecoveredEntry contains exactly one committed mutation, in log order.
+type RecoveredEntry struct {
+	Control *ControlCommittedEntry
+	Data    *DataCommittedEntry
+}
+
+// RecoverySource exposes committed history without proposing new mutations.
+type RecoverySource interface {
+	RecoveredEntries() []RecoveredEntry
 }
 
 type RuntimeStatus struct {

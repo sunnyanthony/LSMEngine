@@ -84,3 +84,18 @@ On decode failure:
 
 ## Replay behavior
 - WAL replay rehydrates memtables and flushes to SSTables once the memtable limit is reached.
+- With the built-in `etcd-raft` commit-log provider, startup validates the WAL before
+  replay can flush any tables or advance the manifest checkpoint. A corrupt or
+  missing segment fails startup, even when WAL auto-repair or ignore-missing is
+  configured. Destructive tail repair is disabled in this mode; a later valid
+  sequence does not prove that earlier committed records survived.
+- This is fail-closed corruption handling, not automatic reconstruction of a
+  damaged WAL from Raft. Preserve the data directory for diagnosis and recovery;
+  do not delete WAL segments to bypass a startup error.
+- Retained committed Raft entries beyond the replayed data sequence are applied
+  synchronously before serving requests. This recovers the commit-before-apply
+  crash window, including when the recovery requires multiple memtable flushes.
+- Control recovery uses a persisted applied commit index and operation identity.
+  The replacement control checkpoint is synced before rename, then its directory
+  and ancestors are synced before success is returned. Ambiguous Raft commit or
+  apply failures stop subsequent writes on that path until the engine is reopened.

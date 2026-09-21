@@ -61,10 +61,8 @@ func (w *WAL) appendAsync(entry types.Entry) error {
 	}
 }
 
-func (w *WAL) appendLocked(entry types.Entry) error {
-	if w.f == nil {
-		return errs.ErrWALClosed
-	}
+// ValidateEntry checks immutable record constraints without writing to the WAL.
+func (w *WAL) ValidateEntry(entry types.Entry) error {
 	if len(entry.Key) == 0 {
 		return errs.ErrWALEmptyKey
 	}
@@ -73,12 +71,23 @@ func (w *WAL) appendLocked(entry types.Entry) error {
 	}
 
 	rb := codec.NewRecordBufferOwned(entry)
-	if uint32(rb.Total) > w.blockSize {
+	if uint64(rb.Total) > uint64(w.blockSize) {
 		return fmt.Errorf("%w (record %d > block %d)", errs.ErrWALRecordTooLarge, rb.Total, w.blockSize)
 	}
 	if w.maxRecord > 0 && uint64(rb.Total) > w.maxRecord {
 		return fmt.Errorf("%w (%d > %d)", errs.ErrWALRecordTooLarge, rb.Total, w.maxRecord)
 	}
+	return nil
+}
+
+func (w *WAL) appendLocked(entry types.Entry) error {
+	if w.f == nil {
+		return errs.ErrWALClosed
+	}
+	if err := w.ValidateEntry(entry); err != nil {
+		return err
+	}
+	rb := codec.NewRecordBufferOwned(entry)
 	// flush block if needed
 	if w.blockLen > 0 && w.blockLen+rb.Total > int(w.blockSize) {
 		if err := w.flushBlock(); err != nil {

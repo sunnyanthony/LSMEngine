@@ -85,16 +85,17 @@ type appliedOperationState struct {
 }
 
 type controlPlaneState struct {
-	Version     int                     `json:"version"`
-	NodeID      string                  `json:"node_id"`
-	ClusterID   string                  `json:"cluster_id"`
-	StorageMode StorageMode             `json:"storage_mode"`
-	Raft        RaftOptions             `json:"raft"`
-	Draining    bool                    `json:"draining"`
-	Revision    uint64                  `json:"revision"`
-	Order       []string                `json:"order"`
-	Shards      []ShardStatus           `json:"shards"`
-	AppliedOps  []appliedOperationState `json:"applied_ops,omitempty"`
+	CommitLogAppliedIndex uint64                  `json:"commit_log_applied_index,omitempty"`
+	Version               int                     `json:"version"`
+	NodeID                string                  `json:"node_id"`
+	ClusterID             string                  `json:"cluster_id"`
+	StorageMode           StorageMode             `json:"storage_mode"`
+	Raft                  RaftOptions             `json:"raft"`
+	Draining              bool                    `json:"draining"`
+	Revision              uint64                  `json:"revision"`
+	Order                 []string                `json:"order"`
+	Shards                []ShardStatus           `json:"shards"`
+	AppliedOps            []appliedOperationState `json:"applied_ops,omitempty"`
 }
 
 type shardRoute struct {
@@ -104,18 +105,22 @@ type shardRoute struct {
 }
 
 type controlPlane struct {
-	mu           sync.RWMutex
-	nodeID       string
-	clusterID    string
-	storageMode  StorageMode
-	raft         RaftOptions
-	draining     bool
-	revision     uint64
-	order        []string
-	shards       map[string]ShardStatus
-	routes       []shardRoute
-	appliedOps   map[string]appliedOperationState
-	appliedOrder []string
+	commitMu              sync.Mutex
+	commitErr             error
+	commitLogAppliedIndex uint64
+	recoveringEntry       *controlCommittedEntry
+	mu                    sync.RWMutex
+	nodeID                string
+	clusterID             string
+	storageMode           StorageMode
+	raft                  RaftOptions
+	draining              bool
+	revision              uint64
+	order                 []string
+	shards                map[string]ShardStatus
+	routes                []shardRoute
+	appliedOps            map[string]appliedOperationState
+	appliedOrder          []string
 
 	fs        iofs.FS
 	statePath string
@@ -125,6 +130,11 @@ type controlPlane struct {
 const maxAppliedControlOps = 256
 
 var errControlNoop = errors.New("control noop")
+
+type persistedControlRejection struct{ cause error }
+
+func (e *persistedControlRejection) Error() string { return e.cause.Error() }
+func (e *persistedControlRejection) Unwrap() error { return e.cause }
 
 func newControlPlane(opts Options) (*controlPlane, error) {
 	nodeID := strings.TrimSpace(opts.NodeID)
@@ -573,6 +583,11 @@ func (c *controlPlane) applyControlMutation(
 	if c == nil {
 		return errs.ErrShardNotFound
 	}
+	c.commitMu.Lock()
+	defer c.commitMu.Unlock()
+	if c.commitErr != nil {
+		return c.commitErr
+	}
 	if c.consensus == nil {
 		return fmt.Errorf("commit log consensus unavailable")
 	}
@@ -580,11 +595,24 @@ func (c *controlPlane) applyControlMutation(
 	if err != nil || applied {
 		return err
 	}
-	entry, err := c.consensus.CommitControl(context.Background(), mutation)
+	var entry controlCommittedEntry
+	mutation.OperationID = strings.TrimSpace(opts.OperationID)
+	if c.recoveringEntry != nil {
+		entry = *c.recoveringEntry
+	} else {
+		entry, err = c.consensus.CommitControl(context.Background(), mutation)
+	}
 	if err != nil {
+		if c.consensus.Provider() == CommitLogProviderEtcdRaft {
+			c.commitErr = err
+		}
 		return err
 	}
 	err = c.applyCommittedControlMutation(entry, opts, fingerprint, mutate)
+	var rejected *persistedControlRejection
+	if err != nil && c.consensus.Provider() == CommitLogProviderEtcdRaft && !errors.Is(err, errControlNoop) && !errors.As(err, &rejected) {
+		c.commitErr = err
+	}
 	if errors.Is(err, errControlNoop) {
 		return nil
 	}
@@ -611,10 +639,21 @@ func (c *controlPlane) applyCommittedControlMutation(
 	}
 	previous := c.snapshotStateLocked()
 	if err := mutate(entry.Mutation); err != nil {
-		_ = c.applyState(previous)
-		return err
+		if restoreErr := c.applyState(previous); restoreErr != nil {
+			return restoreErr
+		}
+		if entry.Commit.Index > c.commitLogAppliedIndex {
+			c.commitLogAppliedIndex = entry.Commit.Index
+		}
+		if saveErr := c.saveLockedWithRollback(previous); saveErr != nil {
+			return saveErr
+		}
+		return &persistedControlRejection{cause: err}
 	}
 	c.noteOperationAppliedLocked(opts, fingerprint)
+	if entry.Commit.Index > c.commitLogAppliedIndex {
+		c.commitLogAppliedIndex = entry.Commit.Index
+	}
 	return c.saveLockedWithRollback(previous)
 }
 
@@ -693,9 +732,46 @@ func (c *controlPlane) saveLocked() error {
 	if err := c.fs.WriteFile(tmpPath, data, 0o644); err != nil {
 		return err
 	}
+	// Persist the replacement contents before publishing its name.
+	f, err := c.fs.OpenFile(tmpPath, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	if err := c.fs.Rename(tmpPath, c.statePath); err != nil {
 		_ = c.fs.Remove(tmpPath)
 		return err
+	}
+	// MkdirAll may have created ancestors. Sync each link, including on retry.
+	dir, err := filepath.Abs(filepath.Dir(c.statePath))
+	if err != nil {
+		return err
+	}
+	for {
+		f, err := c.fs.Open(dir)
+		if err != nil {
+			return err
+		}
+		syncErr := f.Sync()
+		closeErr := f.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return nil
 }
@@ -784,20 +860,22 @@ func (c *controlPlane) snapshotStateLocked() controlPlaneState {
 		shards = append(shards, shard)
 	}
 	return controlPlaneState{
-		Version:     1,
-		NodeID:      c.nodeID,
-		ClusterID:   c.clusterID,
-		StorageMode: c.storageMode,
-		Raft:        c.raft,
-		Draining:    c.draining,
-		Revision:    c.revision,
-		Order:       append([]string(nil), c.order...),
-		Shards:      shards,
-		AppliedOps:  c.appliedOpsSnapshotLocked(),
+		CommitLogAppliedIndex: c.commitLogAppliedIndex,
+		Version:               1,
+		NodeID:                c.nodeID,
+		ClusterID:             c.clusterID,
+		StorageMode:           c.storageMode,
+		Raft:                  c.raft,
+		Draining:              c.draining,
+		Revision:              c.revision,
+		Order:                 append([]string(nil), c.order...),
+		Shards:                shards,
+		AppliedOps:            c.appliedOpsSnapshotLocked(),
 	}
 }
 
 func (c *controlPlane) applyState(state controlPlaneState) error {
+	c.commitLogAppliedIndex = state.CommitLogAppliedIndex
 	c.draining = state.Draining
 	c.revision = state.Revision
 	c.order = append([]string(nil), state.Order...)

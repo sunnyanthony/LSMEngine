@@ -2,9 +2,55 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	internalcommitlog "lsmengine/internal/lsm/commitlog"
 )
+
+func (c *builtinCommitLogConsensus) recoverEngine(l *LSM) error {
+	source, ok := c.inner.(internalcommitlog.RecoverySource)
+	if !ok {
+		return nil
+	}
+	for _, recovered := range source.RecoveredEntries() {
+		if recovered.Data != nil && recovered.Data.Seq > l.seq {
+			if err := l.recoverCommittedData(fromInternalDataCommittedEntry(*recovered.Data)); err != nil {
+				return fmt.Errorf("recover committed data: %w", err)
+			}
+		}
+		if recovered.Control != nil {
+			entry := fromInternalControlCommittedEntry(*recovered.Control)
+			if err := l.control.recoverCommittedControl(entry); err != nil {
+				var rejected *persistedControlRejection
+				if !errors.As(err, &rejected) {
+					return fmt.Errorf("recover committed control: %w", err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Startup owns the control plane exclusively until recovery completes.
+func (c *controlPlane) recoverCommittedControl(entry controlCommittedEntry) error {
+	if entry.Commit.Index <= c.commitLogAppliedIndex {
+		return nil
+	}
+	c.recoveringEntry = &entry
+	defer func() { c.recoveringEntry = nil }()
+	opts := ControlWriteOptions{OperationID: entry.Mutation.OperationID}
+	switch m := entry.Mutation; m.Kind {
+	case "transfer-leader":
+		return c.transferLeaderWithOptions(m.ShardID, m.Target, opts)
+	case "split":
+		return c.triggerSplitWithOptions(m.ShardID, m.Split, opts)
+	case "prepare-drain":
+		return c.prepareDrainWithOptions(m.NodeID, opts)
+	default:
+		return fmt.Errorf("unknown committed control mutation %q", m.Kind)
+	}
+}
 
 type builtinCommitLogConsensus struct {
 	inner internalcommitlog.Consensus
@@ -56,6 +102,7 @@ func (c *builtinCommitLogConsensus) ObserveCommittedIndex(index uint64) {
 func newBuiltinCommitLogConsensus(opts Options, provider CommitLogProvider) (commitLogConsensus, error) {
 	cfg := internalcommitlog.Config{
 		Provider: internalcommitlog.Provider(provider),
+		DataDir:  opts.DataDir,
 		NodeID:   opts.NodeID,
 	}
 	if opts.Raft != nil {
@@ -90,11 +137,12 @@ func newEtcdRaftCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 
 func toInternalControlMutation(m CommitLogControlMutation) internalcommitlog.ControlMutation {
 	return internalcommitlog.ControlMutation{
-		Kind:    m.Kind,
-		ShardID: m.ShardID,
-		Target:  m.Target,
-		Split:   append([]byte(nil), m.Split...),
-		NodeID:  m.NodeID,
+		OperationID: m.OperationID,
+		Kind:        m.Kind,
+		ShardID:     m.ShardID,
+		Target:      m.Target,
+		Split:       append([]byte(nil), m.Split...),
+		NodeID:      m.NodeID,
 	}
 }
 
@@ -185,11 +233,12 @@ func copyCommitLogPeerMessages(messages []CommitLogPeerMessage) []CommitLogPeerM
 
 func fromInternalControlMutation(m internalcommitlog.ControlMutation) controlMutation {
 	return controlMutation{
-		Kind:    m.Kind,
-		ShardID: m.ShardID,
-		Target:  m.Target,
-		Split:   append([]byte(nil), m.Split...),
-		NodeID:  m.NodeID,
+		OperationID: m.OperationID,
+		Kind:        m.Kind,
+		ShardID:     m.ShardID,
+		Target:      m.Target,
+		Split:       append([]byte(nil), m.Split...),
+		NodeID:      m.NodeID,
 	}
 }
 
