@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,9 +45,12 @@ func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, er
 	if client == nil {
 		client = &http.Client{Timeout: 3 * time.Second}
 	}
+	// Keep caller-owned client settings intact while forbidding POST redirects.
+	ownedClient := *client
+	ownedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &RaftHTTPTransport{
 		peerURLs: peerURLs,
-		client:   client,
+		client:   &ownedClient,
 	}, nil
 }
 
@@ -68,12 +72,20 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.CommitLogPe
 		}
 		grouped[message.To] = append(grouped[message.To], message)
 	}
+	// A stalled destination must not consume another peer's delivery window.
+	results := make(chan error, len(grouped))
 	for peerID, peerMessages := range grouped {
-		if err := t.sendToPeer(ctx, peerID, peerMessages); err != nil {
-			return err
+		go func(id uint64, batch []lsm.CommitLogPeerMessage) {
+			results <- t.sendToPeer(ctx, id, batch)
+		}(peerID, peerMessages)
+	}
+	var failures []error
+	for range grouped {
+		if err := <-results; err != nil {
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (t *RaftHTTPTransport) sendToPeer(
@@ -95,7 +107,7 @@ func (t *RaftHTTPTransport) sendToPeer(
 		return fmt.Errorf("post raft peer messages: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return fmt.Errorf("post raft peer messages to %d failed: http %d: %s", peerID, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
