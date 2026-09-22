@@ -48,7 +48,9 @@ func (s *writeService) Put(key []byte, value []byte) error {
 		s.l.notifyWriteEvent("put", key, seq, "failed", err)
 		return err
 	}
-	s.l.recordCDCEvent("put", key, value, seq, false)
+	if s.l.committedApply == nil {
+		s.l.recordCDCEvent("put", key, value, seq, false)
+	}
 	s.l.notifyWriteEvent("put", key, seq, "committed", nil)
 	return nil
 }
@@ -74,7 +76,9 @@ func (s *writeService) Delete(key []byte) error {
 		s.l.notifyWriteEvent("delete", key, seq, "failed", err)
 		return err
 	}
-	s.l.recordCDCEvent("delete", key, nil, seq, true)
+	if s.l.committedApply == nil {
+		s.l.recordCDCEvent("delete", key, nil, seq, true)
+	}
 	s.l.notifyWriteEvent("delete", key, seq, "committed", nil)
 	return nil
 }
@@ -88,6 +92,11 @@ func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
 	if s.commitErr != nil {
 		return 0, s.commitErr
 	}
+	if s.l.committedApply != nil {
+		if err := s.l.committedApply.status(); err != nil {
+			return 0, err
+		}
+	}
 	if s.l == nil || s.l.commitLog == nil {
 		return 0, errs.ErrBackpressure
 	}
@@ -100,7 +109,7 @@ func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
 		s.latchCommitError(err)
 		return 0, err
 	}
-	seq, err := s.applyCommittedData(entry)
+	seq, err := s.applyProposedData(entry)
 	s.latchCommitError(err)
 	return seq, err
 }
@@ -114,6 +123,11 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 	if s.commitErr != nil {
 		return 0, s.commitErr
 	}
+	if s.l.committedApply != nil {
+		if err := s.l.committedApply.status(); err != nil {
+			return 0, err
+		}
+	}
 	if s.l == nil || s.l.commitLog == nil {
 		return 0, errs.ErrBackpressure
 	}
@@ -125,7 +139,7 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 		s.latchCommitError(err)
 		return 0, err
 	}
-	seq, err := s.applyCommittedData(entry)
+	seq, err := s.applyProposedData(entry)
 	s.latchCommitError(err)
 	return seq, err
 }
@@ -134,6 +148,13 @@ func (s *writeService) latchCommitError(err error) {
 	if s.l.commitLog.Provider() == CommitLogProviderEtcdRaft {
 		s.commitErr = err
 	}
+}
+
+func (s *writeService) applyProposedData(entry dataCommittedEntry) (uint64, error) {
+	if s.l.committedApply != nil {
+		return entry.Seq, s.l.committedApply.drain(entry.Commit.Index)
+	}
+	return s.applyCommittedData(entry)
 }
 
 func (s *writeService) applyCommittedData(entry dataCommittedEntry) (uint64, error) {

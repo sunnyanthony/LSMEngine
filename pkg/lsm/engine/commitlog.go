@@ -125,12 +125,13 @@ func newEtcdRaftCommitLogConsensus(opts Options) (commitLogConsensus, error) {
 
 func toInternalControlMutation(m CommitLogControlMutation) internalcommitlog.ControlMutation {
 	return internalcommitlog.ControlMutation{
-		OperationID: m.OperationID,
-		Kind:        m.Kind,
-		ShardID:     m.ShardID,
-		Target:      m.Target,
-		Split:       append([]byte(nil), m.Split...),
-		NodeID:      m.NodeID,
+		ExpectedRevision: copyRevision(m.ExpectedRevision),
+		OperationID:      m.OperationID,
+		Kind:             m.Kind,
+		ShardID:          m.ShardID,
+		Target:           m.Target,
+		Split:            append([]byte(nil), m.Split...),
+		NodeID:           m.NodeID,
 	}
 }
 
@@ -221,13 +222,22 @@ func copyCommitLogPeerMessages(messages []CommitLogPeerMessage) []CommitLogPeerM
 
 func fromInternalControlMutation(m internalcommitlog.ControlMutation) controlMutation {
 	return controlMutation{
-		OperationID: m.OperationID,
-		Kind:        m.Kind,
-		ShardID:     m.ShardID,
-		Target:      m.Target,
-		Split:       append([]byte(nil), m.Split...),
-		NodeID:      m.NodeID,
+		ExpectedRevision: copyRevision(m.ExpectedRevision),
+		OperationID:      m.OperationID,
+		Kind:             m.Kind,
+		ShardID:          m.ShardID,
+		Target:           m.Target,
+		Split:            append([]byte(nil), m.Split...),
+		NodeID:           m.NodeID,
 	}
+}
+
+func copyRevision(in *uint64) *uint64 {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func fromInternalDataMutation(m internalcommitlog.DataMutation) dataMutation {

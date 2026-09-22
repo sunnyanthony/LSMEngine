@@ -28,12 +28,13 @@ type PeerTransport interface {
 }
 
 type ControlMutation struct {
-	OperationID string
-	Kind        string
-	ShardID     string
-	Target      string
-	Split       []byte
-	NodeID      string
+	ExpectedRevision *uint64
+	OperationID      string
+	Kind             string
+	ShardID          string
+	Target           string
+	Split            []byte
+	NodeID           string
 }
 
 type DataMutation struct {

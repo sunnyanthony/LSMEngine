@@ -64,6 +64,55 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if err := stores[0].Put([]byte("key"), []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores[0].Delete([]byte("key")); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		leaderEvents, err := stores[0].ReadCDCEvents("shared", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		followerEvents, err := stores[1].ReadCDCEvents("shared", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(leaderEvents.Events) == 3 && len(followerEvents.Events) == 3 {
+			for i, event := range followerEvents.Events {
+				if event.Offset != leaderEvents.Events[i].Offset || event.Operation != leaderEvents.Events[i].Operation || string(event.Value) != string(leaderEvents.Events[i].Value) {
+					t.Fatal("CDC order/sequence diverged")
+				}
+			}
+			if !followerEvents.Events[2].Tombstone || followerEvents.Events[2].Offset <= leader.Seq {
+				t.Fatal("delete was not committed after put")
+			}
+			if _, ok := stores[1].Get([]byte("key")); ok {
+				t.Fatal("follower delete not applied")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("CDC not materialized exactly once: leader=%d follower=%d", len(leaderEvents.Events), len(followerEvents.Events))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	revision := uint64(0)
+	if err := stores[0].TransferLeaderWithOptions("shared", "node-b", lsm.ControlWriteOptions{OperationID: "transfer", ExpectedRevision: &revision}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for stores[1].ClusterStatus().Revision != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("follower control entry not applied")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if stores[1].Shards()[0].Leader != "node-b" {
+		t.Fatal("follower routing differs")
+	}
 }
 
 func TestRaftHTTPTransportRejectsRedirectsAndFailures(t *testing.T) {

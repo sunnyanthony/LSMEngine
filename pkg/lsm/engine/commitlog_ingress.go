@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"lsmengine/pkg/lsm/errs"
 )
 
 // HandlePeerMessages routes inbound commit-log peer messages to the active
@@ -14,5 +15,19 @@ func (l *LSM) HandlePeerMessages(ctx context.Context, messages []CommitLogPeerMe
 	if len(messages) == 0 {
 		return nil
 	}
-	return l.commitLog.HandlePeerMessages(ctx, copyCommitLogPeerMessages(messages))
+	l.peerMu.Lock()
+	if l.isClosing() {
+		l.peerMu.Unlock()
+		return errs.ErrClosed
+	}
+	l.peerWG.Add(1)
+	l.peerMu.Unlock()
+	defer l.peerWG.Done()
+	err := l.commitLog.HandlePeerMessages(ctx, copyCommitLogPeerMessages(messages))
+	if l.committedApply != nil {
+		if applyErr := l.committedApply.drain(0); applyErr != nil {
+			return applyErr
+		}
+	}
+	return err
 }

@@ -75,7 +75,7 @@ func (c *etcdRaftConsensus) CommittedEntriesAfter(index uint64) []RecoveredEntry
 		var entry RecoveredEntry
 		if committed.Control != nil {
 			control := *committed.Control
-			control.Mutation.Split = append([]byte(nil), control.Mutation.Split...)
+			control.Mutation = cloneControlMutation(control.Mutation)
 			entry.Control = &control
 		}
 		if committed.Data != nil {
@@ -575,6 +575,10 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 
 func cloneControlMutation(in ControlMutation) ControlMutation {
 	out := in
+	if in.ExpectedRevision != nil {
+		revision := *in.ExpectedRevision
+		out.ExpectedRevision = &revision
+	}
 	out.Split = append([]byte(nil), in.Split...)
 	return out
 }

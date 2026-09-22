@@ -9,6 +9,27 @@ HTTP peer delivery can complete a real two-node election and data commit. The
 provider retains committed entries, but a running follower does not apply them
 to its LSM. Restart recovery is not a substitute for live application.
 
+## Current Implementation
+
+The draft now passes the real-peer regression using a shared shard map. The
+built-in Raft provider exposes owned committed entries after a cursor. Local
+proposal completion and inbound handling both drain this source under one engine
+application mutex, after provider/network processing returns. No background apply
+worker or provider-held application callback is introduced. Local/custom providers
+without that source retain their existing proposal-returned-entry path.
+
+Data WAL/memtable application and node-local CDC emission happen once in this
+ordered path. Control mutation execution is separate from proposal admission;
+expected revisions are carried in committed mutations, and deterministic
+rejections are checkpointed before stream progress advances. An operational apply
+failure stops both data and control application until reopening. Shutdown closes
+ingress admission, waits for admitted ingress, and crosses an application barrier
+before its final flush. Retained history and rejected outcomes are not yet bounded
+by snapshots, so this remains a foundation rather than a production memory budget.
+
+Full independent implementation review is pending; the earlier initial review
+and partial-refactor review do not constitute merge clearance.
+
 ## Required Invariants
 
 - One ordered committed-entry apply path must serve local proposals and inbound

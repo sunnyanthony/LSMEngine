@@ -190,6 +190,7 @@ func New(opts Options) (*LSM, error) {
 			cancel()
 			return nil, err
 		}
+		lsm.initCommittedApply(builtin)
 	}
 
 	lsm.bg.Add(1)

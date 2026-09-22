@@ -22,7 +22,7 @@ func (c *controlPlane) applyCommittedControlFromLog(entry controlCommittedEntry)
 	default:
 		return fmt.Errorf("unknown committed control mutation %q", m.Kind)
 	}
-	err := c.applyCommittedControlMutation(entry, ControlWriteOptions{OperationID: m.OperationID}, fingerprint, c.applyControlPayloadLocked)
+	err := c.applyCommittedControlMutation(entry, ControlWriteOptions{OperationID: m.OperationID, ExpectedRevision: m.ExpectedRevision}, fingerprint, c.applyControlPayloadLocked)
 	if errors.Is(err, errControlNoop) {
 		return nil
 	}

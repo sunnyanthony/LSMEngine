@@ -105,6 +105,8 @@ type shardRoute struct {
 }
 
 type controlPlane struct {
+	applyFromLog          func(controlCommittedEntry) error
+	beforeProposal        func() error
 	commitMu              sync.Mutex
 	commitErr             error
 	commitLogAppliedIndex uint64
@@ -501,6 +503,11 @@ func (c *controlPlane) applyControlMutation(
 	if c.commitErr != nil {
 		return c.commitErr
 	}
+	if c.beforeProposal != nil {
+		if err := c.beforeProposal(); err != nil {
+			return err
+		}
+	}
 	if c.consensus == nil {
 		return fmt.Errorf("commit log consensus unavailable")
 	}
@@ -509,6 +516,7 @@ func (c *controlPlane) applyControlMutation(
 		return err
 	}
 	mutation.OperationID = strings.TrimSpace(opts.OperationID)
+	mutation.ExpectedRevision = copyRevision(opts.ExpectedRevision)
 	entry, err := c.consensus.CommitControl(context.Background(), mutation)
 	if err != nil {
 		if c.consensus.Provider() == CommitLogProviderEtcdRaft {
@@ -516,7 +524,11 @@ func (c *controlPlane) applyControlMutation(
 		}
 		return err
 	}
-	err = c.applyCommittedControlMutation(entry, opts, fingerprint, mutate)
+	if c.applyFromLog != nil {
+		err = c.applyFromLog(entry)
+	} else {
+		err = c.applyCommittedControlMutation(entry, opts, fingerprint, mutate)
+	}
 	var rejected *persistedControlRejection
 	if err != nil && c.consensus.Provider() == CommitLogProviderEtcdRaft && !errors.Is(err, errControlNoop) && !errors.As(err, &rejected) {
 		c.commitErr = err
@@ -540,7 +552,14 @@ func (c *controlPlane) applyCommittedControlMutation(
 	defer c.mu.Unlock()
 	appliedLocked, err := c.checkOperationPreconditionsLocked(opts, fingerprint)
 	if err != nil {
-		return err
+		previous := c.snapshotStateLocked()
+		if entry.Commit.Index > c.commitLogAppliedIndex {
+			c.commitLogAppliedIndex = entry.Commit.Index
+		}
+		if saveErr := c.saveLockedWithRollback(previous); saveErr != nil {
+			return saveErr
+		}
+		return &persistedControlRejection{cause: err}
 	}
 	if appliedLocked {
 		previous := c.snapshotStateLocked()
