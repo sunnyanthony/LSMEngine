@@ -1,7 +1,9 @@
 package commitlog
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,10 +16,12 @@ import (
 )
 
 type raftCommitProposal struct {
-	ID      uint64           `json:"id"`
-	Kind    string           `json:"kind"`
-	Control *ControlMutation `json:"control,omitempty"`
-	Data    *DataMutation    `json:"data,omitempty"`
+	Proposer  uint64           `json:"proposer,omitempty"`
+	RequestID string           `json:"request_id,omitempty"`
+	ID        uint64           `json:"id"`
+	Kind      string           `json:"kind"`
+	Control   *ControlMutation `json:"control,omitempty"`
+	Data      *DataMutation    `json:"data,omitempty"`
 }
 
 type raftCommittedProposal struct {
@@ -28,6 +32,7 @@ type raftCommittedProposal struct {
 }
 
 type pendingRaftProposal struct {
+	payload []byte
 	done    bool
 	control *ControlCommittedEntry
 	data    *DataCommittedEntry
@@ -269,12 +274,18 @@ func (c *etcdRaftConsensus) commitMutation(
 
 	c.proposalSeq++
 	proposal.ID = c.proposalSeq
+	proposal.Proposer = c.nodeID
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("raft proposal identity: %w", err)
+	}
+	proposal.RequestID = fmt.Sprintf("%x", nonce[:])
 	payload, err := json.Marshal(proposal)
 	if err != nil {
 		return nil, fmt.Errorf("marshal raft proposal: %w", err)
 	}
 
-	pending := &pendingRaftProposal{}
+	pending := &pendingRaftProposal{payload: append([]byte(nil), payload...)}
 	c.pending[proposal.ID] = pending
 	if err := c.rawNode.Propose(payload); err != nil {
 		delete(c.pending, proposal.ID)
@@ -462,7 +473,10 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			return err
 		}
 		c.committed = append(c.committed, committed)
-		if pending, ok := c.pending[proposal.ID]; ok {
+		// A numeric counter is only a local lookup key, never global identity.
+		// Match the complete proposed envelope, including node and random request
+		// identity, before waking a waiter across leadership changes/restarts.
+		if pending, ok := c.pending[proposal.ID]; ok && bytes.Equal(pending.payload, entry.Data) {
 			pending.control = committed.Control
 			pending.data = committed.Data
 			pending.done = true

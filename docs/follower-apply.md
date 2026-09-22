@@ -23,9 +23,14 @@ ordered path. Control mutation execution is separate from proposal admission;
 expected revisions are carried in committed mutations, and deterministic
 rejections are checkpointed before stream progress advances. An operational apply
 failure stops both data and control application until reopening. Shutdown closes
-ingress admission, waits for admitted ingress, and crosses an application barrier
+proposal/ingress admission, waits for admitted operations, and crosses an application barrier
 before its final flush. Retained history and rejected outcomes are not yet bounded
 by snapshots, so this remains a foundation rather than a production memory budget.
+
+Proposal envelopes carry a node identity and random per-request identity. A local
+pending waiter matches the complete proposed envelope, not a node-local numeric
+counter, so stale entries from another node or process incarnation cannot
+acknowledge an unrelated local request.
 
 Full independent implementation review is pending; the earlier initial review
 and partial-refactor review do not constitute merge clearance.

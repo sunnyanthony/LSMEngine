@@ -89,6 +89,11 @@ func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
 	}
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
+	finish, admitErr := s.l.beginCommitLogOperation()
+	if admitErr != nil {
+		return 0, admitErr
+	}
+	defer finish()
 	if s.commitErr != nil {
 		return 0, s.commitErr
 	}
@@ -120,6 +125,11 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 	}
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
+	finish, admitErr := s.l.beginCommitLogOperation()
+	if admitErr != nil {
+		return 0, admitErr
+	}
+	defer finish()
 	if s.commitErr != nil {
 		return 0, s.commitErr
 	}

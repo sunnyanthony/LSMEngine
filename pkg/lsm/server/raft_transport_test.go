@@ -6,11 +6,28 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"lsmengine/pkg/lsm"
 )
+
+type recordedHTTPPeerTransport struct {
+	*RaftHTTPTransport
+	mu       sync.Mutex
+	messages []lsm.CommitLogPeerMessage
+}
+
+func (t *recordedHTTPPeerTransport) Send(ctx context.Context, messages []lsm.CommitLogPeerMessage) error {
+	t.mu.Lock()
+	for _, message := range messages {
+		message.Payload = append([]byte(nil), message.Payload...)
+		t.messages = append(t.messages, message)
+	}
+	t.mu.Unlock()
+	return t.RaftHTTPTransport.Send(ctx, messages)
+}
 
 func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	a := httptest.NewUnstartedServer(nil)
@@ -22,14 +39,17 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		lsm.RaftPeerID("node-b"): "http://" + b.Listener.Addr().String(),
 	}
 	stores := make([]*lsm.LSM, 0, 2)
+	var transports []*recordedHTTPPeerTransport
 	for i, node := range []string{"node-a", "node-b"} {
 		transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{PeerURLs: urls})
 		if err != nil {
 			t.Fatal(err)
 		}
+		recorded := &recordedHTTPPeerTransport{RaftHTTPTransport: transport}
+		transports = append(transports, recorded)
 		store, err := lsm.New(lsm.Options{
 			DataDir: t.TempDir(), NodeID: node,
-			CommitLog: &lsm.CommitLogOptions{Provider: lsm.CommitLogProviderEtcdRaft, Transport: transport},
+			CommitLog: &lsm.CommitLogOptions{Provider: lsm.CommitLogProviderEtcdRaft, Transport: recorded},
 			Raft:      &lsm.RaftOptions{Peers: []string{"node-a", "node-b"}},
 			ShardMap:  []lsm.ShardConfig{{ID: "shared", Leader: "node-a", Replicas: []string{"node-a", "node-b"}}},
 		})
@@ -112,6 +132,16 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	}
 	if stores[1].Shards()[0].Leader != "node-b" {
 		t.Fatal("follower routing differs")
+	}
+	transports[0].mu.Lock()
+	duplicates := append([]lsm.CommitLogPeerMessage(nil), transports[0].messages...)
+	transports[0].mu.Unlock()
+	if err := stores[1].HandlePeerMessages(context.Background(), duplicates); err != nil {
+		t.Fatal(err)
+	}
+	events, err := stores[1].ReadCDCEvents("shared", 0, 10)
+	if err != nil || len(events.Events) != 3 || stores[1].ClusterStatus().Revision != 1 {
+		t.Fatal("duplicate inbound delivery repeated application")
 	}
 }
 

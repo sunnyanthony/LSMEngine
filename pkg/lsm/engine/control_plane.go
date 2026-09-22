@@ -107,6 +107,7 @@ type shardRoute struct {
 type controlPlane struct {
 	applyFromLog          func(controlCommittedEntry) error
 	beforeProposal        func() error
+	admitProposal         func() (func(), error)
 	commitMu              sync.Mutex
 	commitErr             error
 	commitLogAppliedIndex uint64
@@ -502,6 +503,13 @@ func (c *controlPlane) applyControlMutation(
 	defer c.commitMu.Unlock()
 	if c.commitErr != nil {
 		return c.commitErr
+	}
+	if c.admitProposal != nil {
+		finish, err := c.admitProposal()
+		if err != nil {
+			return err
+		}
+		defer finish()
 	}
 	if c.beforeProposal != nil {
 		if err := c.beforeProposal(); err != nil {
