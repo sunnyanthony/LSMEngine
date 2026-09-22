@@ -173,6 +173,7 @@ type LSM struct {
 	commitLog            commitLogConsensus
 	committedApply       *committedApply
 	peerMu               sync.Mutex
+	peerClosing          bool
 	peerWG               sync.WaitGroup
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
@@ -212,6 +213,7 @@ func (l *LSM) Close() error {
 	l.closeOnce.Do(func() {
 		l.closing.Store(true)
 		l.peerMu.Lock()
+		l.peerClosing = true
 		l.peerMu.Unlock()
 		l.peerWG.Wait()
 		if l.committedApply != nil {

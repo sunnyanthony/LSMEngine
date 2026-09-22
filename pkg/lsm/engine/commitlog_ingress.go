@@ -16,7 +16,7 @@ func (l *LSM) HandlePeerMessages(ctx context.Context, messages []CommitLogPeerMe
 		return nil
 	}
 	l.peerMu.Lock()
-	if l.isClosing() {
+	if l.peerClosing || l.isClosing() {
 		l.peerMu.Unlock()
 		return errs.ErrClosed
 	}

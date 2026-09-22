@@ -16,6 +16,7 @@ type committedApply struct {
 	source  internalcommitlog.CommittedEntrySource
 	cursor  uint64
 	failure error
+	stopped bool
 	results map[uint64]error
 }
 
@@ -42,7 +43,7 @@ func (l *LSM) initCommittedApply(builtin *builtinCommitLogConsensus) {
 func (a *committedApply) status() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.l.isClosing() {
+	if a.stopped || a.l.isClosing() {
 		return errs.ErrClosed
 	}
 	return a.failure
@@ -51,7 +52,7 @@ func (a *committedApply) status() error {
 func (a *committedApply) drain(target uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.l.isClosing() {
+	if a.stopped || a.l.isClosing() {
 		return errs.ErrClosed
 	}
 	if a.failure != nil {
@@ -95,5 +96,6 @@ func (a *committedApply) drain(target uint64) error {
 func (a *committedApply) quiesce() {
 	// closing is set before this barrier; future drain calls reject application.
 	a.mu.Lock()
+	a.stopped = true
 	a.mu.Unlock()
 }
