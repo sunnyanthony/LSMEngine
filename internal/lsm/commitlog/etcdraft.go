@@ -1,7 +1,9 @@
 package commitlog
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,10 +16,12 @@ import (
 )
 
 type raftCommitProposal struct {
-	ID      uint64           `json:"id"`
-	Kind    string           `json:"kind"`
-	Control *ControlMutation `json:"control,omitempty"`
-	Data    *DataMutation    `json:"data,omitempty"`
+	Proposer  uint64           `json:"proposer,omitempty"`
+	RequestID string           `json:"request_id,omitempty"`
+	ID        uint64           `json:"id"`
+	Kind      string           `json:"kind"`
+	Control   *ControlMutation `json:"control,omitempty"`
+	Data      *DataMutation    `json:"data,omitempty"`
 }
 
 type raftCommittedProposal struct {
@@ -28,6 +32,7 @@ type raftCommittedProposal struct {
 }
 
 type pendingRaftProposal struct {
+	payload []byte
 	done    bool
 	control *ControlCommittedEntry
 	data    *DataCommittedEntry
@@ -58,14 +63,24 @@ const (
 )
 
 func (c *etcdRaftConsensus) RecoveredEntries() []RecoveredEntry {
+	return c.CommittedEntriesAfter(0)
+}
+
+func (c *etcdRaftConsensus) CommittedEntriesAfter(index uint64) []RecoveredEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]RecoveredEntry, 0, len(c.committed))
 	for _, committed := range c.committed {
+		if committed.Control != nil && committed.Control.Commit.Index <= index {
+			continue
+		}
+		if committed.Data != nil && committed.Data.Commit.Index <= index {
+			continue
+		}
 		var entry RecoveredEntry
 		if committed.Control != nil {
 			control := *committed.Control
-			control.Mutation.Split = append([]byte(nil), control.Mutation.Split...)
+			control.Mutation = cloneControlMutation(control.Mutation)
 			entry.Control = &control
 		}
 		if committed.Data != nil {
@@ -259,12 +274,18 @@ func (c *etcdRaftConsensus) commitMutation(
 
 	c.proposalSeq++
 	proposal.ID = c.proposalSeq
+	proposal.Proposer = c.nodeID
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("raft proposal identity: %w", err)
+	}
+	proposal.RequestID = fmt.Sprintf("%x", nonce[:])
 	payload, err := json.Marshal(proposal)
 	if err != nil {
 		return nil, fmt.Errorf("marshal raft proposal: %w", err)
 	}
 
-	pending := &pendingRaftProposal{}
+	pending := &pendingRaftProposal{payload: append([]byte(nil), payload...)}
 	c.pending[proposal.ID] = pending
 	if err := c.rawNode.Propose(payload); err != nil {
 		delete(c.pending, proposal.ID)
@@ -452,7 +473,10 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			return err
 		}
 		c.committed = append(c.committed, committed)
-		if pending, ok := c.pending[proposal.ID]; ok {
+		// A numeric counter is only a local lookup key, never global identity.
+		// Match the complete proposed envelope, including node and random request
+		// identity, before waking a waiter across leadership changes/restarts.
+		if pending, ok := c.pending[proposal.ID]; ok && bytes.Equal(pending.payload, entry.Data) {
 			pending.control = committed.Control
 			pending.data = committed.Data
 			pending.done = true
@@ -565,6 +589,10 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 
 func cloneControlMutation(in ControlMutation) ControlMutation {
 	out := in
+	if in.ExpectedRevision != nil {
+		revision := *in.ExpectedRevision
+		out.ExpectedRevision = &revision
+	}
 	out.Split = append([]byte(nil), in.Split...)
 	return out
 }

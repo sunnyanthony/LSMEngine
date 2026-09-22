@@ -171,6 +171,10 @@ type LSM struct {
 	ioFS                 iofs.FS
 	control              *controlPlane
 	commitLog            commitLogConsensus
+	committedApply       *committedApply
+	peerMu               sync.Mutex
+	peerClosing          bool
+	peerWG               sync.WaitGroup
 	bg                   sync.WaitGroup
 	closeOnce            sync.Once
 	closeErr             error
@@ -208,6 +212,13 @@ func (l *LSM) Close() error {
 	}
 	l.closeOnce.Do(func() {
 		l.closing.Store(true)
+		l.peerMu.Lock()
+		l.peerClosing = true
+		l.peerMu.Unlock()
+		l.peerWG.Wait()
+		if l.committedApply != nil {
+			l.committedApply.quiesce()
+		}
 		if err := l.flushOnClose(); err != nil {
 			if l.logger != nil {
 				l.logger.Printf("close flush: %v", err)

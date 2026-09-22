@@ -50,6 +50,8 @@ func RaftPeerID(nodeID string) uint64 {
 // CommitLogControlMutation is a control-plane state mutation that must go
 // through the commit-log correctness path.
 type CommitLogControlMutation struct {
+	// ExpectedRevision is checked against replicated state at application time.
+	ExpectedRevision *uint64
 	// OperationID preserves request deduplication across committed-entry recovery.
 	OperationID string
 	Kind        string
