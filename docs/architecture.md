@@ -19,6 +19,7 @@ Goals:
 - **Observability**: event bus hooks; SSTable FlowMetrics available (cache/filter/err), deeper metrics planned.
 
 ## Current Design Snapshot
+- Live follower-apply foundation: built-in Raft committed data/control entries use one ordered engine apply path for local proposals and inbound replication. Real two-peer tests cover matching data sequences, node-local CDC, control outcomes, duplicate delivery, failures, and restart. This does not provide tick-driven failover, dynamic membership, snapshots, or linearizable reads. See `docs/follower-apply.md` for guarantees and verification gates.
 - Data plane: WAL + memtable + tableset + SSTable read pipeline; emits metadata snapshots.
 - Control plane: flush + compaction scheduling; works off metadata only and never mutates data-plane state directly.
 - M1 distributed surface: fixed shard metadata + manual control operations (leader transfer/split/rebalance/drain) exposed through server APIs.
@@ -41,7 +42,7 @@ Goals:
 - External dependency boundaries: third-party core libraries should sit behind an LSM-owned layer before they reach public/server APIs. `internal/lsm/iofs` is the IO example, and builtin etcd-raft stays behind the commit-log provider plus `CommitLogPeerMessage` envelope instead of exposing raftpb types.
 - Backpressure: write path stays async; on pressure return `ErrBackpressure` (no sync flush).
 - Zero-copy: single copy at API boundary; internal views stay borrowed; public reads return owned data.
-- Distributed transport and membership: outbound HTTP peer transport, inbound raft message hooks, and the builtin raft provider's simple durable state file are present, but production raft WAL/snapshots, membership lifecycle, quorum-backed commits, and data-plane replication remain deferred for later phases.
+- Distributed transport and membership: HTTP peer transport, a simple durable Raft state file, and ordered live follower application are present. Production Raft WAL/snapshots, membership lifecycle, autonomous tick-driven failover, and end-to-end read consistency remain later phases; static-peer tests are not a production cluster guarantee.
 - Cluster-wide replicated control authority and mixed-version control-state compatibility are deferred to later commitlog / raft hardening work.
 
 ## External Dependency Boundaries
@@ -146,9 +147,12 @@ Snapshot range scan:
       -> SSTable range (newest -> oldest)
 ```
 
-## Deferred: distributed/replication
-Distributed replication is intentionally out of scope until core LSM work is finished.
-See `docs/design.md` for the deferred backlog and sequencing.
+## Distributed Roadmap
+Static-peer transport, durable Raft state, and ordered live follower application
+are foundations for the distributed key/value database. Autonomous elections,
+catch-up/snapshots, membership changes, read consistency, and operational cluster
+validation remain separate milestones. Core LSM recovery and compaction work
+continues alongside them. See `docs/follower-apply.md` and `docs/design.md`.
 
 ## Deferred: manifest performance
 Future optimization: async table-edit apply (runtime-first) with deferred WAL checkpoint

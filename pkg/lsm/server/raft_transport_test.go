@@ -6,11 +6,28 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"lsmengine/pkg/lsm"
 )
+
+type recordedHTTPPeerTransport struct {
+	*RaftHTTPTransport
+	mu       sync.Mutex
+	messages []lsm.CommitLogPeerMessage
+}
+
+func (t *recordedHTTPPeerTransport) Send(ctx context.Context, messages []lsm.CommitLogPeerMessage) error {
+	t.mu.Lock()
+	for _, message := range messages {
+		message.Payload = append([]byte(nil), message.Payload...)
+		t.messages = append(t.messages, message)
+	}
+	t.mu.Unlock()
+	return t.RaftHTTPTransport.Send(ctx, messages)
+}
 
 func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	a := httptest.NewUnstartedServer(nil)
@@ -22,15 +39,19 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		lsm.RaftPeerID("node-b"): "http://" + b.Listener.Addr().String(),
 	}
 	stores := make([]*lsm.LSM, 0, 2)
+	var transports []*recordedHTTPPeerTransport
 	for i, node := range []string{"node-a", "node-b"} {
 		transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{PeerURLs: urls})
 		if err != nil {
 			t.Fatal(err)
 		}
+		recorded := &recordedHTTPPeerTransport{RaftHTTPTransport: transport}
+		transports = append(transports, recorded)
 		store, err := lsm.New(lsm.Options{
 			DataDir: t.TempDir(), NodeID: node,
-			CommitLog: &lsm.CommitLogOptions{Provider: lsm.CommitLogProviderEtcdRaft, Transport: transport},
+			CommitLog: &lsm.CommitLogOptions{Provider: lsm.CommitLogProviderEtcdRaft, Transport: recorded},
 			Raft:      &lsm.RaftOptions{Peers: []string{"node-a", "node-b"}},
+			ShardMap:  []lsm.ShardConfig{{ID: "shared", Leader: "node-a", Replicas: []string{"node-a", "node-b"}}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -46,6 +67,81 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	}
 	if !stores[0].ClusterStatus().CommitLogRuntime.Leader {
 		t.Fatal("node-a failed to elect")
+	}
+	leader, ok := stores[0].Get([]byte("key"))
+	if !ok {
+		t.Fatal("leader did not apply committed value")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		follower, ok := stores[1].Get([]byte("key"))
+		if ok && string(follower.Value) == "value" && follower.Seq == leader.Seq {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("follower did not apply committed entry: found=%v value=%q seq=%d; leader seq=%d, follower commit=%d",
+				ok, follower.Value, follower.Seq, leader.Seq, stores[1].ClusterStatus().CommitLogRuntime.Index)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := stores[0].Put([]byte("key"), []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores[0].Delete([]byte("key")); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		leaderEvents, err := stores[0].ReadCDCEvents("shared", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		followerEvents, err := stores[1].ReadCDCEvents("shared", 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(leaderEvents.Events) == 3 && len(followerEvents.Events) == 3 {
+			for i, event := range followerEvents.Events {
+				if event.Offset != leaderEvents.Events[i].Offset || event.Operation != leaderEvents.Events[i].Operation || string(event.Value) != string(leaderEvents.Events[i].Value) {
+					t.Fatal("CDC order/sequence diverged")
+				}
+			}
+			if !followerEvents.Events[2].Tombstone || followerEvents.Events[2].Offset <= leader.Seq {
+				t.Fatal("delete was not committed after put")
+			}
+			if _, ok := stores[1].Get([]byte("key")); ok {
+				t.Fatal("follower delete not applied")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("CDC not materialized exactly once: leader=%d follower=%d", len(leaderEvents.Events), len(followerEvents.Events))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	revision := uint64(0)
+	if err := stores[0].TransferLeaderWithOptions("shared", "node-b", lsm.ControlWriteOptions{OperationID: "transfer", ExpectedRevision: &revision}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for stores[1].ClusterStatus().Revision != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("follower control entry not applied")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if stores[1].Shards()[0].Leader != "node-b" {
+		t.Fatal("follower routing differs")
+	}
+	transports[0].mu.Lock()
+	duplicates := append([]lsm.CommitLogPeerMessage(nil), transports[0].messages...)
+	transports[0].mu.Unlock()
+	if err := stores[1].HandlePeerMessages(context.Background(), duplicates); err != nil {
+		t.Fatal(err)
+	}
+	events, err := stores[1].ReadCDCEvents("shared", 0, 10)
+	if err != nil || len(events.Events) != 3 || stores[1].ClusterStatus().Revision != 1 {
+		t.Fatal("duplicate inbound delivery repeated application")
 	}
 }
 

@@ -28,12 +28,13 @@ type PeerTransport interface {
 }
 
 type ControlMutation struct {
-	OperationID string
-	Kind        string
-	ShardID     string
-	Target      string
-	Split       []byte
-	NodeID      string
+	ExpectedRevision *uint64
+	OperationID      string
+	Kind             string
+	ShardID          string
+	Target           string
+	Split            []byte
+	NodeID           string
 }
 
 type DataMutation struct {
@@ -67,6 +68,13 @@ type RecoveredEntry struct {
 // RecoverySource exposes committed history without proposing new mutations.
 type RecoverySource interface {
 	RecoveredEntries() []RecoveredEntry
+}
+
+// CommittedEntrySource returns owned mutations in commit order, strictly after
+// the supplied index. Reading does not acknowledge or discard entries: callers
+// advance their cursor only after successful application.
+type CommittedEntrySource interface {
+	CommittedEntriesAfter(index uint64) []RecoveredEntry
 }
 
 type RuntimeStatus struct {

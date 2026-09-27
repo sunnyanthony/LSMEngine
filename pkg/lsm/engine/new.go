@@ -190,8 +190,10 @@ func New(opts Options) (*LSM, error) {
 			cancel()
 			return nil, err
 		}
+		lsm.initCommittedApply(builtin)
 	}
 
+	lsm.control.admitProposal = lsm.beginCommitLogOperation
 	lsm.bg.Add(1)
 	go func() {
 		defer lsm.bg.Done()
