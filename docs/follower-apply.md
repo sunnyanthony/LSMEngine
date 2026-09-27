@@ -1,17 +1,18 @@
-# Follower Apply Implementation Gate
+# Follower Apply Foundation
 
-Status: work in progress on the dedicated follower-apply PR. This document is an
-implementation checklist, not a claim of supported multi-node operation.
+This document describes ordered live application and its verification gates, not
+a claim of production-ready multi-node operation. PR review and CI determine
+whether a candidate is ready to merge.
 
 ## Observed Gap
 
-HTTP peer delivery can complete a real two-node election and data commit. The
-provider retains committed entries, but a running follower does not apply them
-to its LSM. Restart recovery is not a substitute for live application.
+Before this foundation, HTTP peer delivery could complete a real two-node
+election and data commit, but a running follower did not apply retained entries
+to its LSM. Restart recovery was not a substitute for live application.
 
 ## Current Implementation
 
-The draft now passes the real-peer regression using a shared shard map. The
+The implementation passes the real-peer regression using a shared shard map. The
 built-in Raft provider exposes owned committed entries after a cursor. Local
 proposal completion and inbound handling both drain this source under one engine
 application mutex, after provider/network processing returns. No background apply
@@ -32,8 +33,8 @@ pending waiter matches the complete proposed envelope, not a node-local numeric
 counter, so stale entries from another node or process incarnation cannot
 acknowledge an unrelated local request.
 
-Full independent implementation review is pending; the earlier initial review
-and partial-refactor review do not constitute merge clearance.
+Initial design and partial-refactor reviews do not constitute final merge
+clearance; the final committed snapshot requires independent review and CI.
 
 ## Required Invariants
 
@@ -64,9 +65,9 @@ Initial independent review confirmed the gap and identified these implementation
 constraints: revision preconditions must have identical committed outcomes on all
 replicas; drain routing changes apply everywhere while only the target enters
 local draining state; a data failure must block later control application too;
-CDC emission belongs inside the ordered application step. The startup-only
-`recoverCommittedControl` path cannot be reused by a worker because it reacquires
-the proposal mutex. Shutdown must quiesce application before the final flush.
+CDC emission belongs inside the ordered application step. Control execution was
+separated from proposal admission so recovery and live application do not acquire
+a waiting caller's proposal mutex. Shutdown quiesces application before flushing.
 HTTP assertions use a shared shard map and bounded eventual follower visibility;
 leader `local_committed` completion does not itself promise follower visibility.
 

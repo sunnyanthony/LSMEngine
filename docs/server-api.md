@@ -36,7 +36,7 @@ the LSM engine. It is intentionally separate from the engine internals.
   - Stage-1 default: `local` (single-node ordered commit, then deterministic local apply).
   - Stage-1 foundation: `etcd-raft` is wired for cluster-of-one propose/commit/apply.
   - Static multi-peer bootstrap can use server-mode HTTP peer delivery with `raft.peer_urls`, or embedded callers can inject `CommitLogOptions.Transport` (`CommitLogPeerTransport`). Inbound peer-message handling is available via `POST /cluster/raft/messages` and `HandlePeerMessages`. Both use LSM-owned `CommitLogPeerMessage` envelopes; etcd raftpb payloads remain a builtin provider implementation detail. The builtin provider persists raft hard state/log entries under `<data>/raft/`, but production raft WAL/snapshots, quorum-backed commits, and membership lifecycle are deferred.
-  - In this phase the revision / operation-id checks are node-local control-plane safeguards. Cluster-wide replicated control authority is deferred to later commitlog / raft work.
+  - Built-in Raft committed control entries carry operation identity and expected revision. Live application and recovery check the same committed precondition and persist rejected progress without changing the control revision. Local admission may still reject a request before proposal. This foundation is not a complete cluster-wide administration or failover service; see `follower-apply.md`.
   - If a provider does not implement control write options, requests that send `operation_id` or `expected_revision` are rejected with `400 Bad Request`.
   - Embedded mode can inject a custom commit-log provider via `CommitLogOptions.Factory`; the provider contract is committed-entry first, not apply-callback based.
 
