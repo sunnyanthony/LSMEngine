@@ -62,11 +62,28 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		server.Config.Handler = NewHandler(store)
 		server.Start()
 	}
+	electionDeadline := time.Now().Add(15 * time.Second)
+	for !stores[0].ClusterStatus().CommitLogRuntime.Leader && !stores[1].ClusterStatus().CommitLogRuntime.Leader {
+		if time.Now().After(electionDeadline) {
+			t.Fatal("background ticks did not elect a leader")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	leaderName := "node-a"
+	if stores[1].ClusterStatus().CommitLogRuntime.Leader {
+		stores[0], stores[1] = stores[1], stores[0]
+		transports[0], transports[1] = transports[1], transports[0]
+		leaderName = "node-b"
+	}
+	// Static shard routing is separate from Raft leadership in this foundation.
+	if err := stores[0].TransferLeaderWithOptions("shared", leaderName, lsm.ControlWriteOptions{OperationID: "align-test-route"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := stores[0].Put([]byte("key"), []byte("value")); err != nil {
 		t.Fatalf("real-provider HTTP election/commit round trip: %v", err)
 	}
 	if !stores[0].ClusterStatus().CommitLogRuntime.Leader {
-		t.Fatal("node-a failed to elect")
+		t.Fatal("elected node lost leadership")
 	}
 	leader, ok := stores[0].Get([]byte("key"))
 	if !ok {
@@ -119,12 +136,12 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	revision := uint64(0)
+	revision := uint64(1)
 	if err := stores[0].TransferLeaderWithOptions("shared", "node-b", lsm.ControlWriteOptions{OperationID: "transfer", ExpectedRevision: &revision}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(2 * time.Second)
-	for stores[1].ClusterStatus().Revision != 1 {
+	for stores[1].ClusterStatus().Revision != 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("follower control entry not applied")
 		}
@@ -140,7 +157,7 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	events, err := stores[1].ReadCDCEvents("shared", 0, 10)
-	if err != nil || len(events.Events) != 3 || stores[1].ClusterStatus().Revision != 1 {
+	if err != nil || len(events.Events) != 3 || stores[1].ClusterStatus().Revision != 2 {
 		t.Fatal("duplicate inbound delivery repeated application")
 	}
 }

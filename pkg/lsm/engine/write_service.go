@@ -111,7 +111,9 @@ func (s *writeService) commitPut(key []byte, value []byte) (uint64, error) {
 		Value: append([]byte(nil), value...),
 	})
 	if err != nil {
-		s.latchCommitError(err)
+		if !isPreProposalRejection(err) {
+			s.latchCommitError(err)
+		}
 		return 0, err
 	}
 	seq, err := s.applyProposedData(entry)
@@ -146,7 +148,9 @@ func (s *writeService) commitDelete(key []byte) (uint64, error) {
 		Key:  append([]byte(nil), key...),
 	})
 	if err != nil {
-		s.latchCommitError(err)
+		if !isPreProposalRejection(err) {
+			s.latchCommitError(err)
+		}
 		return 0, err
 	}
 	seq, err := s.applyProposedData(entry)

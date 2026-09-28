@@ -6,7 +6,26 @@ import (
 	"fmt"
 
 	internalcommitlog "lsmengine/internal/lsm/commitlog"
+	"lsmengine/pkg/lsm/errs"
 )
+
+// Only the built-in adapter can certify a rejection happened before proposal.
+type commitLogNotLeader struct{}
+
+func (*commitLogNotLeader) Error() string { return "lsm: not raft leader" }
+func (*commitLogNotLeader) Unwrap() error { return errs.ErrNotLeader }
+
+func translateCommitLogError(err error) error {
+	if errors.Is(err, internalcommitlog.ErrNotLeader) {
+		return &commitLogNotLeader{}
+	}
+	return err
+}
+
+func isPreProposalRejection(err error) bool {
+	var rejected *commitLogNotLeader
+	return errors.As(err, &rejected)
+}
 
 func (c *builtinCommitLogConsensus) recoverEngine(l *LSM) error {
 	source, ok := c.inner.(internalcommitlog.RecoverySource)
@@ -51,7 +70,7 @@ type internalCommitLogIndexObserver interface {
 func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation controlMutation) (controlCommittedEntry, error) {
 	entry, err := c.inner.CommitControl(ctx, toInternalControlMutation(mutation))
 	if err != nil {
-		return controlCommittedEntry{}, err
+		return controlCommittedEntry{}, translateCommitLogError(err)
 	}
 	return fromInternalControlCommittedEntry(entry), nil
 }
@@ -59,7 +78,7 @@ func (c *builtinCommitLogConsensus) CommitControl(ctx context.Context, mutation 
 func (c *builtinCommitLogConsensus) CommitData(ctx context.Context, mutation dataMutation) (dataCommittedEntry, error) {
 	entry, err := c.inner.CommitData(ctx, toInternalDataMutation(mutation))
 	if err != nil {
-		return dataCommittedEntry{}, err
+		return dataCommittedEntry{}, translateCommitLogError(err)
 	}
 	return fromInternalDataCommittedEntry(entry), nil
 }
