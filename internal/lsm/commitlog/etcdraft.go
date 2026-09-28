@@ -231,6 +231,19 @@ func (c *etcdRaftConsensus) Provider() Provider {
 	return ProviderEtcdRaft
 }
 
+func (c *etcdRaftConsensus) Tick(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.rawNode == nil || c.storage == nil {
+		return fmt.Errorf("etcd raft commit log is unavailable")
+	}
+	c.rawNode.Tick()
+	return c.advanceUntilStableLocked(ctx)
+}
+
 func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()

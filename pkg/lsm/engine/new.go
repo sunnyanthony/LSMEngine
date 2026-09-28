@@ -229,5 +229,6 @@ func New(opts Options) (*LSM, error) {
 		lsm.compactionSvc.Trigger()
 	}
 
+	lsm.startCommitLogTicks()
 	return lsm, nil
 }

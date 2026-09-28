@@ -157,6 +157,7 @@ type LSM struct {
 	autoRepair           bool
 	ctx                  context.Context
 	cancel               context.CancelFunc
+	tickCancel           context.CancelFunc
 	lastFlush            uint64
 	seq                  uint64
 	missingSegmentPolicy MissingSegmentPolicy
@@ -212,6 +213,9 @@ func (l *LSM) Close() error {
 	}
 	l.closeOnce.Do(func() {
 		l.closing.Store(true)
+		if l.tickCancel != nil {
+			l.tickCancel()
+		}
 		l.peerMu.Lock()
 		l.peerClosing = true
 		l.peerMu.Unlock()

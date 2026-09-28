@@ -27,6 +27,11 @@ type PeerTransport interface {
 	Send(ctx context.Context, messages []PeerMessage) error
 }
 
+// Ticker advances one logical consensus clock step; scheduling is engine-owned.
+type Ticker interface {
+	Tick(ctx context.Context) error
+}
+
 type ControlMutation struct {
 	ExpectedRevision *uint64
 	OperationID      string
