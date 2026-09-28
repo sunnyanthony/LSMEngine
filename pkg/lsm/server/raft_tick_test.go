@@ -17,7 +17,7 @@ func TestRaftTicksElectWithoutWritesAndReplaceStoppedLeader(t *testing.T) {
 		servers[i] = httptest.NewUnstartedServer(nil)
 		urls[lsm.RaftPeerID(name)] = "http://" + servers[i].Listener.Addr().String()
 	}
-	t.Cleanup(func() {
+	defer func() {
 		for _, server := range servers {
 			server.Close()
 		}
@@ -26,7 +26,7 @@ func TestRaftTicksElectWithoutWritesAndReplaceStoppedLeader(t *testing.T) {
 				store.Close()
 			}
 		}
-	})
+	}()
 	for i, name := range names {
 		transport, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{PeerURLs: urls})
 		if err != nil {
