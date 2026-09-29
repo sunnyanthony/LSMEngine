@@ -16,15 +16,15 @@ func (*commitLogNotLeader) Error() string { return "lsm: not raft leader" }
 func (*commitLogNotLeader) Unwrap() error { return errs.ErrNotLeader }
 
 func translateCommitLogError(err error) error {
-	if errors.Is(err, internalcommitlog.ErrNotLeader) {
+	if err == internalcommitlog.ErrNotLeader {
 		return &commitLogNotLeader{}
 	}
 	return err
 }
 
 func isPreProposalRejection(err error) bool {
-	var rejected *commitLogNotLeader
-	return errors.As(err, &rejected)
+	_, rejected := err.(*commitLogNotLeader)
+	return rejected
 }
 
 func (c *builtinCommitLogConsensus) recoverEngine(l *LSM) error {

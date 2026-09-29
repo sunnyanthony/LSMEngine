@@ -13,8 +13,9 @@ import (
 )
 
 type applyLoopbackTransport struct {
-	mu    sync.RWMutex
-	nodes map[uint64]*LSM
+	mu      sync.RWMutex
+	nodes   map[uint64]*LSM
+	failErr error
 }
 
 func (t *applyLoopbackTransport) setNode(id uint64, node *LSM) {
@@ -27,7 +28,11 @@ func (t *applyLoopbackTransport) Send(ctx context.Context, messages []CommitLogP
 	for _, message := range messages {
 		t.mu.RLock()
 		node := t.nodes[message.To]
+		err := t.failErr
 		t.mu.RUnlock()
+		if err != nil {
+			return err
+		}
 		if node == nil {
 			return fmt.Errorf("unknown target %d", message.To)
 		}
@@ -54,6 +59,9 @@ func newApplyPairBeforeElection(t *testing.T, beforeElection func(*LSM)) ([]*LSM
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Tests drive the clock explicitly; canceled scheduled ticks cannot
+		// race pre-election assertions or choose a different fixture leader.
+		store.tickCancel()
 		t.Cleanup(func() { store.Close() })
 		stores = append(stores, store)
 		configs = append(configs, opts)
@@ -76,6 +84,7 @@ func newApplyPairBeforeElection(t *testing.T, beforeElection func(*LSM)) ([]*LSM
 
 func TestLeadershipRejectionDoesNotPoisonEngine(t *testing.T) {
 	stores, _, _ := newApplyPairBeforeElection(t, func(store *LSM) {
+		time.Sleep(2 * time.Second)
 		for _, mutate := range []func() error{
 			func() error { return store.Put([]byte("key"), []byte("value")) },
 			func() error { return store.Delete([]byte("key")) },
