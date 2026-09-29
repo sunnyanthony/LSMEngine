@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,11 +34,15 @@ type raftCommittedProposal struct {
 
 type pendingRaftProposal struct {
 	payload []byte
+	ready   chan struct{}
 	done    bool
 	control *ControlCommittedEntry
 	data    *DataCommittedEntry
 	err     error
 }
+
+// ErrNotLeader rejects a mutation before it is proposed to Raft.
+var ErrNotLeader = errors.New("commitlog: local node is not raft leader")
 
 type etcdRaftConsensus struct {
 	mu sync.Mutex
@@ -281,8 +286,11 @@ func (c *etcdRaftConsensus) commitMutation(
 
 	runCtx, cancel := withDefaultTimeout(ctx, etcdRaftApplyTimeout)
 	defer cancel()
-	if err := c.ensureLeaderLocked(runCtx); err != nil {
+	if err := runCtx.Err(); err != nil {
 		return nil, err
+	}
+	if c.rawNode.Status().Lead != c.nodeID {
+		return nil, ErrNotLeader
 	}
 
 	c.proposalSeq++
@@ -298,7 +306,7 @@ func (c *etcdRaftConsensus) commitMutation(
 		return nil, fmt.Errorf("marshal raft proposal: %w", err)
 	}
 
-	pending := &pendingRaftProposal{payload: append([]byte(nil), payload...)}
+	pending := &pendingRaftProposal{payload: append([]byte(nil), payload...), ready: make(chan struct{})}
 	c.pending[proposal.ID] = pending
 	if err := c.rawNode.Propose(payload); err != nil {
 		delete(c.pending, proposal.ID)
@@ -320,7 +328,14 @@ func (c *etcdRaftConsensus) commitMutation(
 			return nil, err
 		}
 		if !pending.done {
-			c.rawNode.Tick()
+			// The engine owns the logical clock. Release mu while waiting so
+			// inbound replies and scheduled ticks can finish this proposal.
+			c.mu.Unlock()
+			select {
+			case <-pending.ready:
+			case <-runCtx.Done():
+			}
+			c.mu.Lock()
 		}
 	}
 }
@@ -493,6 +508,9 @@ func (c *etcdRaftConsensus) applyCommittedEntryLocked(entry raftpb.Entry) error 
 			pending.control = committed.Control
 			pending.data = committed.Data
 			pending.done = true
+			if pending.ready != nil {
+				close(pending.ready)
+			}
 			delete(c.pending, proposal.ID)
 		}
 		return nil

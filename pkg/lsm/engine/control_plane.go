@@ -527,7 +527,7 @@ func (c *controlPlane) applyControlMutation(
 	mutation.ExpectedRevision = copyRevision(opts.ExpectedRevision)
 	entry, err := c.consensus.CommitControl(context.Background(), mutation)
 	if err != nil {
-		if c.consensus.Provider() == CommitLogProviderEtcdRaft {
+		if c.consensus.Provider() == CommitLogProviderEtcdRaft && !isPreProposalRejection(err) {
 			c.commitErr = err
 		}
 		return err
