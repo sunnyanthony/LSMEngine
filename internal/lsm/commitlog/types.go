@@ -83,11 +83,13 @@ type CommittedEntrySource interface {
 }
 
 type RuntimeStatus struct {
-	Mode     string
-	Index    uint64
-	Term     uint64
-	Leader   bool
-	Replicas int
+	// LeaderNodeID is the configured node name, or empty when unknown.
+	LeaderNodeID string
+	Mode         string
+	Index        uint64
+	Term         uint64
+	Leader       bool
+	Replicas     int
 }
 
 type Consensus interface {
