@@ -48,6 +48,7 @@ type etcdRaftConsensus struct {
 	mu sync.Mutex
 
 	nodeID      uint64
+	peerNames   map[uint64]string
 	rawNode     *raft.RawNode
 	storage     *raftPersistentStorage
 	transport   PeerTransport
@@ -149,6 +150,11 @@ func newEtcdRaftConsensus(cfg Config) (*etcdRaftConsensus, error) {
 		transport: transport,
 		pending:   make(map[uint64]*pendingRaftProposal),
 		replicas:  len(peerIDs),
+	}
+	c.peerNames = map[uint64]string{nodeID: nodeName}
+	for _, name := range cfg.Peers {
+		name = strings.TrimSpace(name)
+		c.peerNames[stableRaftNodeID(name)] = name
 	}
 	if hardState, _, err := storage.InitialState(); err == nil {
 		c.index = hardState.Commit
@@ -271,6 +277,7 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 	}
 	lead := c.rawNode.Status().Lead
 	status.Leader = lead != 0 && lead == c.nodeID
+	status.LeaderNodeID = c.peerNames[lead]
 	return status
 }
 
