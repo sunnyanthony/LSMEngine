@@ -25,9 +25,6 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 		case "/cluster/routes":
 			currentLeader := leader.Load().(string)
 			revision := uint64(1)
-			if currentLeader == "node-b" {
-				revision = 2
-			}
 			writeJSON(w, http.StatusOK, routingResponse{
 				Revision: revision,
 				Shards: []routingShard{
@@ -51,9 +48,10 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 				return
 			}
 			writeJSON(w, http.StatusConflict, writeErrorResponse{
-				Error:     "lsm: not leader",
-				Code:      "not_leader",
-				Retryable: true,
+				Error:       "lsm: not leader",
+				Code:        "not_leader",
+				SafeToRetry: true,
+				Retryable:   true,
 				Route: &writeRouteHint{
 					Revision: 2,
 					ShardID:  "users",
@@ -71,9 +69,10 @@ func TestGatewayPutRetriesOnStaleRoute(t *testing.T) {
 			writesB.Add(1)
 			if leader.Load().(string) != "node-b" {
 				writeJSON(w, http.StatusConflict, writeErrorResponse{
-					Error:     "lsm: not leader",
-					Code:      "not_leader",
-					Retryable: true,
+					Error:       "lsm: not leader",
+					Code:        "not_leader",
+					SafeToRetry: true,
+					Retryable:   true,
 				})
 				return
 			}

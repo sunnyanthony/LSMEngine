@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -69,7 +70,15 @@ func TestRaftQuorumWritesSurviveOneStoppedPeer(t *testing.T) {
 				return -1
 			}
 			leader := awaitLeader(-1)
-			if err := stores[leader].Put([]byte("before"), []byte("retained")); err != nil {
+			endpoints := make(map[string]string)
+			for i, name := range names {
+				endpoints[name] = servers[i].URL
+			}
+			gateway, err := NewGateway(GatewayOptions{BootstrapURL: servers[leader].URL, NodeEndpoints: endpoints})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gateway.Put(context.Background(), []byte("before"), []byte("retained"), lsm.WriteConsistencyLocalCommitted); err != nil {
 				t.Fatal(err)
 			}
 			stopped := (leader + 1) % 3
@@ -81,10 +90,10 @@ func TestRaftQuorumWritesSurviveOneStoppedPeer(t *testing.T) {
 				t.Fatal(err)
 			}
 			leader = awaitLeader(stopped)
-			if err := stores[leader].Put([]byte("after"), []byte("value")); err != nil {
+			if _, err := gateway.Put(context.Background(), []byte("after"), []byte("value"), lsm.WriteConsistencyLocalCommitted); err != nil {
 				t.Fatalf("healthy quorum put failed: %v", err)
 			}
-			if err := stores[leader].Delete([]byte("before")); err != nil {
+			if _, err := gateway.Delete(context.Background(), []byte("before"), lsm.WriteConsistencyLocalCommitted); err != nil {
 				t.Fatalf("healthy quorum delete failed: %v", err)
 			}
 			if err := stores[leader].TransferLeader("shared", names[leader]); err != nil {
