@@ -37,10 +37,13 @@ built-in Raft writes use the effective consensus leader, not metadata leadership
 An admitted proposal waits without holding the provider mutex. Peer ingress and
 scheduled ticks can complete it asynchronously. Cancellation removes the local
 waiter, not the proposed Raft entry: the mutation may still commit later and must
-still be retained and applied. Post-submission timeouts, delivery/storage errors,
+still be retained and applied. Post-submission timeouts, unclassified transport/storage errors,
 and apply failures remain conservatively latched by the engine; they are not
 converted into retry-safe leadership rejections. Single-node startup retains its
 immediate election, but proposals themselves no longer drive elections.
+
+Explicitly classified peer delivery failures now permit Raft retransmission
+without failing a healthy quorum commit; see `docs/raft-quorum-delivery.md`.
 
 Regression coverage includes both mutation kinds with queued asynchronous peer
 delivery, independent ticks during pending proposals, cancellation followed by

@@ -27,6 +27,15 @@ type PeerTransport interface {
 	Send(ctx context.Context, messages []PeerMessage) error
 }
 
+// DeliveryError reports attempted but unacknowledged delivery, not local storage failure.
+type DeliveryError struct {
+	Peers []uint64
+	Cause error
+}
+
+func (e *DeliveryError) Error() string { return "commitlog: peer delivery unconfirmed" }
+func (e *DeliveryError) Unwrap() error { return e.Cause }
+
 // Ticker advances one logical consensus clock step; scheduling is engine-owned.
 type Ticker interface {
 	Tick(ctx context.Context) error
@@ -83,6 +92,7 @@ type CommittedEntrySource interface {
 }
 
 type RuntimeStatus struct {
+	DeliveryFailures uint64
 	// LeaderNodeID is the configured node name, or empty when unknown.
 	LeaderNodeID string
 	Mode         string

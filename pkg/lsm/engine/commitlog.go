@@ -135,7 +135,11 @@ func (t internalPeerTransport) Send(ctx context.Context, messages []internalcomm
 	if t.transport == nil {
 		return nil
 	}
-	return t.transport.Send(ctx, fromInternalPeerMessages(messages))
+	err := t.transport.Send(ctx, fromInternalPeerMessages(messages))
+	if delivery, ok := err.(*CommitLogPeerDeliveryError); ok && delivery != nil {
+		return &internalcommitlog.DeliveryError{Peers: append([]uint64(nil), delivery.Peers...), Cause: delivery.Cause}
+	}
+	return err
 }
 
 func newEtcdRaftCommitLogConsensus(opts Options) (commitLogConsensus, error) {
@@ -186,12 +190,13 @@ func fromInternalDataCommittedEntry(entry internalcommitlog.DataCommittedEntry) 
 
 func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRuntimeStatus {
 	return CommitLogRuntimeStatus{
-		LeaderNodeID: s.LeaderNodeID,
-		Mode:         s.Mode,
-		Index:        s.Index,
-		Term:         s.Term,
-		Leader:       s.Leader,
-		Replicas:     s.Replicas,
+		DeliveryFailures: s.DeliveryFailures,
+		LeaderNodeID:     s.LeaderNodeID,
+		Mode:             s.Mode,
+		Index:            s.Index,
+		Term:             s.Term,
+		Leader:           s.Leader,
+		Replicas:         s.Replicas,
 	}
 }
 
