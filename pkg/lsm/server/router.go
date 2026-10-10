@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,16 +19,21 @@ import (
 
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
-	BootstrapURL  string
-	NodeEndpoints map[string]string
-	HTTPClient    *http.Client
+	// RouteProbeTimeout bounds each read-only discovery request (default 500 ms).
+	RouteProbeTimeout time.Duration
+	BootstrapURL      string
+	NodeEndpoints     map[string]string
+	HTTPClient        *http.Client
 }
 
-// Gateway routes writes by shard metadata and retries on stale-route errors.
+// Gateway routes writes by effective shard leadership and retries only when
+// the first attempt is known not to have been submitted.
 type Gateway struct {
-	bootstrapURL  string
-	nodeEndpoints map[string]string
-	client        *http.Client
+	routeProbeTimeout time.Duration
+	dialRetry         bool
+	bootstrapURL      string
+	nodeEndpoints     map[string]string
+	client            *http.Client
 
 	mu     sync.RWMutex
 	routes cachedRoutes
@@ -46,8 +53,9 @@ type cachedRouteShard struct {
 
 // WriteRequestError describes a failed write response from a node endpoint.
 type WriteRequestError struct {
-	Status   int
-	Response writeErrorResponse
+	attemptedLeader string
+	Status          int
+	Response        writeErrorResponse
 }
 
 func (e *WriteRequestError) Error() string {
@@ -60,7 +68,7 @@ func (e *WriteRequestError) Error() string {
 	return fmt.Sprintf("write request failed with status %d", e.Status)
 }
 
-// NewGateway builds a write gateway using route metadata from bootstrapURL.
+// NewGateway builds a write gateway with bootstrap and node endpoint discovery.
 func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	bootstrapURL := strings.TrimSuffix(strings.TrimSpace(opts.BootstrapURL), "/")
 	if bootstrapURL == "" {
@@ -79,13 +87,35 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		endpoints[trimmedNode] = trimmedEndpoint
 	}
 	client := opts.HTTPClient
+	dialRetry := client == nil
 	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
+		// Do not trust the replaceable DefaultTransport or a caller's transport
+		// (including registered alternate protocols) to certify non-submission.
+		client = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		}}
+	}
+	ownedClient := *client
+	ownedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	probeTimeout := opts.RouteProbeTimeout
+	if probeTimeout < 0 {
+		return nil, fmt.Errorf("route probe timeout must be positive")
+	}
+	if probeTimeout == 0 {
+		probeTimeout = 500 * time.Millisecond
 	}
 	return &Gateway{
-		bootstrapURL:  bootstrapURL,
-		nodeEndpoints: endpoints,
-		client:        client,
+		routeProbeTimeout: probeTimeout,
+		dialRetry:         dialRetry,
+		bootstrapURL:      bootstrapURL,
+		nodeEndpoints:     endpoints,
+		client:            &ownedClient,
 	}, nil
 }
 
@@ -120,10 +150,16 @@ func (g *Gateway) writeWithRetry(
 		return status, nil
 	}
 	var reqErr *WriteRequestError
-	if !errors.As(err, &reqErr) || !reqErr.Response.Retryable {
+	var unsubmitted *unsubmittedWriteError
+	excluded := ""
+	if errors.As(err, &unsubmitted) {
+		excluded = unsubmitted.leader
+	} else if errors.As(err, &reqErr) && reqErr.Response.Retryable && reqErr.Response.SafeToRetry {
+		excluded = reqErr.attemptedLeader
+	} else {
 		return lsm.WriteRequestStatus{}, err
 	}
-	if refreshErr := g.refreshRoutes(ctx); refreshErr != nil {
+	if refreshErr := g.refreshRoutesForKey(ctx, key, excluded, true); refreshErr != nil {
 		return lsm.WriteRequestStatus{}, err
 	}
 	return g.writeOnce(ctx, operation, key, value, consistency)
@@ -173,6 +209,10 @@ func (g *Gateway) writeOnce(
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		var dial *net.OpError
+		if g.dialRetry && errors.As(err, &dial) && dial.Op == "dial" && ctx.Err() == nil {
+			return lsm.WriteRequestStatus{}, &unsubmittedWriteError{leader: leader, cause: err}
+		}
 		return lsm.WriteRequestStatus{}, err
 	}
 	defer resp.Body.Close()
@@ -191,16 +231,25 @@ func (g *Gateway) writeOnce(
 		}
 	}
 	return lsm.WriteRequestStatus{}, &WriteRequestError{
-		Status:   resp.StatusCode,
-		Response: writeErr,
+		attemptedLeader: leader,
+		Status:          resp.StatusCode,
+		Response:        writeErr,
 	}
 }
+
+type unsubmittedWriteError struct {
+	leader string
+	cause  error
+}
+
+func (e *unsubmittedWriteError) Error() string { return e.cause.Error() }
+func (e *unsubmittedWriteError) Unwrap() error { return e.cause }
 
 func (g *Gateway) leaderForKey(ctx context.Context, key []byte) (string, error) {
 	if leader, ok := g.lookupLeader(key); ok {
 		return leader, nil
 	}
-	if err := g.refreshRoutes(ctx); err != nil {
+	if err := g.refreshRoutesForKey(ctx, key, "", true); err != nil {
 		return "", err
 	}
 	if leader, ok := g.lookupLeader(key); ok {
@@ -228,31 +277,82 @@ func (g *Gateway) lookupLeader(key []byte) (string, bool) {
 }
 
 func (g *Gateway) refreshRoutes(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.bootstrapURL+"/cluster/routes", nil)
+	return g.refreshRoutesForKey(ctx, nil, "", false)
+}
+
+func (g *Gateway) refreshRoutesForKey(ctx context.Context, key []byte, excluded string, requireKey bool) error {
+	candidates := []string{g.bootstrapURL}
+	nodes := make([]string, 0, len(g.nodeEndpoints))
+	for node := range g.nodeEndpoints {
+		nodes = append(nodes, node)
+	}
+	sort.Strings(nodes)
+	for _, node := range nodes {
+		candidates = append(candidates, g.nodeEndpoints[node])
+	}
+	seen := make(map[string]bool)
+	var failures []error
+	for _, endpoint := range candidates {
+		if seen[endpoint] {
+			continue
+		}
+		seen[endpoint] = true
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, g.routeProbeTimeout)
+		table, err := g.fetchRoutes(probeCtx, endpoint)
+		cancel()
+		if err == nil && requireKey {
+			found := false
+			for _, shard := range table.shards {
+				if (len(shard.start) == 0 || bytes.Compare(key, shard.start) >= 0) && (len(shard.end) == 0 || bytes.Compare(key, shard.end) < 0) && shard.leader != "" && shard.leader != excluded && g.nodeEndpoints[shard.leader] != "" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				err = fmt.Errorf("no usable leader for key at %s", endpoint)
+			}
+		}
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		g.mu.Lock()
+		g.routes = table
+		g.mu.Unlock()
+		return nil
+	}
+	return fmt.Errorf("route discovery exhausted: %w", errors.Join(failures...))
+}
+
+func (g *Gateway) fetchRoutes(ctx context.Context, endpoint string) (cachedRoutes, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/cluster/routes", nil)
 	if err != nil {
-		return err
+		return cachedRoutes{}, err
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return err
+		return cachedRoutes{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("route refresh status %d", resp.StatusCode)
+		return cachedRoutes{}, fmt.Errorf("route refresh status %d", resp.StatusCode)
 	}
 	var table routingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&table); err != nil {
-		return err
+		return cachedRoutes{}, err
 	}
 	shards := make([]cachedRouteShard, 0, len(table.Shards))
 	for _, shard := range table.Shards {
 		start, err := base64.StdEncoding.DecodeString(shard.StartKeyBase64)
 		if err != nil {
-			return fmt.Errorf("decode start key for shard %q: %w", shard.ID, err)
+			return cachedRoutes{}, fmt.Errorf("decode start key for shard %q: %w", shard.ID, err)
 		}
 		end, err := base64.StdEncoding.DecodeString(shard.EndKeyBase64)
 		if err != nil {
-			return fmt.Errorf("decode end key for shard %q: %w", shard.ID, err)
+			return cachedRoutes{}, fmt.Errorf("decode end key for shard %q: %w", shard.ID, err)
 		}
 		shards = append(shards, cachedRouteShard{
 			id:     shard.ID,
@@ -261,11 +361,8 @@ func (g *Gateway) refreshRoutes(ctx context.Context) error {
 			leader: shard.Leader,
 		})
 	}
-	g.mu.Lock()
-	g.routes = cachedRoutes{
+	return cachedRoutes{
 		revision: table.Revision,
 		shards:   shards,
-	}
-	g.mu.Unlock()
-	return nil
+	}, nil
 }

@@ -72,3 +72,8 @@ func New(opts Options) (*LSM, error) {
 func RaftPeerID(nodeID string) uint64 {
 	return engine.RaftPeerID(nodeID)
 }
+
+// IsWriteRejectedBeforeProposal reports a direct engine-certified rejection.
+func IsWriteRejectedBeforeProposal(err error) bool {
+	return engine.IsWriteRejectedBeforeProposal(err)
+}

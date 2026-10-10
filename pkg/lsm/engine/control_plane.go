@@ -344,12 +344,12 @@ func (c *controlPlane) allowWrite(key []byte) error {
 	}
 	if raftRouting {
 		if leader != c.nodeID {
-			return errs.ErrNotLeader
+			return &commitLogNotLeader{}
 		}
 		return nil
 	}
 	if shard.Leader != c.nodeID {
-		return errs.ErrNotLeader
+		return &commitLogNotLeader{}
 	}
 	return nil
 }

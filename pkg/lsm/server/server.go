@@ -692,10 +692,11 @@ func writeErrorHTTPStatus(err error) int {
 }
 
 type writeErrorResponse struct {
-	Error     string          `json:"error"`
-	Code      string          `json:"code"`
-	Retryable bool            `json:"retryable"`
-	Route     *writeRouteHint `json:"route,omitempty"`
+	SafeToRetry bool            `json:"safe_to_retry"`
+	Error       string          `json:"error"`
+	Code        string          `json:"code"`
+	Retryable   bool            `json:"retryable"`
+	Route       *writeRouteHint `json:"route,omitempty"`
 }
 
 type writeRouteHint struct {
@@ -707,9 +708,10 @@ type writeRouteHint struct {
 func (h *handler) writeWriteError(w http.ResponseWriter, key []byte, err error) {
 	status := writeErrorHTTPStatus(err)
 	payload := writeErrorResponse{
-		Error:     err.Error(),
-		Code:      writeErrorCode(err),
-		Retryable: isRetryableWriteError(err),
+		SafeToRetry: lsm.IsWriteRejectedBeforeProposal(err),
+		Error:       err.Error(),
+		Code:        writeErrorCode(err),
+		Retryable:   isRetryableWriteError(err),
 	}
 	if payload.Retryable {
 		if hint := h.routeHintForKey(key); hint != nil {

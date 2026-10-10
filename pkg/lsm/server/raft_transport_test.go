@@ -102,7 +102,7 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &rejection); err != nil {
 		t.Fatal(err)
 	}
-	if recorder.Code != http.StatusConflict || rejection.Route == nil || rejection.Route.Leader != leaderName {
+	if recorder.Code != http.StatusConflict || !rejection.SafeToRetry || rejection.Route == nil || rejection.Route.Leader != leaderName {
 		t.Fatalf("wrong follower hint: %s", recorder.Body.String())
 	}
 	if err := stores[0].Put([]byte("key"), []byte("value")); err != nil {

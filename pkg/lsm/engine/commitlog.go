@@ -27,6 +27,11 @@ func isPreProposalRejection(err error) bool {
 	return rejected
 }
 
+// IsWriteRejectedBeforeProposal reports a direct engine-certified rejection.
+// Wrapped causes, generic sentinels and unknown provider errors are not proof
+// that the current write was never proposed.
+func IsWriteRejectedBeforeProposal(err error) bool { return isPreProposalRejection(err) }
+
 func (c *builtinCommitLogConsensus) recoverEngine(l *LSM) error {
 	source, ok := c.inner.(internalcommitlog.RecoverySource)
 	if !ok {
