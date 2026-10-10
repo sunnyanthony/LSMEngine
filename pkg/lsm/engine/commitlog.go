@@ -186,11 +186,12 @@ func fromInternalDataCommittedEntry(entry internalcommitlog.DataCommittedEntry) 
 
 func fromInternalRuntimeStatus(s internalcommitlog.RuntimeStatus) CommitLogRuntimeStatus {
 	return CommitLogRuntimeStatus{
-		Mode:     s.Mode,
-		Index:    s.Index,
-		Term:     s.Term,
-		Leader:   s.Leader,
-		Replicas: s.Replicas,
+		LeaderNodeID: s.LeaderNodeID,
+		Mode:         s.Mode,
+		Index:        s.Index,
+		Term:         s.Term,
+		Leader:       s.Leader,
+		Replicas:     s.Replicas,
 	}
 }
 

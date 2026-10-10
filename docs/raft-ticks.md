@@ -18,8 +18,9 @@ startup recovery and engine services are initialized.
 
 The real three-peer HTTP regression requires election without client writes and
 reelection among the remaining peers after the elected node stops. This does not
-promise that shard routing follows the newly elected Raft leader: the static shard
-map is unchanged. Automatic write
+promise complete client failover. Effective write routing now follows observed
+Raft leadership while static shard metadata remains unchanged; see
+`docs/raft-write-routing.md`. Automatic write
 failover, partition behavior, membership changes, snapshots, and linearizable
 reads require separate validation and implementation.
 
@@ -30,8 +31,8 @@ that is not the current Raft leader rejects the mutation before assigning a
 proposal identity or appending it. The built-in engine adapter reports this as
 `errs.ErrNotLeader`; this definite pre-proposal rejection does not latch the data
 or control write path. A caller may retry after leadership is established without
-reopening the engine. Static shard routing is still checked independently, so
-the shard leader and Raft leader must both permit a data write.
+reopening the engine. Shard-range and draining checks still apply. Multi-peer
+built-in Raft writes use the effective consensus leader, not metadata leadership.
 
 An admitted proposal waits without holding the provider mutex. Peer ingress and
 scheduled ticks can complete it asynchronously. Cancellation removes the local

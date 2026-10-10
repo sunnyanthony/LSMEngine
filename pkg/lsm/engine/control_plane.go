@@ -52,11 +52,14 @@ type ReplicaStatus struct {
 
 // ShardStatus is runtime status for one shard.
 type ShardStatus struct {
-	ID       string          `json:"id"`
-	StartKey []byte          `json:"start_key,omitempty"`
-	EndKey   []byte          `json:"end_key,omitempty"`
-	Leader   string          `json:"leader"`
-	Replicas []ReplicaStatus `json:"replicas"`
+	// WriteLeader overrides metadata Leader for built-in multi-peer Raft.
+	// Nil uses metadata routing; a non-nil empty string means no known leader.
+	WriteLeader *string         `json:"write_leader,omitempty"`
+	ID          string          `json:"id"`
+	StartKey    []byte          `json:"start_key,omitempty"`
+	EndKey      []byte          `json:"end_key,omitempty"`
+	Leader      string          `json:"leader"`
+	Replicas    []ReplicaStatus `json:"replicas"`
 }
 
 // ClusterStatus is node-level control-plane status.
@@ -307,6 +310,7 @@ func (c *controlPlane) shardsSnapshot() []ShardStatus {
 	if c == nil {
 		return nil
 	}
+	leader, raftRouting := c.raftWriteLeader()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]ShardStatus, 0, len(c.order))
@@ -315,6 +319,10 @@ func (c *controlPlane) shardsSnapshot() []ShardStatus {
 		shard.StartKey = append([]byte(nil), shard.StartKey...)
 		shard.EndKey = append([]byte(nil), shard.EndKey...)
 		shard.Replicas = append([]ReplicaStatus(nil), shard.Replicas...)
+		if raftRouting {
+			writeLeader := leader
+			shard.WriteLeader = &writeLeader
+		}
 		out = append(out, shard)
 	}
 	return out
@@ -324,6 +332,7 @@ func (c *controlPlane) allowWrite(key []byte) error {
 	if c == nil {
 		return nil
 	}
+	leader, raftRouting := c.raftWriteLeader()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.draining {
@@ -333,10 +342,25 @@ func (c *controlPlane) allowWrite(key []byte) error {
 	if !ok {
 		return errs.ErrShardNotFound
 	}
+	if raftRouting {
+		if leader != c.nodeID {
+			return errs.ErrNotLeader
+		}
+		return nil
+	}
 	if shard.Leader != c.nodeID {
 		return errs.ErrNotLeader
 	}
 	return nil
+}
+
+func (c *controlPlane) raftWriteLeader() (string, bool) {
+	builtin, ok := c.consensus.(*builtinCommitLogConsensus)
+	if !ok || builtin.Provider() != CommitLogProviderEtcdRaft {
+		return "", false
+	}
+	status := builtin.RuntimeStatus()
+	return status.LeaderNodeID, status.Replicas > 1
 }
 
 func (c *controlPlane) shardIDForKey(key []byte) (string, bool) {

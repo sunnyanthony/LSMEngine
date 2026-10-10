@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -75,9 +76,33 @@ func TestRaftHTTPTransportRealProvidersRoundTrip(t *testing.T) {
 		transports[0], transports[1] = transports[1], transports[0]
 		leaderName = "node-b"
 	}
-	// Static shard routing is separate from Raft leadership in this foundation.
-	if err := stores[0].TransferLeaderWithOptions("shared", leaderName, lsm.ControlWriteOptions{OperationID: "align-test-route"}); err != nil {
+	metadataLeader := "node-b"
+	if leaderName == "node-b" {
+		metadataLeader = "node-a"
+	}
+	// Deliberately disagree: write routes must follow consensus, not metadata.
+	if err := stores[0].TransferLeaderWithOptions("shared", metadataLeader, lsm.ControlWriteOptions{OperationID: "misalign-test-route"}); err != nil {
 		t.Fatal(err)
+	}
+	for _, store := range stores {
+		recorder := httptest.NewRecorder()
+		NewHandler(store).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/cluster/routes", nil))
+		var routes routingResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &routes); err != nil {
+			t.Fatal(err)
+		}
+		if len(routes.Shards) != 1 || routes.Shards[0].Leader != leaderName {
+			t.Fatalf("incorrect effective route: %s", recorder.Body.String())
+		}
+	}
+	recorder := httptest.NewRecorder()
+	NewHandler(stores[1]).ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/kv/put", strings.NewReader(`{"key_base64":"a2V5","value_base64":"dmFsdWU=","consistency":"local_committed"}`)))
+	var rejection writeErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &rejection); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusConflict || rejection.Route == nil || rejection.Route.Leader != leaderName {
+		t.Fatalf("wrong follower hint: %s", recorder.Body.String())
 	}
 	if err := stores[0].Put([]byte("key"), []byte("value")); err != nil {
 		t.Fatalf("real-provider HTTP election/commit round trip: %v", err)

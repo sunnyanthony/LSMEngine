@@ -217,7 +217,7 @@ func (h *handler) handleRoutes(w http.ResponseWriter, r *http.Request) {
 			ID:             shard.ID,
 			StartKeyBase64: base64.StdEncoding.EncodeToString(shard.StartKey),
 			EndKeyBase64:   base64.StdEncoding.EncodeToString(shard.EndKey),
-			Leader:         shard.Leader,
+			Leader:         effectiveWriteLeader(shard),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -751,8 +751,15 @@ func (h *handler) routeHintForKey(key []byte) *writeRouteHint {
 		return hint
 	}
 	hint.ShardID = shard.ID
-	hint.Leader = shard.Leader
+	hint.Leader = effectiveWriteLeader(shard)
 	return hint
+}
+
+func effectiveWriteLeader(shard lsm.ShardStatus) string {
+	if shard.WriteLeader != nil {
+		return *shard.WriteLeader
+	}
+	return shard.Leader
 }
 
 func findRouteShardByKey(shards []lsm.ShardStatus, key []byte) (lsm.ShardStatus, bool) {

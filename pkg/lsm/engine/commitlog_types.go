@@ -92,11 +92,13 @@ type CommitLogDataCommittedEntry struct {
 
 // CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
 type CommitLogRuntimeStatus struct {
-	Mode     string `json:"mode"`
-	Index    uint64 `json:"index"`
-	Term     uint64 `json:"term"`
-	Leader   bool   `json:"leader"`
-	Replicas int    `json:"replicas"`
+	// LeaderNodeID is the configured consensus leader name, empty when unknown.
+	LeaderNodeID string `json:"leader_node_id,omitempty"`
+	Mode         string `json:"mode"`
+	Index        uint64 `json:"index"`
+	Term         uint64 `json:"term"`
+	Leader       bool   `json:"leader"`
+	Replicas     int    `json:"replicas"`
 }
 
 // CommitLogConsensus is the provider contract for commit-log implementations.
