@@ -47,17 +47,18 @@ var ErrNotLeader = errors.New("commitlog: local node is not raft leader")
 type etcdRaftConsensus struct {
 	mu sync.Mutex
 
-	nodeID      uint64
-	peerNames   map[uint64]string
-	rawNode     *raft.RawNode
-	storage     *raftPersistentStorage
-	transport   PeerTransport
-	proposalSeq uint64
-	pending     map[uint64]*pendingRaftProposal
-	committed   []raftCommittedProposal
-	index       uint64
-	term        uint64
-	replicas    int
+	nodeID           uint64
+	peerNames        map[uint64]string
+	rawNode          *raft.RawNode
+	storage          *raftPersistentStorage
+	transport        PeerTransport
+	proposalSeq      uint64
+	pending          map[uint64]*pendingRaftProposal
+	committed        []raftCommittedProposal
+	index            uint64
+	term             uint64
+	replicas         int
+	deliveryFailures uint64
 }
 
 const (
@@ -267,10 +268,11 @@ func (c *etcdRaftConsensus) RuntimeStatus() RuntimeStatus {
 		mode = "raft_transport_foundation"
 	}
 	status := RuntimeStatus{
-		Mode:     mode,
-		Index:    c.index,
-		Term:     c.term,
-		Replicas: replicas,
+		DeliveryFailures: c.deliveryFailures,
+		Mode:             mode,
+		Index:            c.index,
+		Term:             c.term,
+		Replicas:         replicas,
 	}
 	if c.rawNode == nil {
 		return status
@@ -440,6 +442,26 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		c.mu.Lock()
 		cancel()
 		if err != nil {
+			if delivery, ok := err.(*DeliveryError); ok && delivery != nil && len(delivery.Peers) > 0 {
+				// Only classify failures of destinations in this exact batch.
+				for _, peer := range delivery.Peers {
+					found := false
+					for _, message := range encoded {
+						if message.To == peer {
+							found = true
+							break
+						}
+					}
+					if !found {
+						return fmt.Errorf("invalid failed raft destination %d: %w", peer, err)
+					}
+				}
+				for _, peer := range delivery.Peers {
+					c.rawNode.ReportUnreachable(peer)
+					c.deliveryFailures++
+				}
+				return nil
+			}
 			return fmt.Errorf("raft transport send: %w", err)
 		}
 	}

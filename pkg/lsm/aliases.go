@@ -21,6 +21,7 @@ type CommitLogDataCommittedEntry = engine.CommitLogDataCommittedEntry
 type CommitLogRuntimeStatus = engine.CommitLogRuntimeStatus
 type CommitLogPeerMessage = engine.CommitLogPeerMessage
 type CommitLogPeerTransport = engine.CommitLogPeerTransport
+type CommitLogPeerDeliveryError = engine.CommitLogPeerDeliveryError
 type RaftMessageTransport = engine.RaftMessageTransport
 type RaftOptions = engine.RaftOptions
 type ShardConfig = engine.ShardConfig

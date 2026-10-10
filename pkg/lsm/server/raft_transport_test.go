@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -247,6 +248,10 @@ func TestRaftHTTPTransportIsolatesSlowFailingDestination(t *testing.T) {
 	if err == nil {
 		t.Fatal("failed peer was not reported")
 	}
+	var delivery *lsm.CommitLogPeerDeliveryError
+	if !errors.As(err, &delivery) || len(delivery.Peers) != 1 || delivery.Peers[0] != 2 {
+		t.Fatalf("failed destination classification: %v", err)
+	}
 	select {
 	case <-healthyReceived:
 	default:
@@ -254,6 +259,14 @@ func TestRaftHTTPTransportIsolatesSlowFailingDestination(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Fatal("slow peer blocked healthy delivery until deadline")
+	}
+}
+
+func TestRaftHTTPTransportRejectsMalformedEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"missing-scheme", "ftp://example.com", "http://", "http://localhost:bad", "http://localhost?query=1", "http://localhost#fragment"} {
+		if _, err := NewRaftHTTPTransport(RaftHTTPTransportOptions{PeerURLs: map[uint64]string{1: endpoint}}); err == nil {
+			t.Errorf("accepted malformed endpoint %q", endpoint)
+		}
 	}
 }
 

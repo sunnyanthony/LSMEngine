@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -38,6 +39,10 @@ func NewRaftHTTPTransport(opts RaftHTTPTransportOptions) (*RaftHTTPTransport, er
 		endpoint := strings.TrimSuffix(strings.TrimSpace(rawURL), "/")
 		if id == 0 || endpoint == "" {
 			return nil, fmt.Errorf("invalid raft peer url mapping")
+		}
+		parsed, err := url.Parse(endpoint)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Fragment != "" || parsed.RawQuery != "" {
+			return nil, fmt.Errorf("invalid raft peer endpoint for node id %d", id)
 		}
 		peerURLs[id] = endpoint
 	}
@@ -73,19 +78,29 @@ func (t *RaftHTTPTransport) Send(ctx context.Context, messages []lsm.CommitLogPe
 		grouped[message.To] = append(grouped[message.To], message)
 	}
 	// A stalled destination must not consume another peer's delivery window.
-	results := make(chan error, len(grouped))
+	type deliveryResult struct {
+		peer uint64
+		err  error
+	}
+	results := make(chan deliveryResult, len(grouped))
 	for peerID, peerMessages := range grouped {
 		go func(id uint64, batch []lsm.CommitLogPeerMessage) {
-			results <- t.sendToPeer(ctx, id, batch)
+			results <- deliveryResult{peer: id, err: t.sendToPeer(ctx, id, batch)}
 		}(peerID, peerMessages)
 	}
 	var failures []error
+	var failedPeers []uint64
 	for range grouped {
-		if err := <-results; err != nil {
-			failures = append(failures, err)
+		result := <-results
+		if result.err != nil {
+			failures = append(failures, result.err)
+			failedPeers = append(failedPeers, result.peer)
 		}
 	}
-	return errors.Join(failures...)
+	if len(failures) > 0 {
+		return &lsm.CommitLogPeerDeliveryError{Peers: failedPeers, Cause: errors.Join(failures...)}
+	}
+	return nil
 }
 
 func (t *RaftHTTPTransport) sendToPeer(

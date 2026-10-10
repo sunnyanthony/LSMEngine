@@ -38,6 +38,18 @@ type CommitLogPeerTransport interface {
 	Send(ctx context.Context, messages []CommitLogPeerMessage) error
 }
 
+// CommitLogPeerDeliveryError reports attempted but unconfirmed peer deliveries.
+// Peers must contain only failed destinations from the current Send batch.
+// Returning this exact type opts into Raft retransmission; it never acknowledges
+// commitment. Configuration, encoding, and local storage errors must not use it.
+type CommitLogPeerDeliveryError struct {
+	Peers []uint64
+	Cause error
+}
+
+func (e *CommitLogPeerDeliveryError) Error() string { return "lsm: peer delivery unconfirmed" }
+func (e *CommitLogPeerDeliveryError) Unwrap() error { return e.Cause }
+
 // RaftMessageTransport is kept as a compatibility alias for earlier foundation
 // branches. New code should use CommitLogPeerTransport.
 type RaftMessageTransport = CommitLogPeerTransport
@@ -92,6 +104,8 @@ type CommitLogDataCommittedEntry struct {
 
 // CommitLogRuntimeStatus exposes commit-log runtime progress and leadership state.
 type CommitLogRuntimeStatus struct {
+	// DeliveryFailures counts failed destination batches since provider startup.
+	DeliveryFailures uint64 `json:"delivery_failures,omitempty"`
 	// LeaderNodeID is the configured consensus leader name, empty when unknown.
 	LeaderNodeID string `json:"leader_node_id,omitempty"`
 	Mode         string `json:"mode"`

@@ -20,7 +20,7 @@ still apply. Route consumers must refresh on rejection even at the same revision
 
 This does not implement independent per-shard replication groups, data placement,
 automatic consensus leadership transfer, linearizable reads, or complete client
-failover. In particular, delivery failures involving a stopped peer still use
-the conservative error handling of the current transport/proposal path. Those
-failures and gateway bootstrap availability require separate work before claiming
-a usable failure-tolerant cluster.
+failover. Classified delivery failures now allow healthy-majority writes after
+one peer stops; see `docs/raft-quorum-delivery.md`. Gateway bootstrap availability,
+retry semantics, partitions and recovery still need further work before claiming
+a complete failure-tolerant client experience.
