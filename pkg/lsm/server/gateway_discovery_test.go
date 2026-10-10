@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -46,6 +48,112 @@ func TestGatewayDiscoveryFallsBackFromSlowOrUnknownBootstrap(t *testing.T) {
 				t.Fatal("unexpected write attempts")
 			}
 		})
+	}
+}
+
+func TestGatewayCannotCertifyCallerTransportDialErrors(t *testing.T) {
+	for _, mode := range []string{"default-transport", "registered-protocol"} {
+		t.Run(mode, func(t *testing.T) {
+			var attempts atomic.Int32
+			fake := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/cluster/routes" {
+					rec := httptest.NewRecorder()
+					writeJSON(rec, http.StatusOK, routingResponse{Shards: []routingShard{{ID: "shared", Leader: "b"}}})
+					return rec.Result(), nil
+				}
+				attempts.Add(1)
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("failure after custom submission")}
+			})
+			client := &http.Client{}
+			if mode == "default-transport" {
+				previous := http.DefaultTransport
+				http.DefaultTransport = fake
+				defer func() { http.DefaultTransport = previous }()
+			} else {
+				transport := &http.Transport{}
+				transport.RegisterProtocol("http", fake)
+				client.Transport = transport
+			}
+			g, err := NewGateway(GatewayOptions{BootstrapURL: "http://a", NodeEndpoints: map[string]string{"a": "http://a", "b": "http://b"}, HTTPClient: client})
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.routes = cachedRoutes{shards: []cachedRouteShard{{id: "shared", leader: "a"}}}
+			if _, err := g.Put(context.Background(), []byte("k"), []byte("v"), lsm.WriteConsistencyLocalCommitted); err == nil {
+				t.Fatal("expected failure")
+			}
+			if attempts.Load() != 1 {
+				t.Fatalf("unsafe retry through caller transport: %d", attempts.Load())
+			}
+		})
+	}
+}
+
+func TestGatewayConcurrentRejectionsKeepAttemptedLeader(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var attemptsA, attemptsB atomic.Int32
+	client := newInMemoryHTTPClient(map[string]http.Handler{
+		"a": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/cluster/routes" {
+				writeJSON(w, http.StatusOK, routingResponse{Shards: []routingShard{{ID: "shared", Leader: "b"}}})
+				return
+			}
+			if attemptsA.Add(1) == 1 {
+				close(entered)
+				select {
+				case <-release:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			writeJSON(w, http.StatusConflict, writeErrorResponse{Code: "not_leader", Retryable: true, SafeToRetry: true})
+		}),
+		"b": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/cluster/routes" {
+				writeJSON(w, http.StatusOK, routingResponse{Shards: []routingShard{{ID: "shared", Leader: "b"}}})
+				return
+			}
+			attemptsB.Add(1)
+			writeJSON(w, http.StatusOK, lsm.WriteRequestStatus{State: lsm.WriteRequestCommitted})
+		}),
+	})
+	g, err := NewGateway(GatewayOptions{BootstrapURL: "http://a", NodeEndpoints: map[string]string{"a": "http://a", "b": "http://b"}, HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.routes = cachedRoutes{shards: []cachedRouteShard{{id: "shared", leader: "a"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() {
+		_, err := g.Put(ctx, []byte("first"), []byte("v"), lsm.WriteConsistencyLocalCommitted)
+		first <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first request did not reach old leader")
+	}
+	if _, err := g.Put(ctx, []byte("second"), []byte("v"), lsm.WriteConsistencyLocalCommitted); err != nil {
+		t.Fatal(err)
+	}
+	// Release via a send so deferred close also releases the waiter on failure.
+	select {
+	case release <- struct{}{}:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	select {
+	case err := <-first:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if attemptsA.Load() != 2 || attemptsB.Load() != 2 {
+		t.Fatalf("attempts A=%d B=%d", attemptsA.Load(), attemptsB.Load())
 	}
 }
 

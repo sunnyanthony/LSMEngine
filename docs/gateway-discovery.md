@@ -9,8 +9,9 @@ metadata revision; the gateway refreshes after a certified rejection regardless.
 
 Put/Delete make at most one explicit retry. It is allowed only after:
 
-- A standard Go HTTP transport reports a dial failure before the request reaches
-  a server. Arbitrary custom RoundTripper errors are not treated as this proof.
+- The gateway-owned HTTP transport reports a dial failure before the request
+  reaches a server. Caller-supplied clients, including clients with nil transport
+  or registered alternate protocols, cannot certify this proof through errors.
 - A server explicitly returns both `retryable` and `safe_to_retry`. The latter is
   set only for a direct engine-certified rejection before proposal. Generic
   error sentinels and nested causes do not certify the current operation.

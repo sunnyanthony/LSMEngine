@@ -53,8 +53,9 @@ type cachedRouteShard struct {
 
 // WriteRequestError describes a failed write response from a node endpoint.
 type WriteRequestError struct {
-	Status   int
-	Response writeErrorResponse
+	attemptedLeader string
+	Status          int
+	Response        writeErrorResponse
 }
 
 func (e *WriteRequestError) Error() string {
@@ -86,12 +87,22 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		endpoints[trimmedNode] = trimmedEndpoint
 	}
 	client := opts.HTTPClient
+	dialRetry := client == nil
 	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
+		// Do not trust the replaceable DefaultTransport or a caller's transport
+		// (including registered alternate protocols) to certify non-submission.
+		client = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		}}
 	}
 	ownedClient := *client
 	ownedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	_, standardTransport := client.Transport.(*http.Transport)
 	probeTimeout := opts.RouteProbeTimeout
 	if probeTimeout < 0 {
 		return nil, fmt.Errorf("route probe timeout must be positive")
@@ -101,7 +112,7 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 	}
 	return &Gateway{
 		routeProbeTimeout: probeTimeout,
-		dialRetry:         client.Transport == nil || standardTransport,
+		dialRetry:         dialRetry,
 		bootstrapURL:      bootstrapURL,
 		nodeEndpoints:     endpoints,
 		client:            &ownedClient,
@@ -144,7 +155,7 @@ func (g *Gateway) writeWithRetry(
 	if errors.As(err, &unsubmitted) {
 		excluded = unsubmitted.leader
 	} else if errors.As(err, &reqErr) && reqErr.Response.Retryable && reqErr.Response.SafeToRetry {
-		excluded, _ = g.lookupLeader(key)
+		excluded = reqErr.attemptedLeader
 	} else {
 		return lsm.WriteRequestStatus{}, err
 	}
@@ -220,8 +231,9 @@ func (g *Gateway) writeOnce(
 		}
 	}
 	return lsm.WriteRequestStatus{}, &WriteRequestError{
-		Status:   resp.StatusCode,
-		Response: writeErr,
+		attemptedLeader: leader,
+		Status:          resp.StatusCode,
+		Response:        writeErr,
 	}
 }
 
