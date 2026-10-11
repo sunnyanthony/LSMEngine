@@ -7,6 +7,11 @@ and the caller context. Failed probes, unknown leaders, and a rejected old leade
 do not prevent trying another source. Leadership changes need not advance control
 metadata revision; the gateway refreshes after a certified rejection regardless.
 
+`GatewayOptions.RequestTimeout` configures the gateway-owned HTTP client (default
+3 seconds). It cannot be combined with a supplied `HTTPClient`; that client owns
+its timeout policy. The cluster write CLI sets the owned-client timeout to match
+its overall `--timeout`, while caller context still bounds the full operation.
+
 Put/Delete make at most one explicit retry. It is allowed only after:
 
 - The gateway-owned HTTP transport reports a dial failure before the request

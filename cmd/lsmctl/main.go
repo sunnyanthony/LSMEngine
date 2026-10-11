@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -32,6 +33,14 @@ func main() {
 		statsCmd(os.Args[2:])
 	case "health":
 		healthCmd(os.Args[2:])
+	case "cluster-put", "cluster-delete":
+		operation := "put"
+		if os.Args[1] == "cluster-delete" {
+			operation = "delete"
+		}
+		if err := runClusterWrite(context.Background(), operation, os.Args[2:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+			log.Fatal(err)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -39,7 +48,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|stats|health> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|stats|health|cluster-put|cluster-delete> [options]")
 }
 
 func serveCmd(args []string) {

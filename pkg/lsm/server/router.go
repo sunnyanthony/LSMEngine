@@ -19,6 +19,9 @@ import (
 
 // GatewayOptions configures route-aware write forwarding.
 type GatewayOptions struct {
+	// RequestTimeout bounds requests on the gateway-owned client (default 3 s).
+	// It cannot be combined with HTTPClient, which owns its timeout policy.
+	RequestTimeout time.Duration
 	// RouteProbeTimeout bounds each read-only discovery request (default 500 ms).
 	RouteProbeTimeout time.Duration
 	BootstrapURL      string
@@ -87,11 +90,21 @@ func NewGateway(opts GatewayOptions) (*Gateway, error) {
 		endpoints[trimmedNode] = trimmedEndpoint
 	}
 	client := opts.HTTPClient
+	requestTimeout := opts.RequestTimeout
+	if requestTimeout < 0 {
+		return nil, fmt.Errorf("request timeout must be positive")
+	}
+	if client != nil && requestTimeout != 0 {
+		return nil, fmt.Errorf("request timeout cannot be combined with HTTPClient")
+	}
+	if requestTimeout == 0 {
+		requestTimeout = 3 * time.Second
+	}
 	dialRetry := client == nil
 	if client == nil {
 		// Do not trust the replaceable DefaultTransport or a caller's transport
 		// (including registered alternate protocols) to certify non-submission.
-		client = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
+		client = &http.Client{Timeout: requestTimeout, Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			ForceAttemptHTTP2:     true,
