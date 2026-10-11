@@ -38,7 +38,9 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 		}
 		return out
 	}
-	run("go", "build", "-o", binary, "../../../cmd/lsmctl")
+	// Docker mounts may not expose usable Git metadata; version stamping is not
+	// part of the executable behavior under test.
+	run("go", "build", "-buildvcs=false", "-o", binary, "../../../cmd/lsmctl")
 	names := []string{"node-a", "node-b", "node-c"}
 	endpoints := map[string]string{}
 	listeners := make([]net.Listener, 3)
