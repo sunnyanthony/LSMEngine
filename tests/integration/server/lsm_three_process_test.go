@@ -147,6 +147,15 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		for i, p := range processes {
+			if p == nil {
+				continue
+			}
+			var status lsm.ClusterStatus
+			started := time.Now()
+			ok := read(i, "/cluster/status", &status)
+			t.Logf("%s status available=%v latency=%s runtime=%+v", names[i], ok, time.Since(started), status.CommitLogRuntime)
+		}
 		t.Fatalf("timed out: %s", label)
 	}
 	leader := -1
@@ -210,20 +219,24 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 			}
 		}
 	}
+	t.Log("initial election and writes")
 	awaitLeader()
 	write("cluster-put", "retained", "before-restart")
 	write("cluster-put", "deleted", "remove-me")
 	awaitReplicas()
 	stopped := leader
+	t.Logf("stop leader %s; elect replacement and write", names[stopped])
 	if err := stop(stopped); err != nil {
 		t.Fatal(err)
 	}
 	awaitLeader()
 	write("cluster-put", "offline", "while-leader-stopped")
 	write("cluster-delete", "deleted", "")
+	t.Logf("restart %s and wait for catch-up", names[stopped])
 	start(stopped)
 	awaitLeader()
 	awaitReplicas()
+	t.Log("stop and restart all nodes")
 	stopAll()
 	for i := range processes {
 		start(i)
@@ -232,6 +245,7 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 	write("cluster-put", "restarted", "after-full-restart")
 	awaitReplicas()
 	stopAll()
+	t.Log("verify each stopped replica through engine recovery")
 	// Open only after all processes exit. Verify actual values, not just counters.
 	for i, cfg := range configs {
 		peerURLs := map[uint64]string{}
