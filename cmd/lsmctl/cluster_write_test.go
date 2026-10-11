@@ -127,3 +127,42 @@ func TestClusterWriteCLIDeadline(t *testing.T) {
 		t.Fatalf("deadline not respected: %v", err)
 	}
 }
+
+func TestClusterWriteCLIWriteDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, timeout string
+		succeeds      bool
+	}{
+		{"slow-commit", "5s", true}, {"deadline", "20ms", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/cluster/routes" {
+					_, _ = io.WriteString(w, `{"shards":[{"id":"default","leader":"a"}]}`)
+					return
+				}
+				select {
+				case <-time.After(3500 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				_ = json.NewEncoder(w).Encode(lsm.WriteRequestStatus{RequestID: "id", Operation: "put", Consistency: lsm.WriteConsistencyLocalCommitted, State: lsm.WriteRequestCommitted})
+			}))
+			defer endpoint.Close()
+			nodes, _ := json.Marshal(map[string]string{"a": endpoint.URL})
+			var output bytes.Buffer
+			err := runClusterWrite(context.Background(), "put", []string{"--bootstrap-url", endpoint.URL, "--node-endpoints", string(nodes), "--key", "k", "--value", "v", "--timeout", tc.timeout}, &output, io.Discard)
+			if tc.succeeds {
+				if err != nil {
+					t.Fatalf("write cut off before CLI deadline: %v", err)
+				}
+				var status lsm.WriteRequestStatus
+				if err := json.Unmarshal(output.Bytes(), &status); err != nil || status.State != lsm.WriteRequestCommitted {
+					t.Fatalf("missing committed status: %v %+v", err, status)
+				}
+			} else if !errors.Is(err, context.DeadlineExceeded) || output.Len() != 0 {
+				t.Fatalf("write deadline: err=%v output=%s", err, output.String())
+			}
+		})
+	}
+}

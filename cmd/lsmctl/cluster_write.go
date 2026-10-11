@@ -83,7 +83,7 @@ func runClusterWrite(ctx context.Context, operation string, args []string, stdou
 			return fmt.Errorf("node %q: %w", id, err)
 		}
 	}
-	gateway, err := server.NewGateway(server.GatewayOptions{BootstrapURL: bootstrapURL, NodeEndpoints: cleaned})
+	gateway, err := server.NewGateway(server.GatewayOptions{BootstrapURL: bootstrapURL, NodeEndpoints: cleaned, RequestTimeout: *timeout})
 	if err != nil {
 		return err
 	}
