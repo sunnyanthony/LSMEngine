@@ -1,4 +1,4 @@
-FROM golang:1.21
+FROM golang:1.23
 
 WORKDIR /app
 ENV CGO_ENABLED=0 GOCACHE=/tmp/go-build
