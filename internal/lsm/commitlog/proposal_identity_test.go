@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 func TestPendingProposalRejectsForeignAndStaleIdentity(t *testing.T) {

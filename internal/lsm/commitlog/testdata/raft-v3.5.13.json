@@ -1,0 +1,38 @@
+{
+  "hard_state": {
+    "term": 2,
+    "vote": 16615780970300754771,
+    "commit": 5
+  },
+  "entries": [
+    {
+      "Term": 1,
+      "Index": 1,
+      "Type": 1,
+      "Data": "CAAQABjTluODopjHy+YB"
+    },
+    {
+      "Term": 2,
+      "Index": 2,
+      "Type": 0
+    },
+    {
+      "Term": 2,
+      "Index": 3,
+      "Type": 0,
+      "Data": "eyJwcm9wb3NlciI6MTY2MTU3ODA5NzAzMDA3NTQ3NzEsInJlcXVlc3RfaWQiOiIzYWM2NzA1Yjc3NjIxMzJmMzI5ZWE1ZTgwOTRiMzM3OCIsImlkIjoxLCJraW5kIjoiZGF0YSIsImRhdGEiOnsiS2luZCI6InB1dCIsIktleSI6ImNtVjBZV2x1WldRPSIsIlZhbHVlIjoiYkdWbllXTjVMWFpoYkhWbCJ9fQ=="
+    },
+    {
+      "Term": 2,
+      "Index": 4,
+      "Type": 0,
+      "Data": "eyJwcm9wb3NlciI6MTY2MTU3ODA5NzAzMDA3NTQ3NzEsInJlcXVlc3RfaWQiOiI2MmZmZTA3MzBkYzQyNjc4OGY1MzhjZjcyMDVhYjgyNCIsImlkIjoyLCJraW5kIjoiZGF0YSIsImRhdGEiOnsiS2luZCI6InB1dCIsIktleSI6IlpHVnNaWFJsWkE9PSIsIlZhbHVlIjoiY21WdGIzWmxMVzFsIn19"
+    },
+    {
+      "Term": 2,
+      "Index": 5,
+      "Type": 0,
+      "Data": "eyJwcm9wb3NlciI6MTY2MTU3ODA5NzAzMDA3NTQ3NzEsInJlcXVlc3RfaWQiOiI4OGU2YzFlMzRmNDFkNmQxMDc4NWU4MmIwOWE1NDI3NSIsImlkIjozLCJraW5kIjoiZGF0YSIsImRhdGEiOnsiS2luZCI6ImRlbGV0ZSIsIktleSI6IlpHVnNaWFJsWkE9PSIsIlZhbHVlIjpudWxsfX0="
+    }
+  ]
+}

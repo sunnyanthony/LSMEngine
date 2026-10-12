@@ -18,13 +18,17 @@ Lightweight LSM tree skeleton in Go. This is a starter layout for a custom NoSQL
 - Close drains flush queues best-effort within `CloseTimeout`; new writes return `ErrClosed`.
 
 ## Quick start
+Requires Go 1.23 or newer. The built-in Raft adapter uses `go.etcd.io/raft/v3`
+v3.6.0 for independently randomized elections; see [election fix](docs/raft-election-randomness.md).
+
 ```bash
 go test ./...
 ```
 
 ## Testing
 - Default tests: `go test ./...`
-- Integration + test-only hooks: `go test -tags test ./tests/integration`
+- Integration + test-only hooks: `go test -tags test ./tests/integration/...`
+- Three-process restart smoke: see [cluster smoke test](docs/three-process-smoke.md).
 - Docker (cached fast path, runs tests with `-tags test`): `scripts/docker-test.sh`
 
 Design docs:

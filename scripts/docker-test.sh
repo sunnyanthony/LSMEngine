@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${LSM_DOCKER_TEST_IMAGE:-golang:1.21}"
+IMAGE="${LSM_DOCKER_TEST_IMAGE:-golang:1.23}"
 MODE="${LSM_DOCKER_TEST_MODE:-run}" # run|build
 TAGS="${LSM_DOCKER_TEST_TAGS:-test}"
 PKGS="${LSM_DOCKER_TEST_PKGS:-./...}"
