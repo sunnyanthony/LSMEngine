@@ -475,6 +475,9 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) (err erro
 		err := c.transport.Send(sendCtx, encoded)
 		c.mu.Lock()
 		cancel()
+		if c.terminalErr != nil {
+			return c.terminalErr
+		}
 		if err != nil {
 			if delivery, ok := err.(*DeliveryError); ok && delivery != nil && len(delivery.Peers) > 0 {
 				// Only classify failures of destinations in this exact batch.

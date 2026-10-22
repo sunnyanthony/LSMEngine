@@ -2,8 +2,13 @@ package commitlog
 
 import (
 	"context"
+	"errors"
 	"os"
+	"sync"
 	"testing"
+	"time"
+
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 func TestReadyPersistenceFailureStopsProviderUntilReopen(t *testing.T) {
@@ -61,5 +66,93 @@ func TestReadyPersistenceFailureStopsProviderUntilReopen(t *testing.T) {
 	}
 	if _, err := reopened.CommitData(context.Background(), DataMutation{Kind: "put", Key: []byte("recovered"), Value: []byte("value")}); err != nil {
 		t.Fatalf("reopened provider did not resume: %v", err)
+	}
+}
+
+type blockedReadyTransport struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (b *blockedReadyTransport) Send(ctx context.Context, _ []PeerMessage) error {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.release:
+		return b.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestReadyFailureWinsOverConcurrentTransportResult(t *testing.T) {
+	for _, delivery := range []bool{false, true} {
+		name := "generic-error"
+		if delivery {
+			name = "delivery-error"
+		}
+		t.Run(name, func(t *testing.T) {
+			other := stableRaftNodeID("node-b")
+			transport := &blockedReadyTransport{entered: make(chan struct{}, 1), release: make(chan struct{}), err: errors.New("transport failed")}
+			if delivery {
+				transport.err = &DeliveryError{Peers: []uint64{other}, Cause: transport.err}
+			}
+			c, err := newEtcdRaftConsensus(Config{DataDir: t.TempDir(), NodeID: "node-a", Peers: []string{"node-a", "node-b"}, Transport: transport})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			var release sync.Once
+			defer func() {
+				release.Do(func() { close(transport.release) })
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("blocked transport did not exit")
+				}
+			}()
+			go func() {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				if err := c.rawNode.Campaign(); err != nil {
+					done <- err
+					return
+				}
+				done <- c.advanceUntilStableLocked(context.Background())
+			}()
+			select {
+			case <-transport.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("campaign did not enter transport")
+			}
+			if err := os.Mkdir(c.storage.path+".tmp", 0700); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := encodeRaftPeerMessages([]raftpb.Message{{Type: raftpb.MsgVote, From: other, To: c.nodeID, Term: 10, LogTerm: 1, Index: 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := c.HandlePeerMessages(context.Background(), messages)
+			if failure == nil {
+				t.Fatal("concurrent persistence unexpectedly succeeded")
+			}
+			release.Do(func() { close(transport.release) })
+			select {
+			case result := <-done:
+				// Leave a completion signal for deferred goroutine cleanup.
+				done <- result
+				if result != failure {
+					t.Fatalf("transport replaced terminal failure: got %v, want %v", result, failure)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("transport did not return")
+			}
+			if c.RuntimeStatus().DeliveryFailures != 0 {
+				t.Fatal("transport mutated terminal provider delivery state")
+			}
+		})
 	}
 }
