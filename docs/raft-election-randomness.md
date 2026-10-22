@@ -30,6 +30,12 @@ adapter instead of patching private library state or adding a second election
 algorithm. Election/tick intervals and smoke-test deadlines were not increased.
 Temporary reflection and persistence-timing diagnostics were removed.
 
+The adapter also treats a failure before `Ready` is advanced as terminal. It
+does not acknowledge unpersisted entries or request another Ready batch after
+discarding a failed one. Ticks, inbound messages, and new proposals return the
+original error; waiting proposers are notified. Reopening from durable state is
+required to resume. The persistence-failure regression checks this lifecycle.
+
 ## Validation and compatibility
 
 - The [three-process smoke test](three-process-smoke.md) checks startup elections,
