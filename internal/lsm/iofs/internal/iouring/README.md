@@ -12,7 +12,8 @@ socket address conversions. Those conversions derive from the Go standard
 library; see LICENSE-Go. The upstream library's MIT license is in LICENSE.
 
 Only root production Go files and the syscall subpackage are copied. Internal
-imports are relocated. Upstream examples, module files and tests are not copied;
+imports are relocated and files are formatted with gofmt. Upstream examples,
+module files and tests are not copied;
 LSMEngine maintains adapter and compatibility tests separately. Do not expose
 this package as a new public API or add unrelated upstream changes here.
 
