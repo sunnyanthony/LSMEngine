@@ -94,10 +94,6 @@ func (register *fileRegister) register() error {
 	return nil
 }
 
-func (register *fileRegister) unregister() error {
-	return iouring_syscall.IOURingRegister(register.iouringFd, iouring_syscall.IORING_UNREGISTER_FILES, nil, 0)
-}
-
 func (register *fileRegister) RegisterFiles(fds []int32) error {
 	if len(fds) == 0 {
 		return errors.New("file set is empty")

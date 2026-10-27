@@ -17,6 +17,21 @@ module files and tests are not copied;
 LSMEngine maintains adapter and compatibility tests separately. Do not expose
 this package as a new public API or add unrelated upstream changes here.
 
+Local correction: Connect retains the separately allocated raw socket address
+until request completion; retaining only the original Sockaddr is insufficient.
+
+Additional local corrections use syscall.Mmap-owned byte slices and
+unsafe.Add/Slice for queue views instead of uintptr/reflect.SliceHeader
+conversions. Shared mappings cover the larger of SQ and CQ. Partial mapping
+initialization is cleaned up, including closing the ring descriptor on failure.
+Reserved ABI fields remain as blank padding; an unused unregister helper and
+an impossible unsigned-negative syscall result check were removed.
+
+Repeated real-ring tests need adequate locked-memory allowance on older kernels.
+On the development Linux arm64 Docker host, 100 strict read/write iterations
+passed with an 8 MiB container memlock limit; the default 64 KiB limit produced
+intermittent ENOMEM. ENOMEM is not treated as a passing test or skip.
+
 A module-level replace was deliberately avoided: consumers of LSMEngine do not
 inherit replacement directives. Keeping this compatibility copy internal also
 avoids disabling the Go linker's checks or removing the Linux backend.

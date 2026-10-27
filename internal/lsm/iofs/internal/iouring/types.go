@@ -4,7 +4,6 @@
 package iouring
 
 import (
-	"reflect"
 	"sync/atomic"
 	"unsafe"
 
@@ -73,7 +72,7 @@ type SubmissionQueueRing interface {
 	isActive() bool
 	entrySz() uint32
 	ringSz() uint32
-	assignQueue(ptr uintptr, len int)
+	assignQueue(ptr unsafe.Pointer, len int)
 	mappedPtr() uintptr
 	index(index uint32) iouring_syscall.SubmissionQueueEntry
 }
@@ -102,13 +101,8 @@ func (ring *SubmissionQueueRing64) ringSz() uint32 {
 	return uint32(len(ring.queue)) * ring.entrySz()
 }
 
-func (ring *SubmissionQueueRing64) assignQueue(ptr uintptr, len int) {
-	ring.queue = *(*[]iouring_syscall.SubmissionQueueEntry64)(
-		unsafe.Pointer(&reflect.SliceHeader{
-			Data: ptr,
-			Len:  len,
-			Cap:  len,
-		}))
+func (ring *SubmissionQueueRing64) assignQueue(ptr unsafe.Pointer, len int) {
+	ring.queue = unsafe.Slice((*iouring_syscall.SubmissionQueueEntry64)(ptr), len)
 }
 
 func (ring *SubmissionQueueRing64) mappedPtr() uintptr {
@@ -135,13 +129,8 @@ func (ring *SubmissionQueueRing128) ringSz() uint32 {
 	return uint32(len(ring.queue)) * ring.entrySz()
 }
 
-func (ring *SubmissionQueueRing128) assignQueue(ptr uintptr, len int) {
-	ring.queue = *(*[]iouring_syscall.SubmissionQueueEntry128)(
-		unsafe.Pointer(&reflect.SliceHeader{
-			Data: ptr,
-			Len:  len,
-			Cap:  len,
-		}))
+func (ring *SubmissionQueueRing128) assignQueue(ptr unsafe.Pointer, len int) {
+	ring.queue = unsafe.Slice((*iouring_syscall.SubmissionQueueEntry128)(ptr), len)
 }
 
 func (ring *SubmissionQueueRing128) mappedPtr() uintptr {
@@ -153,8 +142,9 @@ func (ring *SubmissionQueueRing128) index(index uint32) iouring_syscall.Submissi
 }
 
 type SubmissionQueue struct {
-	ptr  uintptr
-	size uint32
+	ptr     unsafe.Pointer
+	mapping []byte
+	size    uint32
 
 	head    *uint32
 	tail    *uint32
@@ -163,8 +153,9 @@ type SubmissionQueue struct {
 	flags   *uint32 // used by the kernel to communicate stat information to the application
 	dropped *uint32 // incrementd for each invalid submission queue entry encountered in the ring buffer
 
-	array []uint32
-	sqes  SubmissionQueueRing // submission queue ring
+	array      []uint32
+	sqeMapping []byte
+	sqes       SubmissionQueueRing // submission queue ring
 
 	sqeHead uint32
 	sqeTail uint32
@@ -217,7 +208,7 @@ type CompletionQueueRing interface {
 	isActive() bool
 	entrySz() uint32
 	ringSz() uint32
-	assignQueue(ptr uintptr, len int)
+	assignQueue(ptr unsafe.Pointer, len int)
 	mappedPtr() uintptr
 	index(index uint32) iouring_syscall.CompletionQueueEvent
 }
@@ -246,13 +237,8 @@ func (ring *CompletionQueueRing16) ringSz() uint32 {
 	return uint32(len(ring.queue)) * ring.entrySz()
 }
 
-func (ring *CompletionQueueRing16) assignQueue(ptr uintptr, len int) {
-	ring.queue = *(*[]iouring_syscall.CompletionQueueEvent16)(
-		unsafe.Pointer(&reflect.SliceHeader{
-			Data: ptr,
-			Len:  len,
-			Cap:  len,
-		}))
+func (ring *CompletionQueueRing16) assignQueue(ptr unsafe.Pointer, len int) {
+	ring.queue = unsafe.Slice((*iouring_syscall.CompletionQueueEvent16)(ptr), len)
 }
 
 func (ring *CompletionQueueRing16) mappedPtr() uintptr {
@@ -279,13 +265,8 @@ func (ring *CompletionQueueRing32) ringSz() uint32 {
 	return uint32(len(ring.queue)) * ring.entrySz()
 }
 
-func (ring *CompletionQueueRing32) assignQueue(ptr uintptr, len int) {
-	ring.queue = *(*[]iouring_syscall.CompletionQueueEvent32)(
-		unsafe.Pointer(&reflect.SliceHeader{
-			Data: ptr,
-			Len:  len,
-			Cap:  len,
-		}))
+func (ring *CompletionQueueRing32) assignQueue(ptr unsafe.Pointer, len int) {
+	ring.queue = unsafe.Slice((*iouring_syscall.CompletionQueueEvent32)(ptr), len)
 }
 
 func (ring *CompletionQueueRing32) mappedPtr() uintptr {
@@ -297,8 +278,9 @@ func (ring *CompletionQueueRing32) index(index uint32) iouring_syscall.Completio
 }
 
 type CompletionQueue struct {
-	ptr  uintptr
-	size uint32
+	ptr     unsafe.Pointer
+	mapping []byte
+	size    uint32
 
 	head     *uint32
 	tail     *uint32

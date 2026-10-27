@@ -190,7 +190,7 @@ func (sqe *sqeCore) SetSpliceFdIn(fdIn int32) {
 type SubmissionQueueEntry64 struct {
 	sqeCore
 
-	extra [2]uint64
+	_ [2]uint64 // Reserved bytes preserve the 64-byte kernel SQE layout.
 }
 
 func (sqe *SubmissionQueueEntry64) Reset() {

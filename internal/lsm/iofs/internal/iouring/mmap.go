@@ -4,9 +4,8 @@
 package iouring
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"reflect"
 	"syscall"
 	"unsafe"
 
@@ -18,7 +17,7 @@ const uint32Size = uint32(unsafe.Sizeof(uint32(0)))
 func mmapIOURing(iour *IOURing) (err error) {
 	defer func() {
 		if err != nil {
-			munmapIOURing(iour)
+			err = errors.Join(err, munmapIOURing(iour))
 		}
 	}()
 	iour.sq = new(SubmissionQueue)
@@ -47,23 +46,26 @@ func mmapSQ(iour *IOURing) (err error) {
 	params := iour.params
 
 	sq.size = params.SQOffset.Array + params.SQEntries*uint32Size
-	sq.ptr, err = mmap(iour.fd, sq.size, iouring_syscall.IORING_OFF_SQ_RING)
+	if params.Features&iouring_syscall.IORING_FEAT_SINGLE_MMAP != 0 {
+		cqSize := params.CQOffset.Cqes + params.CQEntries*makeCompletionQueueRing(params.Flags).entrySz()
+		if cqSize > sq.size {
+			sq.size = cqSize
+		}
+	}
+	sq.mapping, err = mmap(iour.fd, sq.size, iouring_syscall.IORING_OFF_SQ_RING)
 	if err != nil {
 		return fmt.Errorf("mmap sq ring: %w", err)
 	}
 
-	sq.head = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.Head)))
-	sq.tail = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.Tail)))
-	sq.mask = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.RingMask)))
-	sq.entries = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.RingEntries)))
-	sq.flags = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.Flags)))
-	sq.dropped = (*uint32)(unsafe.Pointer(sq.ptr + uintptr(params.SQOffset.Dropped)))
+	sq.ptr = unsafe.Pointer(&sq.mapping[0])
+	sq.head = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.Head))
+	sq.tail = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.Tail))
+	sq.mask = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.RingMask))
+	sq.entries = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.RingEntries))
+	sq.flags = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.Flags))
+	sq.dropped = (*uint32)(unsafe.Add(sq.ptr, params.SQOffset.Dropped))
 
-	sq.array = *(*[]uint32)(unsafe.Pointer(&reflect.SliceHeader{
-		Data: sq.ptr + uintptr(params.SQOffset.Array),
-		Len:  int(params.SQEntries),
-		Cap:  int(params.SQEntries),
-	}))
+	sq.array = unsafe.Slice((*uint32)(unsafe.Add(sq.ptr, params.SQOffset.Array)), int(params.SQEntries))
 
 	return nil
 }
@@ -75,21 +77,24 @@ func mmapCQ(iour *IOURing) (err error) {
 	cqes := makeCompletionQueueRing(params.Flags)
 
 	cq.size = params.CQOffset.Cqes + params.CQEntries*cqes.entrySz()
-	if cq.ptr == 0 {
-		cq.ptr, err = mmap(iour.fd, cq.size, iouring_syscall.IORING_OFF_CQ_RING)
+	if cq.ptr == nil {
+		cq.mapping, err = mmap(iour.fd, cq.size, iouring_syscall.IORING_OFF_CQ_RING)
 		if err != nil {
 			return fmt.Errorf("mmap cq ring: %w", err)
 		}
 	}
 
-	cq.head = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.Head)))
-	cq.tail = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.Tail)))
-	cq.mask = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.RingMask)))
-	cq.entries = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.RingEntries)))
-	cq.flags = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.Flags)))
-	cq.overflow = (*uint32)(unsafe.Pointer(cq.ptr + uintptr(params.CQOffset.Overflow)))
+	if cq.ptr == nil {
+		cq.ptr = unsafe.Pointer(&cq.mapping[0])
+	}
+	cq.head = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.Head))
+	cq.tail = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.Tail))
+	cq.mask = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.RingMask))
+	cq.entries = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.RingEntries))
+	cq.flags = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.Flags))
+	cq.overflow = (*uint32)(unsafe.Add(cq.ptr, params.CQOffset.Overflow))
 
-	cqes.assignQueue(cq.ptr+uintptr(params.CQOffset.Cqes), int(params.CQEntries))
+	cqes.assignQueue(unsafe.Add(cq.ptr, params.CQOffset.Cqes), int(params.CQEntries))
 	cq.cqes = cqes
 
 	return nil
@@ -105,66 +110,39 @@ func mmapSQEs(iour *IOURing) error {
 		return fmt.Errorf("mmap sqe array: %w", err)
 	}
 
-	sqes.assignQueue(ptr, int(params.SQEntries))
+	iour.sq.sqeMapping = ptr
+	sqes.assignQueue(unsafe.Pointer(&ptr[0]), int(params.SQEntries))
 	iour.sq.sqes = sqes
 
 	return nil
 }
 
 func munmapIOURing(iour *IOURing) error {
-	if iour.sq != nil && iour.sq.ptr != 0 {
-		if iour.sq.sqes.isActive() {
-			err := munmap(iour.sq.sqes.mappedPtr(), iour.sq.sqes.ringSz())
-			if err != nil {
-				return fmt.Errorf("ummap sqe array: %w", err)
-			}
-			iour.sq.sqes = nil
+	var errs []error
+	unmap := func(mapping *[]byte) {
+		if len(*mapping) == 0 {
+			return
 		}
-
-		if err := munmap(iour.sq.ptr, iour.sq.size); err != nil {
-			return fmt.Errorf("munmap sq: %w", err)
+		if err := syscall.Munmap(*mapping); err != nil {
+			errs = append(errs, err)
+		} else {
+			*mapping = nil
 		}
-		if iour.sq.ptr == iour.cq.ptr {
-			iour.cq = nil
-		}
-		iour.sq = nil
 	}
-
-	if iour.cq != nil && iour.cq.ptr != 0 {
-		if err := munmap(iour.cq.ptr, iour.cq.size); err != nil {
-			return fmt.Errorf("munmap cq: %w", err)
-		}
-		iour.cq = nil
+	// A shared SQ/CQ mapping is owned only by the submission queue.
+	if iour.sq != nil {
+		unmap(&iour.sq.sqeMapping)
+		unmap(&iour.sq.mapping)
 	}
-
-	return nil
+	if iour.cq != nil {
+		unmap(&iour.cq.mapping)
+	}
+	if len(errs) == 0 {
+		iour.sq, iour.cq = nil, nil
+	}
+	return errors.Join(errs...)
 }
 
-func mmap(fd int, length uint32, offset uint64) (uintptr, error) {
-	ptr, _, errno := syscall.Syscall6(
-		syscall.SYS_MMAP,
-		0,
-		uintptr(length),
-		syscall.PROT_READ|syscall.PROT_WRITE,
-		syscall.MAP_SHARED|syscall.MAP_POPULATE,
-		uintptr(fd),
-		uintptr(offset),
-	)
-	if errno != 0 {
-		return 0, os.NewSyscallError("mmap", errno)
-	}
-	return uintptr(ptr), nil
-}
-
-func munmap(ptr uintptr, length uint32) error {
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_MUNMAP,
-		ptr,
-		uintptr(length),
-		0,
-	)
-	if errno != 0 {
-		return os.NewSyscallError("munmap", errno)
-	}
-	return nil
+func mmap(fd int, length uint32, offset uint64) ([]byte, error) {
+	return syscall.Mmap(fd, int64(offset), int(length), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED|syscall.MAP_POPULATE)
 }

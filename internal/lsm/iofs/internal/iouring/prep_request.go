@@ -501,7 +501,8 @@ func Connect(sockfd int, sa syscall.Sockaddr) (PrepRequest, error) {
 	}
 
 	return func(sqe iouring_syscall.SubmissionQueueEntry, userData *UserData) {
-		userData.hold(sa)
+		// The SQE's integer address is not a GC root for sockaddr's allocation.
+		userData.hold(sa, ptr)
 		userData.request.resolver = errResolver
 
 		sqe.PrepOperation(

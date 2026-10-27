@@ -64,8 +64,7 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 	}
 
 	if err := mmapIOURing(iour); err != nil {
-		munmapIOURing(iour)
-		return nil, err
+		return nil, errors.Join(err, syscall.Close(iour.fd))
 	}
 
 	iour.fileRegister = &fileRegister{

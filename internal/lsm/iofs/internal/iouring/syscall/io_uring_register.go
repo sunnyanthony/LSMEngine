@@ -27,7 +27,7 @@ const (
 
 type IOURingFilesUpdate struct {
 	Offset uint32
-	recv   uint32
+	_      uint32 // Reserved kernel ABI padding.
 	Fds    *int32
 }
 
