@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	iouring "github.com/iceber/iouring-go"
+	iouring "lsmengine/internal/lsm/iofs/internal/iouring"
 )
 
 func newIOUringFS(base FS, cfg AsyncConfig) (FS, error) {
