@@ -46,6 +46,8 @@ type IOURing struct {
 // New return a IOURing instance by IOURingOptions
 func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 	iour := &IOURing{
+		fd:        -1,
+		eventfd:   -1,
 		params:    &iouring_syscall.IOURingParams{},
 		userDatas: make(map[uint64]*UserData),
 		cqeSign:   make(chan struct{}, 1),
@@ -74,18 +76,37 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 	iour.Flags = iour.params.Flags
 	iour.Features = iour.params.Features
 
-	if err := iour.registerEventfd(); err != nil {
-		iour.Close()
-		return nil, err
-	}
-
-	if err := registerIOURing(iour); err != nil {
-		iour.Close()
+	if err := iour.initializeNotifications(iour.registerEventfd, func() error { return registerIOURing(iour) }); err != nil {
 		return nil, err
 	}
 
 	go iour.run()
 	return iour, nil
+}
+
+// Initialization failures precede poller membership and the completion goroutine.
+// Normal Close waits for that goroutine, so it cannot clean up this state.
+func (iour *IOURing) initializeNotifications(eventfd, register func() error) error {
+	if err := eventfd(); err != nil {
+		return errors.Join(err, iour.closeUnstarted())
+	}
+	if err := register(); err != nil {
+		return errors.Join(err, iour.closeUnstarted())
+	}
+	return nil
+}
+
+func (iour *IOURing) closeUnstarted() error {
+	err := munmapIOURing(iour)
+	if iour.eventfd >= 0 {
+		err = errors.Join(err, syscall.Close(iour.eventfd))
+		iour.eventfd = -1
+	}
+	if iour.fd >= 0 && !iour.fdclosed {
+		err = errors.Join(err, syscall.Close(iour.fd))
+		iour.fdclosed = true
+	}
+	return err
 }
 
 // Size iouring submission queue size
@@ -104,7 +125,7 @@ func (iour *IOURing) Close() error {
 		close(iour.closer)
 	}
 
-	if iour.eventfd > 0 {
+	if iour.eventfd >= 0 {
 		if err := removeIOURing(iour); err != nil {
 			return err
 		}
