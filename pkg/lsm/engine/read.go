@@ -6,6 +6,8 @@ import (
 	"context"
 	"lsmengine/pkg/lsm/errs"
 	"lsmengine/pkg/lsm/types"
+	"sync"
+	"time"
 )
 
 // GetContext reads this node's locally applied state, not a quorum snapshot.
@@ -20,17 +22,27 @@ func (l *LSM) GetContext(ctx context.Context, key []byte) (types.Entry, bool, er
 	if err := ctx.Err(); err != nil {
 		return types.Entry{}, false, err
 	}
-	l.readMu.RLock()
+	if l.isClosing() {
+		return types.Entry{}, false, errs.ErrClosed
+	}
+	if err := readLockContext(ctx, &l.readMu); err != nil {
+		return types.Entry{}, false, err
+	}
 	defer l.readMu.RUnlock()
 	if l.isClosing() {
 		return types.Entry{}, false, errs.ErrClosed
 	}
 	// Keep memtables from being recycled until their values have been copied.
-	l.memMu.RLock()
+	if err := readLockContext(ctx, &l.memMu); err != nil {
+		return types.Entry{}, false, err
+	}
 	if l.mem != nil {
 		if entry, ok := l.mem.Get(key); ok {
 			entry = copyEntry(entry)
 			l.memMu.RUnlock()
+			if err := ctx.Err(); err != nil {
+				return types.Entry{}, false, err
+			}
 			return entry, !entry.Tombstone, nil
 		}
 	}
@@ -38,6 +50,9 @@ func (l *LSM) GetContext(ctx context.Context, key []byte) (types.Entry, bool, er
 		if entry, ok := l.immutables[i].Get(key); ok {
 			entry = copyEntry(entry)
 			l.memMu.RUnlock()
+			if err := ctx.Err(); err != nil {
+				return types.Entry{}, false, err
+			}
 			return entry, !entry.Tombstone, nil
 		}
 	}
@@ -61,6 +76,37 @@ func (l *LSM) GetContext(ctx context.Context, key []byte) (types.Entry, bool, er
 		}
 	}
 	return types.Entry{}, false, ctx.Err()
+}
+
+// RWMutex has no cancellable acquisition. Try the uncontended path first, then
+// retry on a bounded timer rather than leaking a goroutine blocked in RLock.
+func readLockContext(ctx context.Context, mu *sync.RWMutex) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if mu.TryRLock() {
+		if err := ctx.Err(); err != nil {
+			mu.RUnlock()
+			return err
+		}
+		return nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if mu.TryRLock() {
+				if err := ctx.Err(); err != nil {
+					mu.RUnlock()
+					return err
+				}
+				return nil
+			}
+		}
+	}
 }
 
 func (l *LSM) Get(key []byte) (types.Entry, bool) {

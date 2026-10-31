@@ -113,3 +113,49 @@ func TestGetContextLocalState(t *testing.T) {
 		t.Fatalf("closed: %v", err)
 	}
 }
+
+func TestGetContextCanceledDuringLockWait(t *testing.T) {
+	for _, which := range []string{"admission", "memtable"} {
+		t.Run(which, func(t *testing.T) {
+			l, err := New(Options{DataDir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			if err := l.Put([]byte("key"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			mu := &l.readMu
+			if which == "memtable" {
+				mu = &l.memMu
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, _, err := l.GetContext(ctx, []byte("key")); done <- err }()
+			// Keep the lock held until the read returns: a blocking RLock cannot pass.
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("wait: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("read ignored deadline while waiting for lock")
+			}
+		})
+	}
+}
+
+func TestGetContextRejectsClosingWithoutLockWait(t *testing.T) {
+	l := &LSM{}
+	l.closing.Store(true)
+	l.readMu.Lock()
+	defer l.readMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, _, err := l.GetContext(ctx, []byte("key")); !errors.Is(err, errs.ErrClosed) {
+		t.Fatalf("closing read: %v", err)
+	}
+}
