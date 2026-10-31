@@ -173,6 +173,7 @@ type LSM struct {
 	control              *controlPlane
 	commitLog            commitLogConsensus
 	committedApply       *committedApply
+	readMu               sync.RWMutex
 	peerMu               sync.Mutex
 	peerClosing          bool
 	peerWG               sync.WaitGroup
@@ -213,6 +214,8 @@ func (l *LSM) Close() error {
 	}
 	l.closeOnce.Do(func() {
 		l.closing.Store(true)
+		l.readMu.Lock()
+		defer l.readMu.Unlock()
 		if l.tickCancel != nil {
 			l.tickCancel()
 		}

@@ -208,6 +208,15 @@ func (s SSTable) GetView(key []byte) (memory.EntryView, bool) {
 	return s.reader.GetView(key)
 }
 
+// GetViewContext preserves read errors instead of treating them as missing keys.
+// The caller must keep the table open for the lifetime of the returned view.
+func (s SSTable) GetViewContext(ctx context.Context, key []byte) (memory.EntryView, bool, error) {
+	if s.reader == nil {
+		return memory.EntryView{}, false, errs.ErrClosed
+	}
+	return s.reader.GetViewContext(ctx, key)
+}
+
 func (s SSTable) Range(start, end []byte) *RangeIterator {
 	if s.reader == nil {
 		return &RangeIterator{}
@@ -247,6 +256,27 @@ func (r *Reader) GetView(key []byte) (memory.EntryView, bool) {
 		return memory.EntryView{}, false
 	}
 	return entry, true
+}
+
+// GetViewContext performs a strict point read. Unlike the legacy GetView path,
+// it never silently drops a table after an IO or corruption error.
+func (r *Reader) GetViewContext(ctx context.Context, key []byte) (memory.EntryView, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return memory.EntryView{}, false, err
+	}
+	if r == nil || r.pipe == nil {
+		return memory.EntryView{}, false, errs.ErrClosed
+	}
+	if len(r.meta.MinKey) > 0 && bytes.Compare(key, r.meta.MinKey) < 0 {
+		return memory.EntryView{}, false, nil
+	}
+	if len(r.meta.MaxKey) > 0 && bytes.Compare(key, r.meta.MaxKey) > 0 {
+		return memory.EntryView{}, false, nil
+	}
+	return r.pipe.Get(ctx, key)
 }
 
 func (r *Reader) Range(start, end []byte) *RangeIterator {
