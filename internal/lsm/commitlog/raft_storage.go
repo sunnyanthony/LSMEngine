@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"go.etcd.io/etcd/raft/v3"
-	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 type raftDiskState struct {

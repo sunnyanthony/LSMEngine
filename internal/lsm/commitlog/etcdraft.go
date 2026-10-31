@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"go.etcd.io/etcd/raft/v3"
-	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/raftpb"
 	"lsmengine/internal/lsm/raftid"
 )
 
@@ -59,6 +59,7 @@ type etcdRaftConsensus struct {
 	term             uint64
 	replicas         int
 	deliveryFailures uint64
+	terminalErr      error
 }
 
 const (
@@ -213,6 +214,9 @@ func (c *etcdRaftConsensus) CommitData(ctx context.Context, mutation DataMutatio
 func (c *etcdRaftConsensus) HandlePeerMessages(ctx context.Context, messages []PeerMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.terminalErr != nil {
+		return c.terminalErr
+	}
 	if c.rawNode == nil || c.storage == nil {
 		return fmt.Errorf("etcd raft commit log is unavailable")
 	}
@@ -246,6 +250,9 @@ func (c *etcdRaftConsensus) Provider() Provider {
 func (c *etcdRaftConsensus) Tick(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.terminalErr != nil {
+		return c.terminalErr
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -289,6 +296,9 @@ func (c *etcdRaftConsensus) commitMutation(
 ) (*pendingRaftProposal, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.terminalErr != nil {
+		return nil, c.terminalErr
+	}
 	if c.rawNode == nil || c.storage == nil {
 		return nil, fmt.Errorf("etcd raft commit log is unavailable")
 	}
@@ -325,6 +335,10 @@ func (c *etcdRaftConsensus) commitMutation(
 	for {
 		if pending.done {
 			return pending, nil
+		}
+		if c.terminalErr != nil {
+			delete(c.pending, proposal.ID)
+			return nil, c.terminalErr
 		}
 		select {
 		case <-runCtx.Done():
@@ -375,6 +389,9 @@ func (c *etcdRaftConsensus) ensureLeaderLocked(ctx context.Context) error {
 func (c *etcdRaftConsensus) advanceUntilStableLocked(ctx context.Context) error {
 	steps := 0
 	for c.rawNode.HasReady() {
+		if c.terminalErr != nil {
+			return c.terminalErr
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -388,11 +405,27 @@ func (c *etcdRaftConsensus) advanceUntilStableLocked(ctx context.Context) error 
 		}
 		steps++
 	}
-	return nil
+	return c.terminalErr
 }
 
-func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
+func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) (err error) {
+	if c.terminalErr != nil {
+		return c.terminalErr
+	}
 	rd := c.rawNode.Ready()
+	advanced := false
+	defer func() {
+		// Ready cannot be discarded and fetched again in raft v3.6. Never
+		// acknowledge an unpersisted batch; require reopening after failure.
+		if err != nil && !advanced && c.terminalErr == nil {
+			c.terminalErr = err
+			for _, pending := range c.pending {
+				if !pending.done {
+					close(pending.ready)
+				}
+			}
+		}
+	}()
 	if !raft.IsEmptyHardState(rd.HardState) {
 		if err := c.storage.SetHardState(rd.HardState); err != nil {
 			return fmt.Errorf("raft storage set hard state: %w", err)
@@ -433,6 +466,7 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		}
 	}
 	c.rawNode.Advance(rd)
+	advanced = true
 	if len(encoded) > 0 {
 		// Finish Ready before allowing replies to Step the node. Network I/O
 		// cannot hold mu: the peer may synchronously send a reply back here.
@@ -441,6 +475,9 @@ func (c *etcdRaftConsensus) advanceOneReadyLocked(ctx context.Context) error {
 		err := c.transport.Send(sendCtx, encoded)
 		c.mu.Lock()
 		cancel()
+		if c.terminalErr != nil {
+			return c.terminalErr
+		}
 		if err != nil {
 			if delivery, ok := err.(*DeliveryError); ok && delivery != nil && len(delivery.Peers) > 0 {
 				// Only classify failures of destinations in this exact batch.

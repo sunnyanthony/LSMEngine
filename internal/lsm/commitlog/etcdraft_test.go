@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 type recordingRaftTransport struct {
