@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -219,11 +220,39 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 			}
 		}
 	}
+	checkOnline := func(values map[string]string, deleted bool) {
+		t.Helper()
+		for _, name := range names {
+			check := func(key, value string, found bool) {
+				t.Helper()
+				var result struct {
+					Key         string `json:"key_base64"`
+					Value       string `json:"value_base64"`
+					Found       *bool  `json:"found"`
+					Consistency string `json:"consistency"`
+				}
+				out := run(binary, "get", "--url", endpoints[name], "--key", key, "--timeout", "5s")
+				if err := json.Unmarshal(out, &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.Found == nil || *result.Found != found || result.Key != base64.StdEncoding.EncodeToString([]byte(key)) || result.Value != base64.StdEncoding.EncodeToString([]byte(value)) || result.Consistency != "local_applied" {
+					t.Fatalf("%s key %q online result=%+v", name, key, result)
+				}
+			}
+			for key, value := range values {
+				check(key, value, true)
+			}
+			if deleted {
+				check("deleted", "", false)
+			}
+		}
+	}
 	t.Log("initial election and writes")
 	awaitLeader()
 	write("cluster-put", "retained", "before-restart")
 	write("cluster-put", "deleted", "remove-me")
 	awaitReplicas()
+	checkOnline(map[string]string{"retained": "before-restart", "deleted": "remove-me"}, false)
 	stopped := leader
 	t.Logf("stop leader %s; elect replacement and write", names[stopped])
 	if err := stop(stopped); err != nil {
@@ -236,6 +265,7 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 	start(stopped)
 	awaitLeader()
 	awaitReplicas()
+	checkOnline(map[string]string{"retained": "before-restart", "offline": "while-leader-stopped"}, true)
 	t.Log("stop and restart all nodes")
 	stopAll()
 	for i := range processes {
@@ -244,6 +274,7 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 	awaitLeader()
 	write("cluster-put", "restarted", "after-full-restart")
 	awaitReplicas()
+	checkOnline(map[string]string{"retained": "before-restart", "offline": "while-leader-stopped", "restarted": "after-full-restart"}, true)
 	stopAll()
 	t.Log("verify each stopped replica through engine recovery")
 	// Open only after all processes exit. Verify actual values, not just counters.

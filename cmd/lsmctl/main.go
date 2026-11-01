@@ -33,6 +33,10 @@ func main() {
 		statsCmd(os.Args[2:])
 	case "health":
 		healthCmd(os.Args[2:])
+	case "get":
+		if err := runGet(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+			log.Fatal(err)
+		}
 	case "cluster-put", "cluster-delete":
 		operation := "put"
 		if os.Args[1] == "cluster-delete" {
@@ -48,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|stats|health|cluster-put|cluster-delete> [options]")
+	fmt.Fprintln(os.Stderr, "usage: lsmctl <serve|stats|health|get|cluster-put|cluster-delete> [options]")
 }
 
 func serveCmd(args []string) {
