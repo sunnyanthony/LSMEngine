@@ -3,20 +3,31 @@
 package engine
 
 import (
+	"sort"
 	"sync/atomic"
 
 	memtable "lsmengine/internal/lsm/memtable"
 )
 
+// SSTableLevelStats describes active SSTables at one level, excluding obsolete files.
+type SSTableLevelStats struct {
+	Level      int
+	TableCount int
+	SizeBytes  uint64
+}
+
 // Stats describes a point-in-time view of engine activity.
 type Stats struct {
-	MemtableBytes     int
-	MemtableEntries   int
-	ImmutableCount    int
-	ImmutableBytes    int
-	FlushQueueDepth   int
-	PinnedCount       int
-	TableCount        int
+	MemtableBytes   int
+	MemtableEntries int
+	ImmutableCount  int
+	ImmutableBytes  int
+	FlushQueueDepth int
+	PinnedCount     int
+	TableCount      int
+	// SSTableBytes excludes WAL, Raft state, trash, and obsolete pinned tables.
+	SSTableBytes      uint64
+	SSTableLevels     []SSTableLevelStats
 	Seq               uint64
 	Closing           bool
 	Closed            bool
@@ -60,7 +71,24 @@ func (l *LSM) Stats() Stats {
 	}
 
 	if l.tables != nil {
-		out.TableCount = len(l.tables.Tables())
+		metas := l.tables.Snapshot()
+		out.TableCount = len(metas)
+		levels := make(map[int]SSTableLevelStats)
+		for _, meta := range metas {
+			level := levels[meta.Level]
+			level.Level = meta.Level
+			level.TableCount++
+			level.SizeBytes += meta.SizeBytes
+			levels[meta.Level] = level
+			out.SSTableBytes += meta.SizeBytes
+		}
+		out.SSTableLevels = make([]SSTableLevelStats, 0, len(levels))
+		for _, level := range levels {
+			out.SSTableLevels = append(out.SSTableLevels, level)
+		}
+		sort.Slice(out.SSTableLevels, func(i, j int) bool {
+			return out.SSTableLevels[i].Level < out.SSTableLevels[j].Level
+		})
 	}
 	return out
 }

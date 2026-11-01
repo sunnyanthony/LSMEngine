@@ -72,5 +72,12 @@ control plane decoupled from IO.
 - Retry is safe because inputs are immutable.
 
 ## Async scheduling and backpressure
+- `Stats()` and HTTP `/stats` expose `TableCount`, `SSTableBytes`, and
+  `SSTableLevels` (sorted by level, with `Level`, `TableCount`, `SizeBytes`).
+  `lsmctl stats` prints the same totals and per-level breakdown.
+  These describe the active table set, not total disk usage: WAL, Raft state,
+  trash, and obsolete files retained by snapshots are excluded. Table counts
+  and bytes come from one metadata snapshot; memtable and lifecycle statistics
+  are sampled separately. These are observations, not compaction debt estimates.
 - Compaction is triggered on flush events and runs in the background.
 - Scheduler/backpressure policies are planned.
