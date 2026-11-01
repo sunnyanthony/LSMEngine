@@ -80,4 +80,8 @@ control plane decoupled from IO.
   and bytes come from one metadata snapshot; memtable and lifecycle statistics
   are sampled separately. These are observations, not compaction debt estimates.
 - Compaction is triggered on flush events and runs in the background.
+- Cancellation is checked between compaction steps, before taking the next
+  metadata snapshot. An in-flight step is allowed to finish; cancellation does
+  not interrupt its IO or table-edit application and is not a hard shutdown
+  deadline.
 - Scheduler/backpressure policies are planned.

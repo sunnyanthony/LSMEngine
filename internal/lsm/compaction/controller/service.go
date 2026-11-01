@@ -56,6 +56,10 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-s.trigger:
 			for {
+				// Finish an in-flight step, but do not drain more work on shutdown.
+				if ctx.Err() != nil {
+					return
+				}
 				ran, err := s.Controller.Step(s.Source())
 				if err != nil {
 					if s.OnError != nil {
