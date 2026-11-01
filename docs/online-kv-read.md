@@ -1,5 +1,7 @@
 # Node-local online key reads
 
+For a runnable cluster, see the [three-node local example](../examples/three-node/README.md).
+
 ## CLI
 
 ```sh

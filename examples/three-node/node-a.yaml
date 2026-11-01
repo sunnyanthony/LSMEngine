@@ -1,0 +1,20 @@
+data_dir: "./data/three-node/node-a"
+node_id: "node-a"
+cluster_id: "three-node-demo"
+storage_mode: "local"
+addr: "127.0.0.1:8080"
+read_timeout: "10s"
+write_timeout: "20s"
+write_consistency_default: "local_committed"
+commitlog:
+  provider: "etcd-raft"
+raft:
+  peers: ["node-a", "node-b", "node-c"]
+  peer_urls:
+    node-a: "http://127.0.0.1:8080"
+    node-b: "http://127.0.0.1:8081"
+    node-c: "http://127.0.0.1:8082"
+shards:
+  - id: "shared"
+    leader: "node-a"
+    replicas: ["node-a", "node-b", "node-c"]
