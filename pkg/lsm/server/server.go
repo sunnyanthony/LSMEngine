@@ -64,6 +64,7 @@ func NewHandlerWithOptions(provider lsm.StatsProvider, opts HandlerOptions) http
 	mux.HandleFunc("/cluster/shards/", handler.handleShardAction)
 	mux.HandleFunc("/cluster/nodes/", handler.handleNodeAction)
 	mux.HandleFunc("/kv/put", handler.handlePut)
+	mux.HandleFunc("/kv/get", handler.handleGet)
 	mux.HandleFunc("/kv/delete", handler.handleDelete)
 	mux.HandleFunc("/kv/write-status/", handler.handleWriteStatus)
 	return mux
