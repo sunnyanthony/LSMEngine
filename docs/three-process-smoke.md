@@ -25,8 +25,10 @@ provider. It does not modify an existing deployment or require Docker.
    and the deleted key must be absent.
 
 Sequence polling is a synchronization aid, not the data correctness assertion.
-The last check reads actual stored values. The server currently has no key-read
-HTTP endpoint; this test does not imply online or linearizable reads.
+The last check reads actual stored values. Before shutdown at each catch-up
+stage, the test also invokes `lsmctl get` against all three live nodes and checks
+the values and tombstones. These are node-local reads after explicit catch-up,
+not linearizable reads or proof of immediately fresh follower reads.
 
 ## Scope and limits
 
