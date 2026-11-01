@@ -17,6 +17,51 @@ type serviceControllerStub struct {
 	callsCh  chan struct{}
 }
 
+type serviceStepFunc func(compaction.State) (bool, error)
+
+func (f serviceStepFunc) Step(state compaction.State) (bool, error) { return f(state) }
+
+func TestServiceCancellationBetweenSteps(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	sourceCalls := 0
+	service := NewService(serviceStepFunc(func(compaction.State) (bool, error) {
+		calls++
+		cancel()
+		// Bound the regression: the old loop takes a second step, then stops.
+		return calls == 1, nil
+	}), func() compaction.State {
+		sourceCalls++
+		return compaction.State{}
+	})
+	service.Trigger()
+	service.Run(ctx)
+	if calls != 1 || sourceCalls != 1 {
+		t.Fatalf("work continued after cancellation: steps=%d snapshots=%d", calls, sourceCalls)
+	}
+}
+
+func TestServiceAlreadyCanceledWithPendingTrigger(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		calls := 0
+		service := NewService(serviceStepFunc(func(compaction.State) (bool, error) {
+			calls++
+			return false, nil
+		}), func() compaction.State {
+			t.Error("snapshot requested after cancellation")
+			return compaction.State{}
+		})
+		service.Trigger()
+		service.Run(ctx)
+		if calls != 0 {
+			t.Fatalf("started %d steps with canceled context", calls)
+		}
+	}
+}
+
 func (s *serviceControllerStub) Step(state compaction.State) (bool, error) {
 	atomic.AddInt32(&s.calls, 1)
 	if s.callsCh != nil {
