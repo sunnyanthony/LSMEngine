@@ -92,13 +92,18 @@ func TestThreeProcessClusterRestart(t *testing.T) {
 		}
 	})
 	for i, name := range names {
-		configs[i] = serverconfig.Config{
-			DataDir: filepath.Join(root, name), NodeID: name, ClusterID: "process-smoke",
-			Addr:      listeners[i].Addr().String(),
-			CommitLog: serverconfig.CommitLogConfig{Provider: "etcd-raft"},
-			Raft:      serverconfig.RaftConfig{Peers: names, PeerURLs: endpoints},
-			Shards:    []serverconfig.ShardConfig{{ID: "shared", Leader: names[0], Replicas: names}},
+		cfg, err := serverconfig.Load(filepath.Join("../../../examples/three-node", name+".yaml"))
+		if err != nil {
+			t.Fatal(err)
 		}
+		if cfg.NodeID != name || cfg.CommitLog.Provider != "etcd-raft" || cfg.WriteConsistencyDefault != "local_committed" {
+			t.Fatalf("invalid example for %s: %+v", name, cfg)
+		}
+		// Isolate test storage and ports; preserve the example's topology and behavior.
+		cfg.DataDir = filepath.Join(root, name)
+		cfg.Addr = listeners[i].Addr().String()
+		cfg.Raft.PeerURLs = endpoints
+		configs[i] = cfg
 		data, err := yaml.Marshal(configs[i])
 		if err != nil {
 			t.Fatal(err)
