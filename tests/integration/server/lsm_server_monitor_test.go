@@ -6,11 +6,67 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"lsmengine/pkg/lsm"
 	"lsmengine/pkg/lsm/server"
 )
+
+func TestStorageStatsFlushAndRestart(t *testing.T) {
+	opts := lsm.Options{DataDir: t.TempDir(), MemtableLimit: 1}
+	store, err := lsm.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	var before lsm.Stats
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		before = readJSON[lsm.Stats](t, server.NewHandler(store), "/stats")
+		if before.TableCount == 1 && before.FlushQueueDepth == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("flush did not finish: %+v", before)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	files, err := filepath.Glob(filepath.Join(opts.DataDir, "sstables", "*.sst"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bytes uint64
+	for _, path := range files {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bytes += uint64(info.Size())
+	}
+	want := []lsm.SSTableLevelStats{{Level: 0, TableCount: 1, SizeBytes: bytes}}
+	if len(files) != 1 || bytes == 0 || before.SSTableBytes != bytes || !reflect.DeepEqual(before.SSTableLevels, want) {
+		t.Fatalf("stats disagree with flushed files (%v, %d bytes): %+v", files, bytes, before)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := lsm.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	after := readJSON[lsm.Stats](t, server.NewHandler(reopened), "/stats")
+	if after.TableCount != before.TableCount || after.SSTableBytes != bytes || !reflect.DeepEqual(after.SSTableLevels, want) {
+		t.Fatalf("stats changed on restart: before=%+v after=%+v", before, after)
+	}
+}
 
 func TestServerHealthAndStats(t *testing.T) {
 	store, err := lsm.New(lsm.Options{DataDir: t.TempDir()})

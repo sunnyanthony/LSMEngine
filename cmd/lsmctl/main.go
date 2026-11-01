@@ -177,6 +177,10 @@ func statsCmd(args []string) {
 	fmt.Printf("flush_queue_depth=%d\n", stats.FlushQueueDepth)
 	fmt.Printf("pinned=%d\n", stats.PinnedCount)
 	fmt.Printf("tables=%d\n", stats.TableCount)
+	fmt.Printf("sstable_bytes=%d\n", stats.SSTableBytes)
+	for _, level := range stats.SSTableLevels {
+		fmt.Printf("level=%d tables=%d bytes=%d\n", level.Level, level.TableCount, level.SizeBytes)
+	}
 	fmt.Printf("seq=%d\n", stats.Seq)
 	fmt.Printf("closing=%v closed=%v\n", stats.Closing, stats.Closed)
 	fmt.Printf("flush_blocked=%v compaction_enabled=%v\n", stats.FlushBlocked, stats.CompactionEnabled)

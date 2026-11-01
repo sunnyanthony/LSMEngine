@@ -1,6 +1,33 @@
 package engine
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"lsmengine/internal/lsm/metadata"
+	"lsmengine/internal/lsm/tableset"
+)
+
+func TestStatsActiveTableLevels(t *testing.T) {
+	store := &LSM{tables: tableset.NewSet([]tableset.Table{
+		{Meta: metadata.TableMeta{Path: "l2", Level: 2, SizeBytes: 30}},
+		{Meta: metadata.TableMeta{Path: "l0a", Level: 0, SizeBytes: 10}},
+		{Meta: metadata.TableMeta{Path: "l0b", Level: 0, SizeBytes: 20}},
+	})}
+	want := []SSTableLevelStats{{Level: 0, TableCount: 2, SizeBytes: 30}, {Level: 2, TableCount: 1, SizeBytes: 30}}
+	stats := store.Stats()
+	if stats.TableCount != 3 || stats.SSTableBytes != 60 || !reflect.DeepEqual(stats.SSTableLevels, want) {
+		t.Fatalf("unexpected storage stats: %+v", stats)
+	}
+	stats.SSTableLevels[0].SizeBytes = 999
+	if got := store.Stats(); !reflect.DeepEqual(got.SSTableLevels, want) {
+		t.Fatalf("caller mutated subsequent snapshot: %+v", got)
+	}
+	empty := (&LSM{tables: tableset.NewSet(nil)}).Stats()
+	if empty.TableCount != 0 || empty.SSTableBytes != 0 || len(empty.SSTableLevels) != 0 {
+		t.Fatalf("unexpected empty stats: %+v", empty)
+	}
+}
 
 func TestStatsSnapshot(t *testing.T) {
 	store, err := New(Options{
