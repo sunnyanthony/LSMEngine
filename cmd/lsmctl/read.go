@@ -13,11 +13,11 @@ import (
 )
 
 type keyReadResult struct {
-	KeyBase64   string `json:"key_base64"`
-	ValueBase64 string `json:"value_base64"`
-	Found       *bool  `json:"found"`
-	Sequence    uint64 `json:"sequence"`
-	Consistency string `json:"consistency"`
+	KeyBase64   string  `json:"key_base64"`
+	ValueBase64 *string `json:"value_base64"`
+	Found       *bool   `json:"found"`
+	Sequence    *uint64 `json:"sequence"`
+	Consistency string  `json:"consistency"`
 }
 
 func runGet(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -71,13 +71,13 @@ func runGet(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("expected a single read response")
 	}
-	if result.Found == nil || result.KeyBase64 != encoded || result.Consistency != "local_applied" || *result.Found != (res.StatusCode == http.StatusOK) {
+	if result.Found == nil || result.ValueBase64 == nil || result.Sequence == nil || result.KeyBase64 != encoded || result.Consistency != "local_applied" || *result.Found != (res.StatusCode == http.StatusOK) {
 		return fmt.Errorf("inconsistent node read response")
 	}
-	if _, err := base64.StdEncoding.Strict().DecodeString(result.ValueBase64); err != nil {
+	if _, err := base64.StdEncoding.Strict().DecodeString(*result.ValueBase64); err != nil {
 		return fmt.Errorf("invalid response value: %w", err)
 	}
-	if !*result.Found && (result.ValueBase64 != "" || result.Sequence != 0) {
+	if !*result.Found && (*result.ValueBase64 != "" || *result.Sequence != 0) {
 		return fmt.Errorf("missing key response contains data")
 	}
 	return json.NewEncoder(stdout).Encode(result)
